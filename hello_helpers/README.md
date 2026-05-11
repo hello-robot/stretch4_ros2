@@ -52,7 +52,7 @@ There is also a one-liner class method for instantiating a `HelloNode` for easy 
 
 import hello_helpers.hello_misc as hm
 temp = hm.HelloNode.quick_create('temp')
-temp.move_to_pose({'joint_lift': 0.4})
+temp.move_to_pose({'lift_joint': 0.4})
 ```
 
 #### Attributes
@@ -86,24 +86,24 @@ temp.move_to_pose({'translate_mobile_base': 1.0})
 
 ##### `move_to_pose(pose, blocking=False, custom_contact_thresholds=False, duration=2.0)`
 
-This method takes in a dictionary that describes a desired pose for the robot and communicates with [stretch_driver](../stretch_core/README.md#stretchdrivernodesstretchdriver) to execute it. The basic format of this dictionary is string/number key/value pairs, where the keys are joint names and the values are desired position goals. For example, `{'joint_lift': 0.5}` would put the lift at 0.5m in its joint range. A full list of command-able joints is published to the `/stretch/joint_states` topic. Used within a node extending `HelloNode`, calling this method would look like:
+This method takes in a dictionary that describes a desired pose for the robot and communicates with [stretch_driver](../stretch_core/README.md#stretchdrivernodesstretchdriver) to execute it. The basic format of this dictionary is string/number key/value pairs, where the keys are joint names and the values are desired position goals. For example, `{'lift_joint': 0.5}` would put the lift at 0.5m in its joint range. A full list of command-able joints is published to the `/stretch/joint_states` topic. Used within a node extending `HelloNode`, calling this method would look like:
 
 ```python
-self.move_to_pose({'joint_lift': 0.5})
+self.move_to_pose({'lift_joint': 0.5})
 ```
 
 Internally, this dictionary is converted into a [JointTrajectory](https://docs.ros2.org/latest/api/trajectory_msgs/msg/JointTrajectory.html) message that is sent to a [FollowJointTrajectory action](http://docs.ros.org/en/noetic/api/control_msgs/html/action/FollowJointTrajectory.html) server in stretch_driver. This method waits by default for the server to report that the goal has completed executing. However, you can return before the goal has completed by setting the `blocking` argument to False. This can be useful for preempting goals.
 
-When the robot is in `position` mode, if you set `custom_contact_thresholds` to True, this method expects a different format dictionary: string/tuple key/value pairs, where the keys are still joint names, but the values are `(position_goal, effort_threshold)`. The addition of a effort threshold enables you to detect when a joint has made contact with something in the environment, which is useful for manipulation or safe movements. For example, `{'joint_arm': (0.5, 20)}` commands the telescoping arm fully out (the arm is nearly fully extended at 0.5 meters) but with a low enough effort threshold (20% of the arm motor's max effort) that the motor will stop when the end of arm has made contact with something. Again, in a node, this would look like:
+When the robot is in `position` mode, if you set `custom_contact_thresholds` to True, this method expects a different format dictionary: string/tuple key/value pairs, where the keys are still joint names, but the values are `(position_goal, effort_threshold)`. The addition of a effort threshold enables you to detect when a joint has made contact with something in the environment, which is useful for manipulation or safe movements. For example, `{'arm_joint': (0.5, 20)}` commands the telescoping arm fully out (the arm is nearly fully extended at 0.5 meters) but with a low enough effort threshold (20% of the arm motor's max effort) that the motor will stop when the end of arm has made contact with something. Again, in a node, this would look like:
 
 ```python
-self.move_to_pose({'joint_arm': (0.5, 40)}, custom_contact_thresholds=True)
+self.move_to_pose({'arm_joint': (0.5, 40)}, custom_contact_thresholds=True)
 ```
 
 When the robot is in `trajectory` mode, if you set argument `duration` as `ts`, this method will ensure that the target joint positions are achieved over `ts` seconds. For example, the below would put the lift at 0.5m from its current position in `5.0` seconds:
 
 ```python
-self.move_to_pose({'joint_lift': 0.5}, duration=5.0)
+self.move_to_pose({'lift_joint': 0.5}, duration=5.0)
 ```
 
 ##### `home_the_robot()`
@@ -120,14 +120,14 @@ This is a convenience method to interact with the driver's [`/stop_the_robot` se
 
 ##### `get_tf(from_frame, to_frame)`
 
-Use this method to get the transform ([geometry_msgs/TransformStamped](https://docs.ros2.org/latest/api/geometry_msgs/msg/TransformStamped.html)) between two frames. This method is blocking. For example, this method can do forward kinematics from the base_link to the link between the gripper fingers, link_grasp_center, using:
+Use this method to get the transform ([geometry_msgs/TransformStamped](https://docs.ros2.org/latest/api/geometry_msgs/msg/TransformStamped.html)) between two frames. This method is blocking. For example, this method can do forward kinematics from the base_link to the link between the gripper fingers, grasp_center_link, using:
 
 ```python
 # launch the stretch driver launch file beforehand
 
 import hello_helpers.hello_misc as hm
 temp = hm.HelloNode.quick_create('temp')
-t = temp.get_tf('base_link', 'link_grasp_center')
+t = temp.get_tf('base_link', 'grasp_center_link')
 print(t.transform.translation)
 ```
 
@@ -159,7 +159,7 @@ A class level method for quick testing. This allows you to avoid having to exten
 
 import hello_helpers.hello_misc as hm
 temp = hm.HelloNode.quick_create('temp')
-temp.move_to_pose({'joint_lift': 0.4})
+temp.move_to_pose({'lift_joint': 0.4})
 ```
 
 #### Subscribed Topics

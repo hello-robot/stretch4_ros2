@@ -204,9 +204,9 @@ class JointStateMapping:
     """
     Mapping of ROS joint names to the corresponding joint names in the robot.
     """
-    ROS_ARM_JOINTS = ["joint_arm_l0", "joint_arm_l1", "joint_arm_l2", "joint_arm_l3"]
-    ROS_LIFT_JOINT = "joint_lift"
-    ROS_GRIPPER_FINGER = "joint_gripper_finger_left"
-    ROS_WRIST_YAW = "joint_wrist_yaw"
-    ROS_WRIST_PITCH = "joint_wrist_pitch"
-    ROS_WRIST_ROLL = "joint_wrist_roll"
+    ROS_ARM_JOINTS = ["arm_l0_joint", "arm_l1_joint", "arm_l2_joint", "arm_l3_joint", "arm_l4_joint"]
+    ROS_LIFT_JOINT = "lift_joint"
+    ROS_GRIPPER_FINGER = "gripper_finger_left_joint"
+    ROS_WRIST_YAW = "wrist_yaw_joint"
+    ROS_WRIST_PITCH = "wrist_pitch_joint"
+    ROS_WRIST_ROLL = "wrist_roll_joint"

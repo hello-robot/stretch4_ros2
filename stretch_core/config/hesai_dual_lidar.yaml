@@ -16,7 +16,7 @@ lidar:
       fov_start: -1
       fov_end:  -1
     ros:
-      ros_frame_id: link_lidar_left                      # Frame id of packet message and point cloud message
+      ros_frame_id: lidar_left_link                      # Frame id of packet message and point cloud message
       ros_send_packet_topic: /lidar_packets_left         # Topic used to send lidar raw packets through ROS
       ros_send_point_cloud_topic: /lidar_points_left     # Topic used to send point cloud through ROS
       ros_send_imu_topic: /lidar_imu_left                # Topic used to send lidar imu message
@@ -39,7 +39,7 @@ lidar:
       fov_start: -1
       fov_end:  -1
     ros:
-      ros_frame_id: link_lidar_right                      # Frame id of packet message and point cloud message
+      ros_frame_id: lidar_right_link                      # Frame id of packet message and point cloud message
       ros_send_packet_topic: /lidar_packets_right         # Topic used to send lidar raw packets through ROS
       ros_send_point_cloud_topic: /lidar_points_right     # Topic used to send point cloud through ROS
       ros_send_imu_topic: /lidar_imu_right                # Topic used to send lidar imu message

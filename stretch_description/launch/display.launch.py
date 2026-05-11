@@ -68,7 +68,7 @@ def generate_launch_description():
     joint_state_publisher_gui_node = Node(
         package='joint_state_publisher_gui',
         executable='joint_state_publisher_gui',
-        parameters=[{'zeros.joint_lift': 0.2, 'zeros.joint_wrist_yaw': 3.4}],
+        parameters=[{'zeros.lift_joint': 0.2, 'zeros.wrist_yaw_joint': 3.4}],
     )
 
     rviz_node = Node(

@@ -500,35 +500,36 @@ class StretchMujocoDriver(Node):
         joint_state = JointState()
         joint_state.header = Header()
         joint_state.header.stamp = current_time
-        # joint_arm_l3 is the most proximal and joint_arm_l0 is the
+        # arm_l3_joint is the most proximal and arm_l0_joint is the
         # most distal joint of the telescoping arm model. The joints
         # are connected in series such that moving the most proximal
         # joint moves all the other joints in the global frame.
         joint_state.name = [
             "wrist_extension",
-            "joint_lift",
-            "joint_arm_l3",
-            "joint_arm_l2",
-            "joint_arm_l1",
-            "joint_arm_l0",
+            "lift_joint",
+            "arm_l4_joint",
+            "arm_l3_joint",
+            "arm_l2_joint",
+            "arm_l1_joint",
+            "arm_l0_joint",
         ]
 
         # set positions of the telescoping joints
-        positions = [pos_out / 4.0 for i in range(4)]
+        positions = [pos_out / 5.0 for i in range(5)]
         # set lift position
         positions.insert(0, pos_up)
         # set wrist_extension position
         positions.insert(0, pos_out)
 
         # set velocities of the telescoping joints
-        velocities = [vel_out / 4.0 for i in range(4)]
+        velocities = [vel_out / 5.0 for i in range(5)]
         # set lift velocity
         velocities.insert(0, vel_up)
         # set wrist_extension velocity
         velocities.insert(0, vel_out)
 
         # set efforts of the telescoping joints
-        efforts = [eff_out for i in range(4)]
+        efforts = [eff_out for i in range(5)]
         # set lift effort
         efforts.insert(0, eff_up)
         # set wrist_extension effort
@@ -537,17 +538,17 @@ class StretchMujocoDriver(Node):
         dex_wrist_attached = True
 
         end_of_arm_joint_names = [
-            "joint_wrist_yaw",
-            "joint_wrist_pitch",
-            "joint_wrist_roll",
+            "wrist_yaw_joint",
+            "wrist_pitch_joint",
+            "wrist_roll_joint",
         ] if dex_wrist_attached else [
-            "joint_wrist_yaw"
+            "wrist_yaw_joint"
         ]
 
         # if 'stretch_gripper' in self.sim.end_of_arm.joints:
         end_of_arm_joint_names = end_of_arm_joint_names + [
-            "joint_gripper_finger_left",
-            "joint_gripper_finger_right",
+            "gripper_finger_left_joint",
+            "gripper_finger_right_joint",
         ]
 
         joint_state.name.extend(end_of_arm_joint_names)
@@ -932,7 +933,7 @@ class StretchMujocoDriver(Node):
             joint_name = actuator.get_joint_names_in_mjcf()[0]
             min_limit, max_limit = min_max
             if actuator == Actuators.arm:
-                joint_name = "joint_arm"  # Instead of the telescoping names
+                joint_name = "arm_joint"  # Instead of the telescoping names
                 max_limit *= 4  # 4x the telescoping limit
             if actuator == Actuators.gripper:
                 joint_name = "gripper_aperture"  # A different mapping from stretch_core command_groups
@@ -1527,15 +1528,15 @@ def get_camera_frame(camera: StretchCameras):
         return "gripper_camera_color_optical_frame" # We don't have a depth optical frame in the URDF.
         return "gripper_camera_depth_optical_frame"
     if camera == StretchCameras.cam_nav_rgb_se4_left:
-        return "link_camera_left_optical"
+        return "camera_left_optical_link"
     if camera == StretchCameras.cam_nav_rgb_se4_right:
-        return "link_camera_right_optical"
+        return "camera_right_optical_link"
     if camera == StretchCameras.cam_nav_rgb_se4_center:
-        return "link_camera_center_optical"
+        return "camera_center_optical_link"
     if camera == StretchCameras.cam_hemilidar_left:
-        return "link_lidar_left"
+        return "lidar_left_link"
     if camera == StretchCameras.cam_hemilidar_right:
-        return "link_lidar_right"
+        return "lidar_right_link"
 
     raise NotImplementedError(f"Camera {camera} frame is not implemented")
 

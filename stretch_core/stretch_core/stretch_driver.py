@@ -108,14 +108,14 @@ class StretchDriver(Node):
         self.set_vel_functions = {}
 
         if hasattr(self.robot, 'lift'):
-            self.set_vel_functions['joint_lift'] = lambda v, a:  self.robot.lift.set_velocity(v, a_m=a)
+            self.set_vel_functions['lift_joint'] = lambda v, a:  self.robot.lift.set_velocity(v, a_m=a)
             self.declare_parameter("joint_acceleration.lift",self.robot.robot_params['lift']['motion']['default']['accel_m'])
         if hasattr(self.robot, 'arm'):
-            self.set_vel_functions['joint_arm'] = lambda v, a:  self.robot.arm.set_velocity(v, a_m=a)
+            self.set_vel_functions['arm_joint'] = lambda v, a:  self.robot.arm.set_velocity(v, a_m=a)
             self.declare_parameter("joint_acceleration.arm",self.robot.robot_params['arm']['motion']['default']['accel_m'])
         if hasattr(self.robot, 'end_of_arm') and hasattr(self.robot.end_of_arm, 'joints'):
             for joint in self.robot.end_of_arm.joints: 
-                self.set_vel_functions[f'joint_{joint}']= lambda d, a, j=joint: self.robot.end_of_arm.quick_stop(j) if d == 0.0 else self.robot.end_of_arm.move_by(j, d, a_r = a)
+                self.set_vel_functions[f'{joint}_joint']= lambda d, a, j=joint: self.robot.end_of_arm.quick_stop(j) if d == 0.0 else self.robot.end_of_arm.move_by(j, d, a_r = a)
                 self.declare_parameter(f"joint_acceleration.{joint}",self.robot.robot_params[joint]['motion']['default']['accel'])
 
         self.declare_parameter("joint_acceleration.omnibase.linear", self.robot.robot_params['omnibase']['motion']['default']['accel_xy_m'])
@@ -294,7 +294,7 @@ class StretchDriver(Node):
             if joint not in self.set_vel_functions.keys():
                 raise AttributeError(f"Received velocity command for unexpected joint: {joint}")
 
-            acceleration_param = self.get_parameter_or(f"joint_acceleration.{joint.split("joint_")[1]}",None).value
+            acceleration_param = self.get_parameter_or(f"joint_acceleration.{joint.split("_joint")[0]}",None).value
 
             if "gripper" in joint: 
                 jointjog_msg.velocities[i] *= 300
@@ -475,16 +475,16 @@ class StretchDriver(Node):
             pos, vel, eff = cg.joint_state(robot_status)
 
             # add telescoping joints to joint state
-            if cg.name == "joint_arm":
-                for link in ['joint_arm_l3', 'joint_arm_l2', 'joint_arm_l1', 'joint_arm_l0']:
+            if cg.name == "arm_joint":
+                for link in ['arm_l4_joint', 'arm_l3_joint', 'arm_l2_joint', 'arm_l1_joint']:
                     joint_state.name.append(link)
                     joint_state.position.append(pos/4.0)
                     joint_state.velocity.append(vel/4.0)
                     joint_state.effort.append(eff)
 
             # add gripper joints to joint state
-            if cg.name == "joint_gripper":
-                for link in ['joint_gripper_finger_left', 'joint_gripper_finger_right']:
+            if cg.name == "gripper_joint":
+                for link in ['gripper_finger_left_joint', 'gripper_finger_right_joint']:
                     joint_state.name.append(link)
                     joint_state.position.append(pos)
                     joint_state.velocity.append(vel)
@@ -493,7 +493,7 @@ class StretchDriver(Node):
 
             # add wheel joints to joint state
             if cg.name == "translate_mobile_base":
-                for w in ['joint_wheel_0', 'joint_wheel_1', 'joint_wheel_2']:
+                for w in ['wheel_0_joint', 'wheel_1_joint', 'wheel_2_joint']:
                     joint_state.name.append(w)
                     joint_state.position.append(0.0)
                     joint_state.velocity.append(0.0)
@@ -505,7 +505,7 @@ class StretchDriver(Node):
             joint_state.velocity.append(vel)
             joint_state.effort.append(eff)
 
-            joint_status_key = cg.name.replace("joint_","")
+            joint_status_key = cg.name.replace("_joint","")
             if joint_status_key == "gripper":
                 joint_status_key = "stretch_gripper"
 

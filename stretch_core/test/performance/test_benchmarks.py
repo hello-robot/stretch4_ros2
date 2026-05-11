@@ -71,9 +71,9 @@ def test_action_preemption_latency(benchmark, action_client):
     """
     def preempt_goal():
         action_client.mode = 'position'
-        future1 = action_client.move_to_configuration({'joint_lift': 0.8}, blocking=False)
+        future1 = action_client.move_to_configuration({'lift_joint': 0.8}, blocking=False)
         time.sleep(0.1)
-        future2 = action_client.move_to_configuration({'joint_lift': 0.3}, blocking=False)
+        future2 = action_client.move_to_configuration({'lift_joint': 0.3}, blocking=False)
         gh1 = future1.result()
         gh1.get_result_async().result() # Wait for first to be canceled/preempted
         gh2 = future2.result()
@@ -89,7 +89,7 @@ def test_action_cancel_latency(benchmark, action_client):
     """
     def cancel_goal():
         action_client.mode = 'position'
-        future = action_client.move_to_configuration({'joint_lift': 0.8}, blocking=False)
+        future = action_client.move_to_configuration({'lift_joint': 0.8}, blocking=False)
         time.sleep(0.1)
         action_client.cancel_goal()
         gh = future.result()
@@ -105,7 +105,7 @@ def test_action_error_threshold_closeness(benchmark, action_client):
     def settle_to_goal():
         action_client.mode = 'position'
         target = 0.5
-        q = {'joint_lift': target}
+        q = {'lift_joint': target}
 
         # blocking=True means it waits until is_finished() is True via the server
         result = action_client.move_to_configuration(q, blocking=True)
@@ -113,7 +113,7 @@ def test_action_error_threshold_closeness(benchmark, action_client):
 
         # Verify closeness
         # (Assuming client updates q_curr)
-        actual = action_client.q_curr.get('joint_lift', 0.0)
+        actual = action_client.q_curr.get('lift_joint', 0.0)
         error = abs(target - actual)
         assert error < 0.05, f"Error {error} is outside of acceptable threshold"
 
