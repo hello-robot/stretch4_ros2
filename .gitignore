@@ -1,0 +1,23 @@
+# Emacs related
+*~
+\#*\#
+.\#*
+
+# Python related
+*.pyc
+*.so
+__pycache__/
+*.egg-info/
+
+# Vim files
+*.swp
+*.swn
+*.swo
+
+# Colcon generated folders and files that we shouldn't check in
+build/
+install/
+log/
+
+# VSCode
+.vscode/

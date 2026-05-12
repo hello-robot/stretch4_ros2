@@ -1,0 +1,36 @@
+controller_server:
+  ros__parameters:
+    controller_plugins: ["FollowPath"]
+    FollowPath:
+      # critics: [
+      #   "ConstraintCritic", "CostCritic", "GoalCritic",
+      #   "GoalAngleCritic", "PathAlignCritic", "PathFollowCritic",
+      #   "PathAngleCritic", "PreferForwardCritic"]
+      critics: [
+        "ConstraintCritic", "CostCritic", "GoalCritic",
+         "PathAlignCritic", "PathFollowCritic",
+        "PathAngleCritic", "PreferForwardCritic"]
+
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      robot_radius: 0.22
+      plugins: ["voxel_layer", "inflation_layer"]
+      inflation_layer:
+        inflation_radius: 0.4
+
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      robot_radius: 0.22
+      filters: ["binary_filter"]
+      binary_filter:
+        plugin: "nav2_costmap_2d::BinaryFilter"
+        enabled: True
+        filter_info_topic: "/costmap_filter_info"
+        transform_tolerance: 0.1
+        default_state: False
+        binary_state_topic: "/binary_state" #Topic of std_msgs::msg::Bool type to publish binary filter state to.
+        flip_threshold: 10.0
+      inflation_layer:
+        inflation_radius: 0.4

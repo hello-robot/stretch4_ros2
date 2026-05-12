@@ -1,0 +1,27 @@
+controller_server:
+  ros__parameters:
+    controller_plugins: ["FollowPath"]
+    FollowPath:
+      critics: [
+        "ConstraintCritic", "CostCritic", "GoalCritic",
+        "GoalAngleCritic", "PathAlignCritic", "PathFollowCritic",
+        "PathAngleCritic", "PreferForwardCritic"]
+      # critics: [
+      #   "ConstraintCritic", "CostCritic", "GoalCritic",
+      #    "PathAlignCritic", "PathFollowCritic",
+      #   "PathAngleCritic", "PreferForwardCritic"]
+
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      robot_radius: 0.1905 # 0.22
+      plugins: ["voxel_layer", "inflation_layer"]
+      inflation_layer:
+        inflation_radius: 0.25
+
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      robot_radius: 0.1905 # 0.22
+      inflation_layer:
+        inflation_radius: 0.25

@@ -1,0 +1,49 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>stretch_core</name>
+  <version>0.2.0</version>
+  <description>ROS2 drivers for the Stretch's hardware modules.</description>
+  <maintainer email="support@hello-robot.com">Hello Robot Inc.</maintainer>
+  <license>Apache-2.0</license>
+  <url type="website">https://github.com/hello-robot/stretch_ros2</url>
+
+  <!-- CORE DEPENDENCIES: Needed for building, exporting, and running the package. -->
+  <!-- For this Python package, these are the ROS 2 modules directly imported in the code. -->
+  <depend>control_msgs</depend>
+  <depend>cv_bridge</depend>
+  <depend>diagnostic_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>hello_helpers</depend>
+  <depend>nav_msgs</depend>
+  <depend>rcl_interfaces</depend>
+  <depend>rclpy</depend>
+  <depend>ros2_numpy</depend>
+  <depend>sensor_msgs</depend>
+  <depend>sensor_msgs_py</depend>
+  <depend>std_msgs</depend>
+  <depend>std_srvs</depend>
+  <depend>tf2_ros</depend>
+  <depend>tf_transformations</depend>
+  <depend>trajectory_msgs</depend>
+
+  <!-- EXECUTION DEPENDENCIES: Needed ONLY at runtime. -->
+  <!-- Not required to build the package, but must be installed to run external drivers/tools in launch files. -->
+  <exec_depend>airy_lidar_filter_cpp</exec_depend>
+  <exec_depend>depthai</exec_depend>
+  <exec_depend>depthai_ros_driver</exec_depend>
+  <exec_depend>hesai_ros_driver</exec_depend>
+  <exec_depend>joy</exec_depend>
+  <exec_depend>rclcpp_components</exec_depend>
+  <exec_depend>realsense2_camera</exec_depend>
+  <exec_depend>robot_state_publisher</exec_depend>
+  <exec_depend>rviz2</exec_depend>
+  <exec_depend>teleop_twist_joy</exec_depend>
+  <exec_depend>teleop_twist_keyboard</exec_depend>
+
+  <test_depend>python3-pytest</test_depend>
+  <test_depend>launch_pytest</test_depend>
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

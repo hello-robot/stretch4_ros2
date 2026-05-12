@@ -1,0 +1,343 @@
+from __future__ import annotations
+from typing import TYPE_CHECKING, Tuple, Any, Dict, List, Optional, Union, override
+from hello_helpers.base_command_group import BaseCommandGroup, check_active
+
+if TYPE_CHECKING:
+    from stretch_core.stretch_driver import StretchDriver
+
+
+class WristYawCommandGroup(BaseCommandGroup):
+
+    @override
+    def __init__(self) -> None:
+        super().__init__('joint_wrist_yaw')
+
+    @override
+    @check_active()
+    def queue_execution(self, robot: StretchDriver, **kwargs: Any) -> None:
+        robot.end_of_arm.move_to(
+            'wrist_yaw',
+            self.goal['position'],
+            self.goal['velocity'],
+            self.goal['acceleration'],
+        )
+
+    @override
+    @check_active()
+    def monitor_execution(self, robot_status: Dict[str, Any], **kwargs: Any) -> Tuple[str, float]:
+        desired = self.goal['position']
+        actual = robot_status['end_of_arm']['wrist_yaw']['pos']
+        self.error: float = desired - actual
+        return self.name, desired, actual, self.error
+
+    @override
+    @check_active()
+    def cancel_execution(self, robot: Any, **kwargs: Any) -> None:
+        robot.end_of_arm.move_by('wrist_yaw', 0)
+
+    @override
+    @check_active()
+    def is_finished(self, robot_status: Dict[str, Any], **kwargs: Any) -> bool:
+        # TODO: switch to servo motion_generator.is_moving()
+        return abs(self.error) < 0.5
+
+    @override
+    def joint_state(self, robot_status: Dict[str, Any], **kwargs: Any) -> Tuple[float, float, float]:
+        yaw_status = robot_status['end_of_arm']['wrist_yaw']
+        return (yaw_status['pos'], yaw_status['vel'], yaw_status['effort'])
+
+
+class WristPitchCommandGroup(BaseCommandGroup):
+
+    @override
+    def __init__(self) -> None:
+        super().__init__('joint_wrist_pitch')
+
+    @override
+    @check_active()
+    def queue_execution(self, robot: StretchDriver, **kwargs: Any) -> None:
+        robot.end_of_arm.move_to(
+            'wrist_pitch',
+            self.goal['position'],
+            self.goal['velocity'],
+            self.goal['acceleration'],
+        )
+
+    @override
+    @check_active()
+    def monitor_execution(self, robot_status: Dict[str, Any], **kwargs: Any) -> Tuple[str, float]:
+        desired = self.goal['position']
+        actual = robot_status['end_of_arm']['wrist_pitch']['pos']
+        self.error: float = desired - actual
+        return self.name, desired, actual, self.error
+
+    @override
+    @check_active()
+    def cancel_execution(self, robot: Any, **kwargs: Any) -> None:
+        robot.end_of_arm.move_by('wrist_pitch', 0)
+
+    @override
+    @check_active()
+    def is_finished(self, robot_status: Dict[str, Any], **kwargs: Any) -> bool:
+        # TODO: switch to servo motion_generator.is_moving()
+        return abs(self.error) < 0.5
+
+    @override
+    def joint_state(self, robot_status: Dict[str, Any], **kwargs: Any) -> Tuple[float, float, float]:
+        pitch_status = robot_status['end_of_arm']['wrist_pitch']
+        return (pitch_status['pos'], pitch_status['vel'], pitch_status['effort'])
+
+
+class WristRollCommandGroup(BaseCommandGroup):
+
+    @override
+    def __init__(self) -> None:
+        super().__init__('joint_wrist_roll')
+
+    @override
+    @check_active()
+    def queue_execution(self, robot: StretchDriver, **kwargs: Any) -> None:
+        robot.end_of_arm.move_to(
+            'wrist_roll',
+            self.goal['position'],
+            self.goal['velocity'],
+            self.goal['acceleration'],
+        )
+
+    @override
+    @check_active()
+    def monitor_execution(self, robot_status: Dict[str, Any], **kwargs: Any) -> Tuple[str, float]:
+        desired = self.goal['position']
+        actual = robot_status['end_of_arm']['wrist_roll']['pos']
+        self.error: float = desired - actual
+        return self.name, desired, actual, self.error
+
+    @override
+    @check_active()
+    def cancel_execution(self, robot: Any, **kwargs: Any) -> None:
+        robot.end_of_arm.move_by('wrist_roll', 0)
+
+    @override
+    @check_active()
+    def is_finished(self, robot_status: Dict[str, Any], **kwargs: Any) -> bool:
+        # TODO: switch to servo motion_generator.is_moving()
+        return abs(self.error) < 0.5
+
+    @override
+    def joint_state(self, robot_status: Dict[str, Any], **kwargs: Any) -> Tuple[float, float, float]:
+        roll_status = robot_status['end_of_arm']['wrist_roll']
+        return (roll_status['pos'], roll_status['vel'], roll_status['effort'])
+
+
+class GripperCommandGroup(BaseCommandGroup):
+
+    @override
+    def __init__(self) -> None:
+        super().__init__('joint_gripper')
+
+    @override
+    @check_active()
+    def queue_execution(self, robot: StretchDriver, **kwargs: Any) -> None:
+        robot.end_of_arm.move_to(
+            'stretch_gripper',
+            self.goal['position'],
+            self.goal['velocity'],
+            self.goal['acceleration'],
+        )
+
+    @override
+    @check_active()
+    def monitor_execution(self, robot_status: Dict[str, Any], **kwargs: Any) -> Tuple[str, float]:
+        desired = self.goal['position']
+        actual = robot_status['end_of_arm']['stretch_gripper']['pos']
+        self.error: float = desired - actual
+        return self.name, desired, actual, self.error
+
+    @override
+    @check_active()
+    def cancel_execution(self, robot: Any, **kwargs: Any) -> None:
+        robot.end_of_arm.move_by('stretch_gripper', 0)
+
+    @override
+    @check_active()
+    def is_finished(self, robot_status: Dict[str, Any], **kwargs: Any) -> bool:
+        # TODO: switch to servo motion_generator.is_moving()
+        return abs(self.error) < 0.5
+
+    @override
+    def joint_state(self, robot_status: Dict[str, Any], **kwargs: Any) -> Tuple[float, float, float]:
+        gripper_status = robot_status['end_of_arm']['stretch_gripper']
+        conversion = gripper_status['gripper_conversion']
+        return (conversion['finger_rad'], conversion['finger_vel'], gripper_status['effort'])
+
+
+class ParallelGripperCommandGroup(BaseCommandGroup):
+    @override
+    def __init__(self) -> None:
+        raise NotImplementedError
+
+class ArmCommandGroup(BaseCommandGroup):
+
+    @override
+    def __init__(self) -> None:
+        super().__init__('joint_arm')
+        self.did_start_moving = False # TODO: remove, move to Stretch Body
+
+    @override
+    @check_active()
+    def queue_execution(self, robot: StretchDriver, **kwargs: Any) -> None:
+        ct: Optional[float] = self.goal['contact_threshold']
+        robot.arm.move_to(
+            self.goal['position'],
+            v_m=self.goal['velocity'],
+            a_m=self.goal['acceleration'],
+            contact_sensitivity_pos=ct,
+            contact_sensitivity_neg=-ct if ct is not None else None,
+        )
+        self.did_start_moving = False
+
+    @override
+    @check_active()
+    def monitor_execution(self, robot_status: Dict[str, Any], **kwargs: Any) -> Tuple[str, float]:
+        desired = self.goal['position']
+        actual = robot_status['arm']['pos']
+        self.error: float = desired - actual
+        return self.name, desired, actual, self.error
+
+    @override
+    @check_active()
+    def cancel_execution(self, robot: Any, **kwargs: Any) -> None:
+        robot.arm.move_by(0)
+
+    @override
+    @check_active()
+    def is_finished(self, robot_status: Dict[str, Any], **kwargs: Any) -> bool:
+        contact_detected_callback = kwargs.get('contact_detected_callback')
+        if robot_status['arm']['motor']['in_guarded_event'] and contact_detected_callback:
+            contact_detected_callback("arm guarded contact")
+
+        # The motion generator (mg) runs in firmware and provides
+        # a strong signal on whether the joint is tracking a command
+        is_moving = bool(robot_status['arm']['motor']['is_mg_moving'])
+
+        # Check did start moving first
+        if is_moving:
+            self.did_start_moving = True
+        if not is_moving and not self.did_start_moving:
+            return False
+
+        return not is_moving
+
+    @override
+    def joint_state(self, robot_status: Dict[str, Any], **kwargs: Any) -> Tuple[float, float, float]:
+        arm_status = robot_status['arm']
+        return (arm_status['pos'], arm_status['vel'], arm_status['motor']['effort_pct'])
+
+
+class LiftCommandGroup(BaseCommandGroup):
+
+    @override
+    def __init__(self) -> None:
+        super().__init__('joint_lift')
+        self.did_start_moving = False # TODO: remove, move to Stretch Body
+
+    @override
+    @check_active()
+    def queue_execution(self, robot: StretchDriver, **kwargs: Any) -> None:
+        ct: Optional[float] = self.goal['contact_threshold']
+        robot.lift.move_to(
+            self.goal['position'],
+            v_m=self.goal['velocity'],
+            a_m=self.goal['acceleration'],
+            contact_sensitivity_pos=ct,
+            contact_sensitivity_neg=-ct if ct is not None else None,
+        )
+        self.did_start_moving = False
+
+    @override
+    @check_active()
+    def monitor_execution(self, robot_status: Dict[str, Any], **kwargs: Any) -> Tuple[str, float]:
+        desired = self.goal['position']
+        actual = robot_status['lift']['pos']
+        self.error: float = desired - actual
+        return self.name, desired, actual, self.error
+
+    @override
+    @check_active()
+    def cancel_execution(self, robot: Any, **kwargs: Any) -> None:
+        robot.lift.move_by(0)
+
+    @override
+    @check_active()
+    def is_finished(self, robot_status: Dict[str, Any], **kwargs: Any) -> bool:
+        contact_detected_callback = kwargs.get('contact_detected_callback')
+        if robot_status['lift']['motor']['in_guarded_event'] and contact_detected_callback:
+            contact_detected_callback("lift guarded contact")
+
+        # The motion generator (mg) runs in firmware and provides
+        # a strong signal on whether the joint is tracking a command
+        is_moving = bool(robot_status['lift']['motor']['is_mg_moving'])
+
+        # Check did start moving first
+        if is_moving:
+            self.did_start_moving = True
+        if not is_moving and not self.did_start_moving:
+            return False
+
+        return not is_moving
+
+    @override
+    def joint_state(self, robot_status: Dict[str, Any], **kwargs: Any) -> Tuple[float, float, float]:
+        lift_status = robot_status['lift']
+        return (lift_status['pos'], lift_status['vel'], lift_status['motor']['effort_pct'])
+
+
+# TODO: currently only supports x translation, rest is remaining
+class MobileBaseCommandGroup(BaseCommandGroup):
+
+    @override
+    def __init__(self) -> None:
+        super().__init__('translate_mobile_base')
+        self.initx: Optional[float] = None
+
+    @override
+    @check_active()
+    def queue_execution(self, robot: StretchDriver, **kwargs: Any) -> None:
+        robot.omnibase.translate_by(
+            self.goal['position'],
+            0.0,
+            v_m=self.goal['velocity'],
+            a_m=self.goal['acceleration']
+        )
+        # Store initial x for relative motion tracking
+        self.initx = robot.omnibase.status['x']
+
+    @override
+    @check_active()
+    def monitor_execution(self, robot_status: Dict[str, Any], **kwargs: Any) -> Tuple[str, float]:
+        desired = self.goal['position']
+        actual = robot_status['omnibase']['x'] - self.initx
+        self.error: float = desired - actual
+        return self.name, desired, actual, self.error
+
+    @override
+    @check_active()
+    def cancel_execution(self, robot: Any, **kwargs: Any) -> None:
+        robot.omnibase.hard_stop()
+
+    @override
+    @check_active()
+    def is_finished(self, robot_status: Dict[str, Any], **kwargs: Any) -> bool:
+        # The motion generator (mg) runs in firmware and provides
+        # a strong signal on whether the joint is tracking a command
+        moving_wheels = [
+            robot_status['omnibase']['wheel_0']['is_mg_moving'],
+            robot_status['omnibase']['wheel_1']['is_mg_moving'],
+            robot_status['omnibase']['wheel_2']['is_mg_moving']
+        ]
+        is_moving = any(moving_wheels)
+        return not is_moving
+
+    @override
+    def joint_state(self, robot_status: Dict[str, Any], **kwargs: Any) -> Tuple[float, float, float]:
+        return (None, None, None)

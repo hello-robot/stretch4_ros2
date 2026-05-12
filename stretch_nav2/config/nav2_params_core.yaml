@@ -1,0 +1,52 @@
+# This file contains only the parameters that have changed for Stretch 4
+# when compared with original_nav2_params.yaml
+amcl:
+  ros__parameters:
+    base_frame_id: "base_link" ## changed
+    do_beamskip: true #false
+    laser_model_type: "likelihood_field_prob" ## changed
+    robot_model_type: "nav2_amcl::OmniMotionModel" ## changed
+    update_min_a: 0.15 #0.2
+    update_min_d: 0.15 #0.25
+    scan_topic: scan_filtered ## changed
+
+bt_navigator:
+  ros__parameters:
+    max_beams: 60
+
+controller_server:
+  ros__parameters:
+    general_goal_checker:
+      yaw_goal_tolerance: 0.34 # Max is 3.14rad
+
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      voxel_layer:
+        scan:
+          topic: /scan_filtered ## changed
+
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      obstacle_layer:
+        scan:
+          topic: /scan_filtered ## changed
+
+planner_server:
+  ros__parameters:
+    GridBased:
+      use_astar: true #false
+
+collision_monitor:
+  ros__parameters:
+    base_frame_id: "base_link"
+    cmd_vel_in_topic: "cmd_vel_nav"
+    cmd_vel_out_topic: "stretch/cmd_vel"
+    scan:
+      topic: "scan_filtered" ## changed
+
+loopback_simulator:
+  ros__parameters:
+    base_frame_id: "base_link"
+    scan_frame_id: "laser"  # tb4_loopback_simulator.launch.py remaps to 'rplidar_link'

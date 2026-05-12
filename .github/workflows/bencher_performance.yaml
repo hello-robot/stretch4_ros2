@@ -1,0 +1,45 @@
+name: Performance Benchmarks
+
+on:
+  push:
+    branches: [ "iron" ]
+  pull_request:
+    branches: [ "iron" ]
+  workflow_dispatch:
+
+jobs:
+  performance_tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup ROS 2
+        uses: ros-tooling/setup-ros@v0.7
+        with:
+          required-ros-distributions: iron
+
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-pytest python3-pytest-benchmark
+          rosdep update
+          rosdep install --from-paths . --ignore-src -y --rosdistro iron
+
+      - name: Build Workspace
+        run: |
+          source /opt/ros/iron/setup.bash
+          colcon build --symlink-install
+
+      - name: Install Bencher
+        uses: bencherdev/bencher@main
+
+      - name: Run Performance Tests with Bencher
+        run: |
+          source /opt/ros/iron/setup.bash
+          source install/setup.bash
+          bencher run \
+            --project stretch4-ros2 \
+            --token ${{ secrets.BENCHER_TOKEN }} \
+            --adapter python_pytest \
+            --err \
+            pytest stretch_core/test/performance/

@@ -1,0 +1,7 @@
+image: binary_filter_mask.pgm
+mode: scale # the scale mode to use whole color lightness range there should be no thresholds: free_thresh = 0.0 and occupied_thresh = 1.0)
+resolution: 0.05
+origin: [-5.88, -24.6, 0]
+negate: 0
+occupied_thresh: 1.0 #Pixels with occupancy probability greater than this threshold are considered completely occupied.
+free_thresh: 0.0 #Pixels with occupancy probability less than this threshold are considered completely free.

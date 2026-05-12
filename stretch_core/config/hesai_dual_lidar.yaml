@@ -1,0 +1,47 @@
+lidar:
+  - driver:
+      use_gpu: false
+      correction_file_path: "/home/hello-robot/stretch_user/stretch-yyy-xxxx/calibration_hesais/left_lidar_calibration.dat"
+      #The type of data source, 1: real-time lidar connection, 2: pcap, 3: packet rosbag, 4: serial
+      source_type: 1
+      device_ip_address: 192.168.1.202
+      # UDP port (unique to each lidar) streams point clouds & IMU
+      udp_port: 2378
+      # PTC port (same for each lidar) is the control interface. Cannot be used without unplugging the other lidar first, hence is_use_ptc: false
+      is_use_ptc: false
+      ptc_port: 9347
+      # Decoder param, 0 use point cloud timestamp; 1 use receive timestamp
+      use_timestamp_type: 1
+      # FOV config, [fov_start, fov_end] range [1, 359], [-1, -1]means use default
+      fov_start: -1
+      fov_end:  -1
+    ros:
+      ros_frame_id: link_lidar_left                      # Frame id of packet message and point cloud message
+      ros_send_packet_topic: /lidar_packets_left         # Topic used to send lidar raw packets through ROS
+      ros_send_point_cloud_topic: /lidar_points_left     # Topic used to send point cloud through ROS
+      ros_send_imu_topic: /lidar_imu_left                # Topic used to send lidar imu message
+      send_packet_ros: false                             # if true: Send packets through ROS
+      send_point_cloud_ros: true                         # if true: Send point cloud through ROS
+  - driver:
+      use_gpu: false
+      correction_file_path: "/home/hello-robot/stretch_user/stretch-yyy-xxxx/calibration_hesais/right_lidar_calibration.dat"
+      #The type of data source, 1: real-time lidar connection, 2: pcap, 3: packet rosbag, 4: serial
+      source_type: 1
+      device_ip_address: 192.168.1.201
+      # UDP port (unique to each lidar) streams point clouds & IMU
+      udp_port: 2368
+      # PTC port (same for each lidar) is the control interface. Cannot be used without unplugging the other lidar first, hence is_use_ptc: false
+      is_use_ptc: false
+      ptc_port: 9347
+      # Decoder param, 0 use point cloud timestamp; 1 use receive timestamp
+      use_timestamp_type: 1
+      # FOV config, [fov_start, fov_end] range [1, 359], [-1, -1]means use default
+      fov_start: -1
+      fov_end:  -1
+    ros:
+      ros_frame_id: link_lidar_right                      # Frame id of packet message and point cloud message
+      ros_send_packet_topic: /lidar_packets_right         # Topic used to send lidar raw packets through ROS
+      ros_send_point_cloud_topic: /lidar_points_right     # Topic used to send point cloud through ROS
+      ros_send_imu_topic: /lidar_imu_right                # Topic used to send lidar imu message
+      send_packet_ros: false                              # if true: Send packets through ROS
+      send_point_cloud_ros: true                          # if true: Send point cloud through ROS

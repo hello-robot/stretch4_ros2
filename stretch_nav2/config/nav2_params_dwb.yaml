@@ -1,0 +1,3 @@
+controller_server:
+  ros__parameters:
+    controller_plugins: ["FollowPath"]
