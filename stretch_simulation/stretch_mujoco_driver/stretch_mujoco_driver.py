@@ -500,18 +500,17 @@ class StretchMujocoDriver(Node):
         joint_state = JointState()
         joint_state.header = Header()
         joint_state.header.stamp = current_time
-        # arm_l3_joint is the most proximal and arm_l0_joint is the
+        # arm_l1_joint is the most proximal and arm_l4_joint is the
         # most distal joint of the telescoping arm model. The joints
         # are connected in series such that moving the most proximal
         # joint moves all the other joints in the global frame.
         joint_state.name = [
             "wrist_extension",
             "lift_joint",
-            "arm_l4_joint",
-            "arm_l3_joint",
-            "arm_l2_joint",
             "arm_l1_joint",
-            "arm_l0_joint",
+            "arm_l2_joint",
+            "arm_l3_joint",
+            "arm_l4_joint",
         ]
 
         # set positions of the telescoping joints
