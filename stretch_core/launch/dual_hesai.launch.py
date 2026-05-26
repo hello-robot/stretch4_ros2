@@ -46,6 +46,10 @@ def generate_launch_description():
 
     filter_type = LaunchConfiguration('filter_type')
 
+    print_filter_cmd = LogInfo(
+        msg=['==== USING FILTER TYPE: ', filter_type]
+    )
+
     dual_lidar_params = {
         "lidar1_frame": "lidar_right_link",
         "lidar2_frame": "lidar_left_link",
@@ -101,6 +105,7 @@ def generate_launch_description():
     return LaunchDescription([
         hesai_node,
         filter_type_arg,
+        print_filter_cmd,
         region_filter_node,
         voxel_filter_node,
         error_log,
