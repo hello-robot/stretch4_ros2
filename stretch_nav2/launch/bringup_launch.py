@@ -22,6 +22,7 @@ from launch.actions import (
     GroupAction,
     IncludeLaunchDescription,
     SetEnvironmentVariable,
+    LogInfo,
 )
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
@@ -127,7 +128,7 @@ def generate_launch_description():
 
     declare_use_composition_cmd = DeclareLaunchArgument(
         'use_composition',
-        default_value='True',
+        default_value='False', ## should be True
         description='Whether to use composed bringup',
     )
 
@@ -139,6 +140,10 @@ def generate_launch_description():
 
     declare_log_level_cmd = DeclareLaunchArgument(
         'log_level', default_value='info', description='log level'
+    )
+
+    print_params_cmd = LogInfo(
+        msg=['==== USING PARAMS FILE AT PATH: ', params_file, ' ====']
     )
 
     # Specify the actions
@@ -214,6 +219,7 @@ def generate_launch_description():
     ld.add_action(declare_map_yaml_cmd)
     ld.add_action(declare_use_sim_time_cmd)
     ld.add_action(declare_params_file_cmd)
+    ld.add_action(print_params_cmd)
     ld.add_action(declare_autostart_cmd)
     ld.add_action(declare_use_composition_cmd)
     ld.add_action(declare_use_respawn_cmd)

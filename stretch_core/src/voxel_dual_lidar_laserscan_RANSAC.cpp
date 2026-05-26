@@ -37,7 +37,7 @@ public:
         this->declare_parameter<std::string>("lidar2_topic", "/lidar_points_left");
         this->declare_parameter<std::string>("lidar1_frame", "link_lidar_right");
         this->declare_parameter<std::string>("lidar2_frame", "link_lidar_left");
-        this->declare_parameter<std::string>("frame_id", "base_link");
+        this->declare_parameter<std::string>("frame_id", "base_footprint");
         this->declare_parameter<std::string>("output_topic", "/scan_filtered");
         this->declare_parameter<bool>("pub_pc", false);
 

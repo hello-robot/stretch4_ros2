@@ -412,8 +412,8 @@ class StretchDriver(Node):
             # publish odometry via TF
             t = TransformStamped()
             t.header.stamp = current_time
-            t.header.frame_id = self.prefix + 'wheel_odom'
-            t.child_frame_id = self.prefix + 'base_link'
+            t.header.frame_id = self.prefix + 'odom'
+            t.child_frame_id = self.prefix + 'base_footprint'
             t.transform.translation.x = x
             t.transform.translation.y = y
             t.transform.translation.z = 0.0
@@ -426,8 +426,8 @@ class StretchDriver(Node):
         # publish odometry via the odom topic
         odom = Odometry()
         odom.header.stamp = current_time
-        odom.header.frame_id = self.prefix + 'wheel_odom'
-        odom.child_frame_id = self.prefix + 'base_link'
+        odom.header.frame_id = self.prefix + 'odom'
+        odom.child_frame_id = self.prefix + 'base_footprint'
         odom.pose.pose.position.x = x
         odom.pose.pose.position.y = y
         odom.pose.pose.orientation.x = q[0]

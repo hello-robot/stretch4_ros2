@@ -2,7 +2,7 @@
 # when compared with original_nav2_params.yaml
 amcl:
   ros__parameters:
-    base_frame_id: "base_link" ## changed
+    base_frame_id: "base_footprint" ## changed
     do_beamskip: true #false
     laser_model_type: "likelihood_field_prob" ## changed
     robot_model_type: "nav2_amcl::OmniMotionModel" ## changed
@@ -40,7 +40,7 @@ planner_server:
 
 collision_monitor:
   ros__parameters:
-    base_frame_id: "base_link"
+    base_frame_id: "base_footprint"
     cmd_vel_in_topic: "cmd_vel_nav"
     cmd_vel_out_topic: "stretch/cmd_vel"
     scan:
@@ -48,5 +48,5 @@ collision_monitor:
 
 loopback_simulator:
   ros__parameters:
-    base_frame_id: "base_link"
+    base_frame_id: "base_footprint"
     scan_frame_id: "laser"  # tb4_loopback_simulator.launch.py remaps to 'rplidar_link'

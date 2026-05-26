@@ -45,11 +45,18 @@ def generate_launch_description():
 
     rviz_param = DeclareLaunchArgument('use_rviz', default_value='true', choices=['true', 'false'])
 
+    params_file = DeclareLaunchArgument(
+        'params_file',
+        description='Full path to the ROS2 parameters file to use for Nav2',
+    )
+    
     navigation_bringup_launch = IncludeLaunchDescription(
         PathJoinSubstitution([stretch_navigation_path, 'launch', 'bringup_launch.py']),
-        launch_arguments={'map': LaunchConfiguration('map'),
-                          'slam': LaunchConfiguration('use_slam'),
-                          'use_rviz': LaunchConfiguration('use_rviz')}.items())
+        launch_arguments={
+            'map': LaunchConfiguration('map'),
+            'slam': LaunchConfiguration('use_slam'),
+            'params_file': LaunchConfiguration('params_file'),
+        }.items())
 
     rviz_launch = IncludeLaunchDescription(
         PathJoinSubstitution([navigation_bringup_path, 'launch', 'rviz_launch.py']),
@@ -62,6 +69,7 @@ def generate_launch_description():
         map_path_param,
         use_slam,
         rviz_param,
+        params_file,
         navigation_bringup_launch,
         rviz_launch,
         map_path_check_action,

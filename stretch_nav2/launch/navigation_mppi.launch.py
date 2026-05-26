@@ -13,8 +13,9 @@ def generate_launch_description():
         PathJoinSubstitution([stretch_core_path, 'launch', 'stretch_driver.launch.py']),
         launch_arguments={'broadcast_odom_tf': 'True', 'mode': 'navigation'}.items())
 
-    rslidar_launch = IncludeLaunchDescription(
-        PathJoinSubstitution([stretch_core_path, 'launch', 'airy_dual_rslidar.launch.py']),
+    hlidar_launch = IncludeLaunchDescription(
+        PathJoinSubstitution([stretch_core_path, 'launch', 'dual_hesai.launch.py']),
+        launch_arguments={'filter_type': 'sor'}.items(),
     )
 
     navigation_launch = IncludeLaunchDescription(
@@ -26,11 +27,12 @@ def generate_launch_description():
                 PathJoinSubstitution([stretch_navigation_path, 'config', 'nav2_params_mppi.yaml']),
                 PathJoinSubstitution([stretch_navigation_path, 'config', 'mppi_params.yaml']),
             ]),
+        'use_rviz': 'true', 
         }.items(),
     )
 
     return LaunchDescription([
         stretch_driver_launch,
-        rslidar_launch,
+        hlidar_launch,
         navigation_launch,
     ])
