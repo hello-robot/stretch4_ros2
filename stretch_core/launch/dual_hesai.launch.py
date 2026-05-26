@@ -46,12 +46,22 @@ def generate_launch_description():
 
     filter_type = LaunchConfiguration('filter_type')
 
+    dual_lidar_params = {
+        "lidar1_frame": "lidar_right_link",
+        "lidar2_frame": "lidar_left_link",
+        # optional — only if topics differ from defaults:
+        # "lidar1_topic": "/lidar_points_right",
+        # "lidar2_topic": "/lidar_points_left",
+        # "frame_id": "base_link",
+    }
+
     region_filter_node = Node(
         condition=IfCondition(PythonExpression(["'", filter_type, "' == 'region'"])),
         package='airy_lidar_filter_cpp',
         executable='region_dual_lidar_laserscan',
         name='pointcloud_to_laserscan',
-        output='screen'
+        output='screen',
+        parameters=[dual_lidar_params],
     )
 
     voxel_filter_node = Node(
@@ -59,7 +69,8 @@ def generate_launch_description():
         package='airy_lidar_filter_cpp',
         executable='voxel_dual_lidar_laserscan_RANSAC',
         name='pointcloud_to_laserscan',
-        output='screen'
+        output='screen',
+        parameters=[dual_lidar_params],
     )
 
     error_log = LogInfo(

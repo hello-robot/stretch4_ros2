@@ -84,7 +84,7 @@ class StretchDriver(Node):
             depth=1,
             durability=QoSDurabilityPolicy.TRANSIENT_LOCAL
         )
-        self.odom_pub = self.create_publisher(Odometry, 'wheel_odom', 1)
+        self.odom_pub = self.create_publisher(Odometry, 'odom', 1)
         self.homed_pub = self.create_publisher(Bool, 'is_homed', latching_qos)
         self.mode_pub = self.create_publisher(String, 'mode', latching_qos)
         self.tool_pub = self.create_publisher(String, 'tool', latching_qos)
