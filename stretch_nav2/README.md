@@ -211,7 +211,7 @@ Make sure you are aware of the speed it is at before moving. If you already move
 
   Mapping launch files use `region_filter`, while navigation uses `voxel_sor` (selected via the `filter_type` parameter). The reason for applying `voxel_sor` only within a certain distance is that farther points have a different distribution than closer ones so they tend to be more distant, and noise from closer points affects motion more significantly so one parameter doesn't fit close and far away points so we focus only on the closer points.  
 
-  More filtering options can be found here: [airy_lidar_filter_cpp](https://github.com/hello-robot/airy_lidar_filter_cpp)
+  Dual-lidar filter nodes live in `stretch_core` (`region_dual_lidar_laserscan`, `voxel_dual_lidar_laserscan`, `voxel_dual_lidar_laserscan_RANSAC`), launched via `stretch_core/launch/dual_hesai.launch.py`.
 
 - **LaserScan Topic:** The filtered laser scan is published to `/scan_filtered` with **Best Effort QoS** (not reliable).
 

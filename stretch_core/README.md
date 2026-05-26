@@ -2,6 +2,15 @@
 
 *stretch_core* provides the drivers to the Stretch mobile manipulator.
 
+## Dual Hesai LiDAR filtering
+
+C++ nodes convert synchronized dual `PointCloud2` topics into `/scan_filtered`:
+
+- `region_dual_lidar_laserscan` — region / height filtering only
+- `voxel_dual_lidar_laserscan` — voxel grid + statistical outlier removal
+
+Launch with `ros2 launch stretch_core dual_hesai.launch.py filter_type:=region` or `filter_type:=sor`.
+
 ## API
 
 For comprehensive API documentation, please refer to [Coming soon](#TODO).

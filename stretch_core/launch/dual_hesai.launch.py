@@ -57,7 +57,7 @@ def generate_launch_description():
 
     region_filter_node = Node(
         condition=IfCondition(PythonExpression(["'", filter_type, "' == 'region'"])),
-        package='airy_lidar_filter_cpp',
+        package='stretch_core',
         executable='region_dual_lidar_laserscan',
         name='pointcloud_to_laserscan',
         output='screen',
@@ -66,8 +66,8 @@ def generate_launch_description():
 
     voxel_filter_node = Node(
         condition=IfCondition(PythonExpression(["'", filter_type, "' == 'sor'"])),
-        package='airy_lidar_filter_cpp',
-        executable='voxel_dual_lidar_laserscan_RANSAC',
+        package='stretch_core',
+        executable='voxel_dual_lidar_laserscan',
         name='pointcloud_to_laserscan',
         output='screen',
         parameters=[dual_lidar_params],
