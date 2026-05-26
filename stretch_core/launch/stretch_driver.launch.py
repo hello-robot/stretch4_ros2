@@ -18,7 +18,7 @@ def compile_robot_description(context, *args, **kwargs):
 
     robot_description_content = get_urdf_from_robot_params()
 
-    prefix = LaunchConfiguration('namespace').perform(context)
+    prefix = LaunchConfiguration('prefix').perform(context)
     ns = prefix if prefix != 'UNSET' else ''
     frame_prefix = prefix + '/' if prefix != 'UNSET' else ''
     robot_state_publisher = Node(package='robot_state_publisher',
@@ -39,13 +39,13 @@ def generate_launch_description():
 
     ld = LaunchDescription()
 
-    # namespace
-    declare_namespace_arg = DeclareLaunchArgument(
-        'namespace',
+    # Robot namespace prefix (not named "namespace" — that collides with Nav2 bringup).
+    declare_prefix_arg = DeclareLaunchArgument(
+        'prefix',
         default_value='UNSET',
         description='The prefix to use as a namespace, defaults to no namespace'
     )
-    ld.add_action(declare_namespace_arg)
+    ld.add_action(declare_prefix_arg)
 
     # Wheel odom TF
     declare_broadcast_odom_tf_arg = DeclareLaunchArgument(
@@ -76,7 +76,7 @@ def generate_launch_description():
 
     # Convert the robot_id LaunchConfiguration into a python string so we can check it
     def add_stretch_driver(context, *args, **kwargs):
-        prefix = LaunchConfiguration('namespace').perform(context)
+        prefix = LaunchConfiguration('prefix').perform(context)
         ns = prefix if prefix != 'UNSET' else ''
         stretch_driver = Node(package='stretch_core',
                               executable='stretch_driver',
