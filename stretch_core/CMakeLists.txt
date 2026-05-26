@@ -68,7 +68,7 @@ install(
   DESTINATION share/ament_index/resource_index/packages
 )
 
-ament_python_install_package(${PROJECT_NAME})
+ament_python_install_package(${PROJECT_NAME} SCRIPTS_DESTINATION lib/${PROJECT_NAME})
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
