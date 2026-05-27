@@ -476,10 +476,12 @@ class StretchDriver(Node):
 
             # add telescoping joints to joint state
             if cg.name == "joint_arm":
-                for link in ['arm_l3_joint', 'arm_l2_joint', 'arm_l1_joint', 'arm_l0_joint']:
+                # The URDF defines 5 prismatic joints (arm_l0_joint through arm_l4_joint),
+                # so the total arm displacement is split equally across all 5 stages.
+                for link in ['arm_l4_joint', 'arm_l3_joint', 'arm_l2_joint', 'arm_l1_joint', 'arm_l0_joint']:
                     joint_state.name.append(link)
-                    joint_state.position.append(pos/4.0)
-                    joint_state.velocity.append(vel/4.0)
+                    joint_state.position.append(pos/5.0)
+                    joint_state.velocity.append(vel/5.0)
                     joint_state.effort.append(eff)
                 # diagnostics for arm
                 at_limit_msg.values.append(KeyValue(key=cg.name, value=f"{robot_status['arm']['at_limit']}"))
@@ -489,7 +491,9 @@ class StretchDriver(Node):
 
             # add gripper joints to joint state
             if cg.name == "joint_gripper":
-                for link in ['joint_gripper_finger_left', 'joint_gripper_finger_right']:
+                # Joint names must match the URDF revolute joint names exactly:
+                # gripper_finger_left_joint and gripper_finger_right_joint
+                for link in ['gripper_finger_left_joint', 'gripper_finger_right_joint']:
                     joint_state.name.append(link)
                     joint_state.position.append(pos)
                     joint_state.velocity.append(vel)
