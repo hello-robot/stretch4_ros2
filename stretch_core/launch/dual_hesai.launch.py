@@ -20,10 +20,10 @@ def generate_launch_description():
         cfg = yaml.safe_load(f)
     fleet_dir = os.environ.get("HELLO_FLEET_PATH", "")
     fleet_id = os.environ.get("HELLO_FLEET_ID", "")
-    cfg["lidar"][0]["driver"]["correction_file_path"] = (
+    cfg["lidar"][0]["driver"]["lidar_udp_type"]["correction_file_path"] = (
         f"{fleet_dir}/{fleet_id}/calibration_hesais/left_lidar_calibration.dat"
     )
-    cfg["lidar"][1]["driver"]["correction_file_path"] = (
+    cfg["lidar"][1]["driver"]["lidar_udp_type"]["correction_file_path"] = (
         f"{fleet_dir}/{fleet_id}/calibration_hesais/right_lidar_calibration.dat"
     )
     with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".yaml", dir="/tmp") as tmp_file:
@@ -56,7 +56,7 @@ def generate_launch_description():
         # optional — only if topics differ from defaults:
         # "lidar1_topic": "/lidar_points_right",
         # "lidar2_topic": "/lidar_points_left",
-        # "frame_id": "base_link",
+        # "frame_id": "base_footprint",
     }
 
     region_filter_node = Node(
