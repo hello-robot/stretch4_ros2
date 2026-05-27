@@ -15,13 +15,13 @@ def action_client():
 
 @pytest.mark.launch(fixture=stretch_driver_ld)
 def test_fjt_success_single_joint_arm(action_client):
-    q = {'joint_arm': 0.1}
+    q = {'arm_joint': 0.1}
     result = action_client.move_to_configuration(q, blocking=True)
     assert result.status == 4 # STATUS_SUCCEEDED
 
 @pytest.mark.launch(fixture=stretch_driver_ld)
 def test_fjt_success_single_joint_lift(action_client):
-    q = {'joint_lift': 0.3}
+    q = {'lift_joint': 0.3}
     result = action_client.move_to_configuration(q, blocking=True)
     assert result.status == 4
 
@@ -33,25 +33,25 @@ def test_fjt_success_mobile_base(action_client):
 
 @pytest.mark.launch(fixture=stretch_driver_ld)
 def test_fjt_success_wrist_yaw(action_client):
-    q = {'joint_wrist_yaw': 0.1}
+    q = {'wrist_yaw_joint': 0.1}
     result = action_client.move_to_configuration(q, blocking=True)
     assert result.status == 4
 
 @pytest.mark.launch(fixture=stretch_driver_ld)
 def test_fjt_success_wrist_pitch(action_client):
-    q = {'joint_wrist_pitch': 0.1}
+    q = {'wrist_pitch_joint': 0.1}
     result = action_client.move_to_configuration(q, blocking=True)
     assert result.status == 4
 
 @pytest.mark.launch(fixture=stretch_driver_ld)
 def test_fjt_success_wrist_roll(action_client):
-    q = {'joint_wrist_roll': 0.1}
+    q = {'wrist_roll_joint': 0.1}
     result = action_client.move_to_configuration(q, blocking=True)
     assert result.status == 4
 
 @pytest.mark.launch(fixture=stretch_driver_ld)
 def test_fjt_success_gripper(action_client):
-    q = {'joint_gripper': -0.1}
+    q = {'gripper_joint': -0.1}
     result = action_client.move_to_configuration(q, blocking=True)
     assert result.status == 4
 
@@ -59,24 +59,24 @@ def test_fjt_success_gripper(action_client):
 def test_fjt_success_all_joints_simultaneously(action_client):
     q = {
         'translate_mobile_base': 0.1,
-        'joint_lift': 0.6,
-        'joint_arm': 0.2,
-        'joint_wrist_yaw': 0.0,
-        'joint_wrist_pitch': 0.0,
-        'joint_wrist_roll': 0.0,
-        'joint_gripper': 0.0
+        'lift_joint': 0.6,
+        'arm_joint': 0.2,
+        'wrist_yaw_joint': 0.0,
+        'wrist_pitch_joint': 0.0,
+        'wrist_roll_joint': 0.0,
+        'gripper_joint': 0.0
     }
     result = action_client.move_to_configuration(q, blocking=True)
     assert result.status == 4
 
 @pytest.mark.launch(fixture=stretch_driver_ld)
 def test_fjt_preempted(action_client):
-    q1 = {'joint_lift': 0.8}
+    q1 = {'lift_joint': 0.8}
     future1 = action_client.move_to_configuration(q1, blocking=False)
     
     time.sleep(0.5) # Let first goal start
     
-    q2 = {'joint_lift': 0.3}
+    q2 = {'lift_joint': 0.3}
     future2 = action_client.move_to_configuration(q2, blocking=False)
     
     # The first goal should be preempted
@@ -88,10 +88,10 @@ def test_fjt_preempted(action_client):
 
 @pytest.mark.launch(fixture=stretch_driver_ld)
 def test_fjt_canceled(action_client):
-    q = {'joint_lift': 0.2}
+    q = {'lift_joint': 0.2}
     action_client.move_to_configuration(q, blocking=True)
 
-    q = {'joint_lift': 1.1}
+    q = {'lift_joint': 1.1}
     future = action_client.move_to_configuration(q, blocking=False)
     time.sleep(0.5)
     action_client.cancel_goal()

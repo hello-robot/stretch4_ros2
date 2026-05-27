@@ -53,12 +53,12 @@ def run_trajectory_under_load(benchmark, client, mode):
     """Common logic for benchmarking a trajectory while under load."""
     def run_traj():
         client.mode = 'position'
-        q = {'joint_lift': 0.5}
+        q = {'lift_joint': 0.5}
         result = client.move_to_configuration(q, blocking=True)
         assert result.status == 4 # Succeeded
         
         # Move back
-        q = {'joint_lift': 0.2}
+        q = {'lift_joint': 0.2}
         result = client.move_to_configuration(q, blocking=True)
         assert result.status == 4
         

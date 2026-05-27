@@ -10,7 +10,7 @@ class WristYawCommandGroup(BaseCommandGroup):
 
     @override
     def __init__(self) -> None:
-        super().__init__('joint_wrist_yaw')
+        super().__init__('wrist_yaw_joint')
 
     @override
     @check_active()
@@ -51,7 +51,7 @@ class WristPitchCommandGroup(BaseCommandGroup):
 
     @override
     def __init__(self) -> None:
-        super().__init__('joint_wrist_pitch')
+        super().__init__('wrist_pitch_joint')
 
     @override
     @check_active()
@@ -92,7 +92,7 @@ class WristRollCommandGroup(BaseCommandGroup):
 
     @override
     def __init__(self) -> None:
-        super().__init__('joint_wrist_roll')
+        super().__init__('wrist_roll_joint')
 
     @override
     @check_active()
@@ -133,7 +133,7 @@ class GripperCommandGroup(BaseCommandGroup):
 
     @override
     def __init__(self) -> None:
-        super().__init__('joint_gripper')
+        super().__init__('gripper_joint')
 
     @override
     @check_active()
@@ -180,7 +180,7 @@ class ArmCommandGroup(BaseCommandGroup):
 
     @override
     def __init__(self) -> None:
-        super().__init__('joint_arm')
+        super().__init__('arm_joint')
         self.did_start_moving = False # TODO: remove, move to Stretch Body
 
     @override
@@ -238,7 +238,7 @@ class LiftCommandGroup(BaseCommandGroup):
 
     @override
     def __init__(self) -> None:
-        super().__init__('joint_lift')
+        super().__init__('lift_joint')
         self.did_start_moving = False # TODO: remove, move to Stretch Body
 
     @override

@@ -37,12 +37,12 @@ class VisionFrames(str, Enum):
     ```
     """
 
-    LEFT = "link_camera_left_optical"
-    RIGHT = "link_camera_right_optical"
-    CENTER = "link_camera_center_optical"
+    LEFT = "camera_left_optical_link"
+    RIGHT = "camera_right_optical_link"
+    CENTER = "camera_center_optical_link"
 
-    LIDAR_LEFT = "link_lidar_left"
-    LIDAR_RIGHT = "link_lidar_right"
+    LIDAR_LEFT = "lidar_left_link"
+    LIDAR_RIGHT = "lidar_right_link"
 
     @staticmethod
     def lidar_frame(lidar_name: str) -> str:

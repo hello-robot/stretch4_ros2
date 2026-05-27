@@ -138,121 +138,121 @@ Visualization Manager:
           Show Axes: false
           Show Trail: false
           Value: true
-        link_arm_l0:
+        arm_l0_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        link_arm_l1:
+        arm_l1_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        link_arm_l2:
+        arm_l2_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        link_arm_l3:
+        arm_l3_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        link_arm_l4:
+        arm_l4_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        link_aruco_inner_wrist:
+        aruco_inner_wrist_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        link_aruco_left_base:
+        aruco_left_base_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        link_aruco_right_base:
+        aruco_right_base_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        link_aruco_shoulder:
+        aruco_shoulder_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        link_aruco_top_wrist:
+        aruco_top_wrist_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        link_grasp_center:
+        grasp_center_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
-        link_gripper:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        link_gripper_finger_left:
+        gripper_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        link_gripper_finger_right:
+        gripper_finger_left_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        link_gripper_fingertip_left:
+        gripper_finger_right_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        link_gripper_fingertip_right:
+        gripper_fingertip_left_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        link_head:
+        gripper_fingertip_right_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        link_head_pan:
+        head_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        link_head_tilt:
+        head_pan_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        link_left_wheel:
+        head_tilt_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        link_lift:
+        left_wheel_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        link_mast:
+        lift_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        link_right_wheel:
+        mast_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        link_wrist_yaw:
+        right_wheel_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        wrist_yaw_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false

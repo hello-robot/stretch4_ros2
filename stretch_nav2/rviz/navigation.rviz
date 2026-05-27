@@ -89,132 +89,132 @@ Visualization Manager:
           Alpha: 1
           Show Axes: false
           Show Trail: false
-        link_arm_l0:
+        arm_l0_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        link_arm_l1:
+        arm_l1_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        link_arm_l2:
+        arm_l2_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        link_arm_l3:
+        arm_l3_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        link_arm_l4:
+        arm_l4_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        link_aruco_fingertip_left:
+        aruco_fingertip_left_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        link_aruco_fingertip_right:
+        aruco_fingertip_right_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        link_back_wheel:
+        back_wheel_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        link_grasp_center:
+        grasp_center_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        link_gripper_finger_left:
+        gripper_finger_left_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        link_gripper_finger_right:
+        gripper_finger_right_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        link_gripper_fingertip_left:
+        gripper_fingertip_left_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        link_gripper_fingertip_right:
+        gripper_fingertip_right_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        link_gripper_s4_body:
+        gripper_s4_body_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        link_head:
+        head_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        link_left_wheel:
+        left_wheel_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        link_lidar_left:
+        lidar_left_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        link_lidar_right:
+        lidar_right_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        link_lift:
+        lift_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        link_mast:
+        mast_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        link_right_wheel:
+        right_wheel_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        link_tool_attachment_site:
+        tool_attachment_site_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        link_wrist:
+        wrist_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        link_wrist_pitch:
+        wrist_pitch_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        link_wrist_roll:
+        wrist_roll_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        link_wrist_yaw:
+        wrist_yaw_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false

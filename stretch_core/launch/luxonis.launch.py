@@ -153,8 +153,8 @@ def launch_setup(context, *args, **kwargs):
             "i_publish_raw": is_use_center,
             "i_enable_lazy_publisher": True,  # enables/disables publishing based on the number of subscribers present
             "i_undistorted": False,
-            # "i_tf_parent_frame": "link_camera_center_optical", # These are getting ignored... hack below
-            # "i_tf_base_frame": "link_camera_center_optical",
+            # "i_tf_parent_frame": "camera_center_optical_link", # These are getting ignored... hack below
+            # "i_tf_base_frame": "camera_center_optical_link",
         },
         "left": {
             "i_calibration_file": f"file://{get_camera_calibration_file_path("right")}",  # ribbons are swapped in the head
@@ -167,8 +167,8 @@ def launch_setup(context, *args, **kwargs):
             "i_publish_raw": is_use_left,
             "i_enable_lazy_publisher": True,  # enables/disables publishing based on the number of subscribers present
             "i_undistorted": False,
-            # "i_tf_parent_frame": "link_camera_left_optical", # These are getting ignored... hack below
-            # "i_tf_base_frame": "link_camera_left_optical",
+            # "i_tf_parent_frame": "camera_left_optical_link", # These are getting ignored... hack below
+            # "i_tf_base_frame": "camera_left_optical_link",
         },
         "right": {
             "i_calibration_file": f"file://{get_camera_calibration_file_path("left")}",  # ribbons are swapped in the head
@@ -181,8 +181,8 @@ def launch_setup(context, *args, **kwargs):
             "i_publish_raw": is_use_right,
             "i_enable_lazy_publisher": True,  # enables/disables publishing based on the number of subscribers present
             "i_undistorted": False,
-            # "i_tf_parent_frame": "link_camera_right_optical", # These are getting ignored... hack below
-            # "i_tf_base_frame": "link_camera_right_optical",
+            # "i_tf_parent_frame": "camera_right_optical_link", # These are getting ignored... hack below
+            # "i_tf_base_frame": "camera_right_optical_link",
         },
     }
 
