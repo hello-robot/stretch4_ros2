@@ -108,7 +108,7 @@ class StretchDriver(Node):
         self.set_vel_functions = {}
 
         if hasattr(self.robot, 'lift'):
-            self.set_vel_functions['joint_lift'] = lambda v, a:  self.robot.lift.set_velocity(v, a_m=a)
+            self.set_vel_functions['lift_joint'] = lambda v, a:  self.robot.lift.set_velocity(v, a_m=a)
             self.declare_parameter("joint_acceleration.lift",self.robot.robot_params['lift']['motion']['default']['accel_m'])
         if hasattr(self.robot, 'arm'):
             self.set_vel_functions['joint_arm'] = lambda v, a:  self.robot.arm.set_velocity(v, a_m=a)
@@ -294,7 +294,7 @@ class StretchDriver(Node):
             if joint not in self.set_vel_functions.keys():
                 raise AttributeError(f"Received velocity command for unexpected joint: {joint}")
 
-            acceleration_param = self.get_parameter_or(f"joint_acceleration.{joint.split("joint_")[1]}",None).value
+            acceleration_param = self.get_parameter_or(f"joint_acceleration.{joint.replace('_joint', '').replace('joint_', '')}",None).value
 
             if "gripper" in joint: 
                 jointjog_msg.velocities[i] *= 300
@@ -476,11 +476,16 @@ class StretchDriver(Node):
 
             # add telescoping joints to joint state
             if cg.name == "joint_arm":
-                for link in ['joint_arm_l3', 'joint_arm_l2', 'joint_arm_l1', 'joint_arm_l0']:
+                for link in ['arm_l3_joint', 'arm_l2_joint', 'arm_l1_joint', 'arm_l0_joint']:
                     joint_state.name.append(link)
                     joint_state.position.append(pos/4.0)
                     joint_state.velocity.append(vel/4.0)
                     joint_state.effort.append(eff)
+                # diagnostics for arm
+                at_limit_msg.values.append(KeyValue(key=cg.name, value=f"{robot_status['arm']['at_limit']}"))
+                soft_limits_msg.values.append(KeyValue(key=cg.name, value=f"{robot_status['arm']['soft_motion_limits']}"))
+                braking_distance_msg.values.append(KeyValue(key=cg.name, value=f"{robot_status['arm']['braking_distance']}"))
+                continue # arm expands into individual links; do not add joint_arm itself
 
             # add gripper joints to joint state
             if cg.name == "joint_gripper":
@@ -489,7 +494,12 @@ class StretchDriver(Node):
                     joint_state.position.append(pos)
                     joint_state.velocity.append(vel)
                     joint_state.effort.append(eff)
-
+                # diagnostics for gripper
+                gripper_status = robot_status['end_of_arm']['stretch_gripper']
+                at_limit_msg.values.append(KeyValue(key=cg.name, value=f"{gripper_status['at_limit']}"))
+                soft_limits_msg.values.append(KeyValue(key=cg.name, value=f"{gripper_status['soft_motion_limits']}"))
+                braking_distance_msg.values.append(KeyValue(key=cg.name, value=f"{gripper_status['braking_distance']}"))
+                continue # gripper expands into finger links; do not add joint_gripper itself
 
             # add wheel joints to joint state
             if cg.name == "translate_mobile_base":
@@ -505,9 +515,8 @@ class StretchDriver(Node):
             joint_state.velocity.append(vel)
             joint_state.effort.append(eff)
 
-            joint_status_key = cg.name.replace("joint_","")
-            if joint_status_key == "gripper":
-                joint_status_key = "stretch_gripper"
+            # Derive the robot_status dict key from the URDF joint name (strip '_joint' suffix)
+            joint_status_key = cg.name.replace("_joint", "")
 
             if joint_status_key in ["wrist_roll", "wrist_pitch", "wrist_yaw", "stretch_gripper"]:
                 status = robot_status["end_of_arm"]
