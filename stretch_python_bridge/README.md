@@ -104,7 +104,7 @@ def main():
     lidar_stream = stream_lidar_points_left(stream_manager=manager)
 
     # You can also add as many subscriptions as you want explicitly:
-    manager.add_tf_stream(target_frame="link_grasp_center", base_frame="base_link")
+    manager.add_tf_stream(target_frame="grasp_center_link", base_frame="base_link")
     manager.add_image_topic("/cameras_head/left/image_raw")
     
     print("Waiting for any data to arrive...")
@@ -141,7 +141,7 @@ def main():
                 print(f"Got camera image at {camera_frame.timestamp}")
                 
             # Access the TF transform
-            tf_data = frames_dict.get("link_grasp_center")
+            tf_data = frames_dict.get("grasp_center_link")
             if tf_data is not None:
                 x = tf_data.transform_4x4[0, 3]
                 print(f"Got Grasp Center X: {x:.3f}")
@@ -241,7 +241,7 @@ import numpy as np
 from stretch_python_bridge import tf_stream
 
 def main():
-    target_frame = "link_grasp_center"
+    target_frame = "grasp_center_link"
     base_frame = "base_link"
 
     # Creates a generator that yields 4x4 matrices 5 times a second

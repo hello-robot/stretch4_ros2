@@ -137,28 +137,28 @@ def get_actuator_by_joint_names_in_command_groups(joint_name: str) -> Actuators:
     """
     Joint names defined by stretch_core command groups, return their Actuator here.
     """
-    if joint_name == "joint_left_wheel":
+    if joint_name == "left_wheel_joint":
         return Actuators.left_wheel_vel
-    if joint_name == "joint_right_wheel":
+    if joint_name == "right_wheel_joint":
         return Actuators.right_wheel_vel
-    if joint_name == "joint_back_wheel":
+    if joint_name == "back_wheel_joint":
         return Actuators.back_wheel_vel
     if joint_name == 'translate_mobile_base' or joint_name == 'position':
         return Actuators.base_translate
     if joint_name == 'rotate_mobile_base':
         return Actuators.base_rotate
 
-    if joint_name == "joint_lift":
+    if joint_name == "lift_joint":
         return Actuators.lift
-    if joint_name == "joint_arm" or joint_name == "wrist_extension":
+    if joint_name == "arm_joint" or joint_name == "wrist_extension":
         return Actuators.arm
-    if joint_name == "joint_wrist_yaw":
+    if joint_name == "wrist_yaw_joint":
         return Actuators.wrist_yaw
-    if joint_name == "joint_wrist_pitch":
+    if joint_name == "wrist_pitch_joint":
         return Actuators.wrist_pitch
-    if joint_name == "joint_wrist_roll":
+    if joint_name == "wrist_roll_joint":
         return Actuators.wrist_roll
-    if joint_name == "joint_gripper_slide" or joint_name == "joint_gripper_finger_left" or joint_name == "joint_gripper_finger_right" or joint_name == "gripper_aperture":
+    if joint_name == "gripper_slide_joint" or joint_name == "gripper_finger_left_joint" or joint_name == "gripper_finger_right_joint" or joint_name == "gripper_aperture":
         return Actuators.gripper
 
     raise NotImplementedError(f"Actuator for {joint_name} is not defined.")
