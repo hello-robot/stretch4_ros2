@@ -84,7 +84,7 @@ class StretchDriver(Node):
             depth=1,
             durability=QoSDurabilityPolicy.TRANSIENT_LOCAL
         )
-        self.odom_pub = self.create_publisher(Odometry, 'odom', 1)
+        self.odom_pub = self.create_publisher(Odometry, 'wheel_odom', 1)
         self.homed_pub = self.create_publisher(Bool, 'is_homed', latching_qos)
         self.mode_pub = self.create_publisher(String, 'mode', latching_qos)
         self.tool_pub = self.create_publisher(String, 'tool', latching_qos)
@@ -412,7 +412,7 @@ class StretchDriver(Node):
             # publish odometry via TF
             t = TransformStamped()
             t.header.stamp = current_time
-            t.header.frame_id = self.prefix + 'odom'
+            t.header.frame_id = self.prefix + 'wheel_odom'
             t.child_frame_id = self.prefix + 'base_footprint'
             t.transform.translation.x = x
             t.transform.translation.y = y
@@ -423,10 +423,10 @@ class StretchDriver(Node):
             t.transform.rotation.w = q[3]
             self.tf_broadcaster.sendTransform(t)
 
-        # publish odometry via the odom topic
+        # publish odometry via the wheel_odom topic
         odom = Odometry()
         odom.header.stamp = current_time
-        odom.header.frame_id = self.prefix + 'odom'
+        odom.header.frame_id = self.prefix + 'wheel_odom'
         odom.child_frame_id = self.prefix + 'base_footprint'
         odom.pose.pose.position.x = x
         odom.pose.pose.position.y = y

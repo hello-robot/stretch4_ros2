@@ -2,7 +2,7 @@
 # when compared with original_nav2_params.yaml
 amcl:
   ros__parameters:
-    base_frame_id: "base_footprint" ## changed
+    base_frame_id: "base_footprint"
     do_beamskip: true #false
     laser_model_type: "likelihood_field_prob" ## changed
     robot_model_type: "nav2_amcl::OmniMotionModel" ## changed
