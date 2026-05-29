@@ -109,29 +109,13 @@ class RobotFootprintPublisherNode : public rclcpp::Node
 {
 public:
   RobotFootprintPublisherNode()
-  : Node(
-      "robot_footprint_publisher",
-      rclcpp::NodeOptions()
-      .allow_undeclared_parameters(true)
-      .automatically_declare_parameters_from_overrides(true)),
+  : Node("robot_footprint_publisher"),
     tf_buffer_(get_clock()),
     tf_listener_(tf_buffer_)
   {
-    frame_id_ = declare_parameter<std::string>("frame_id", "base_footprint");
-    footprint_topic_ = declare_parameter<std::string>("footprint_topic", "/footprint");
-    publish_costmap_topics_ = declare_parameter<bool>("publish_costmap_footprint_topics", true);
-    local_costmap_footprint_topic_ = declare_parameter<std::string>(
-      "local_costmap_footprint_topic", "/local_costmap/local_costmap/footprint");
-    global_costmap_footprint_topic_ = declare_parameter<std::string>(
-      "global_costmap_footprint_topic", "/global_costmap/global_costmap/footprint");
-    joint_states_topic_ = declare_parameter<std::string>("joint_states_topic", "/joint_states");
-    joint_change_threshold_m_ = declare_parameter<double>("joint_change_threshold_m", 0.01);
-    joint_change_threshold_rad_ = declare_parameter<double>("joint_change_threshold_rad", 0.01);
-    footprint_change_epsilon_m_ = declare_parameter<double>("footprint_change_epsilon_m", 0.01);
-    self_filter_tf_timeout_sec_ = declare_parameter<double>("self_filter_tf_timeout_sec", 0.05);
-
-    loadSelfFilterConfig();
-    base_polygon_ = parseBasePolygon(declare_parameter<std::vector<double>>("base_footprint_polygon", {}));
+    declareFootprintParameters();
+    stretch_core::declareRobotSelfFilterParameters(*this);
+    loadParameters();
     if (base_polygon_.size() < 3) {
       RCLCPP_ERROR(get_logger(), "base_footprint_polygon must have at least 3 vertices (6 values).");
     }
@@ -155,10 +139,36 @@ public:
   }
 
 private:
-  void loadSelfFilterConfig()
+  void declareFootprintParameters()
   {
+    declare_parameter<std::string>("frame_id", "base_footprint");
+    declare_parameter<std::string>("footprint_topic", "/footprint");
+    declare_parameter("publish_costmap_footprint_topics", true);
+    declare_parameter<std::string>(
+      "local_costmap_footprint_topic", "/local_costmap/local_costmap/footprint");
+    declare_parameter<std::string>(
+      "global_costmap_footprint_topic", "/global_costmap/global_costmap/footprint");
+    declare_parameter<std::string>("joint_states_topic", "/joint_states");
+    declare_parameter("joint_change_threshold_m", 0.01);
+    declare_parameter("joint_change_threshold_rad", 0.01);
+    declare_parameter("footprint_change_epsilon_m", 0.01);
+    declare_parameter("base_footprint_polygon", std::vector<double>{});
+  }
+
+  void loadParameters()
+  {
+    frame_id_ = get_parameter("frame_id").as_string();
+    footprint_topic_ = get_parameter("footprint_topic").as_string();
+    publish_costmap_topics_ = get_parameter("publish_costmap_footprint_topics").as_bool();
+    local_costmap_footprint_topic_ = get_parameter("local_costmap_footprint_topic").as_string();
+    global_costmap_footprint_topic_ = get_parameter("global_costmap_footprint_topic").as_string();
+    joint_states_topic_ = get_parameter("joint_states_topic").as_string();
+    joint_change_threshold_m_ = get_parameter("joint_change_threshold_m").as_double();
+    joint_change_threshold_rad_ = get_parameter("joint_change_threshold_rad").as_double();
+    footprint_change_epsilon_m_ = get_parameter("footprint_change_epsilon_m").as_double();
+    base_polygon_ = parseBasePolygon(get_parameter("base_footprint_polygon").as_double_array());
+
     self_filter_config_ = stretch_core::loadRobotSelfFilterConfig(*this);
-    self_filter_config_.tf_timeout_sec = self_filter_tf_timeout_sec_;
     self_filter_.setConfig(self_filter_config_);
   }
 
@@ -266,7 +276,6 @@ private:
   double joint_change_threshold_m_{0.01};
   double joint_change_threshold_rad_{0.01};
   double footprint_change_epsilon_m_{0.01};
-  double self_filter_tf_timeout_sec_{0.05};
   bool publish_costmap_topics_{true};
   bool has_published_{false};
 
