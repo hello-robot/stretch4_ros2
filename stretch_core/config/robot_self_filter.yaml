@@ -7,6 +7,13 @@
     frame_id: base_footprint
     self_filter_tf_timeout_sec: 0.05
 
+    # Near-field ROI: full robot self-filter geometry only runs inside this XY cylinder.
+    # RViz: gray cylinder + white ground ring on /self_filter_markers (see config/README.md).
+    self_filter_spatial_gate_enabled: true
+    self_filter_gate_radius_m: 1.5
+    self_filter_gate_z_min_m: -0.05
+    self_filter_gate_z_max_m: 1.6
+
     # Base: infinite vertical cylinder in XY (see isInsideBaseCylinder)
     filter_base: true
     base_radius: 0.25

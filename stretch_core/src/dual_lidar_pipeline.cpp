@@ -57,10 +57,12 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr DualLidarPipeline::extractAndPreFilter(
     const Eigen::Vector4f pt_tf = tf_matrix * pt;
     const Eigen::Vector3f p3(pt_tf.x(), pt_tf.y(), pt_tf.z());
 
-    if (self_filter.isSelfFiltered(p3)) {
+    if (!region_filter_.passes(p3, stages_)) {
       continue;
     }
-    if (!region_filter_.passes(p3, stages_)) {
+    if (self_filter.isWithinSelfFilterGate(p3) &&
+      self_filter.isSelfFiltered(p3))
+    {
       continue;
     }
 

@@ -51,6 +51,10 @@ struct RobotSelfFilterConfig
   float attachment_half_extents_z{0.08f};
   float attachment_buffer{0.02f};
   double tf_timeout_sec{0.05};
+  bool self_filter_spatial_gate_enabled{true};
+  float self_filter_gate_radius_m{1.5f};
+  float self_filter_gate_z_min_m{-0.05f};
+  float self_filter_gate_z_max_m{1.6f};
 };
 
 class RobotSelfFilter
@@ -101,6 +105,7 @@ public:
   bool isInsideWristChain(const Eigen::Vector3f & point) const;
   bool isInsideAttachmentBox(const Eigen::Vector3f & point) const;
   bool isSelfFiltered(const Eigen::Vector3f & point) const;
+  bool isWithinSelfFilterGate(const Eigen::Vector3f & point) const;
 
   void appendSelfFilterMarkers(
     visualization_msgs::msg::MarkerArray & markers,
@@ -164,6 +169,7 @@ private:
   Eigen::Vector3f attachment_half_extents_{Eigen::Vector3f::Zero()};
   float attachment_buffer_{0.0f};
   float base_radius_sq_{0.0f};
+  float gate_radius_sq_{0.0f};
 };
 
 }  // namespace stretch_core

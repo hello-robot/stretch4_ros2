@@ -85,6 +85,7 @@ void RobotSelfFilter::setConfig(const RobotSelfFilterConfig & config)
     config_.attachment_half_extents_y,
     config_.attachment_half_extents_z);
   attachment_buffer_ = config_.attachment_buffer;
+  gate_radius_sq_ = config_.self_filter_gate_radius_m * config_.self_filter_gate_radius_m;
 }
 
 bool RobotSelfFilter::lookupTranslation(
@@ -325,6 +326,25 @@ bool RobotSelfFilter::isInsideBaseCylinder(const Eigen::Vector3f & point) const
   }
   const float xy_sq = point.x() * point.x() + point.y() * point.y();
   return xy_sq <= base_radius_sq_;
+}
+
+bool RobotSelfFilter::isWithinSelfFilterGate(const Eigen::Vector3f & point) const
+{
+  if (!config_.self_filter_spatial_gate_enabled) {
+    return true;
+  }
+
+  const float xy_sq = point.x() * point.x() + point.y() * point.y();
+  if (xy_sq > gate_radius_sq_) {
+    return false;
+  }
+
+  const float z = point.z();
+  if (z < config_.self_filter_gate_z_min_m || z > config_.self_filter_gate_z_max_m) {
+    return false;
+  }
+
+  return true;
 }
 
 bool RobotSelfFilter::isSelfFiltered(const Eigen::Vector3f & point) const
@@ -572,6 +592,62 @@ void RobotSelfFilter::appendSelfFilterMarkers(
   markers.markers.push_back(clear);
 
   int marker_id = 1;
+
+  if (config_.self_filter_spatial_gate_enabled) {
+    const float gate_radius = config_.self_filter_gate_radius_m;
+    const float gate_diameter = 2.0f * gate_radius;
+    const float z_min = config_.self_filter_gate_z_min_m;
+    const float z_max = config_.self_filter_gate_z_max_m;
+    const float gate_height = std::max(z_max - z_min, 0.1f);
+    const float gate_center_z = 0.5f * (z_min + z_max);
+
+    visualization_msgs::msg::Marker gate_marker;
+    gate_marker.header.frame_id = target_frame;
+    gate_marker.header.stamp = stamp;
+    gate_marker.ns = "self_filter/gate";
+    gate_marker.id = marker_id++;
+    gate_marker.type = visualization_msgs::msg::Marker::CYLINDER;
+    gate_marker.action = visualization_msgs::msg::Marker::ADD;
+    gate_marker.pose.position.x = 0.0;
+    gate_marker.pose.position.y = 0.0;
+    gate_marker.pose.position.z = gate_center_z;
+    gate_marker.pose.orientation.w = 1.0;
+    gate_marker.scale.x = gate_diameter;
+    gate_marker.scale.y = gate_diameter;
+    gate_marker.scale.z = gate_height;
+    gate_marker.color.r = 0.6f;
+    gate_marker.color.g = 0.6f;
+    gate_marker.color.b = 0.6f;
+    gate_marker.color.a = 0.15f;
+    markers.markers.push_back(gate_marker);
+
+    visualization_msgs::msg::Marker ring_marker;
+    ring_marker.header.frame_id = target_frame;
+    ring_marker.header.stamp = stamp;
+    ring_marker.ns = "self_filter/gate_ring";
+    ring_marker.id = marker_id++;
+    ring_marker.type = visualization_msgs::msg::Marker::LINE_STRIP;
+    ring_marker.action = visualization_msgs::msg::Marker::ADD;
+    ring_marker.pose.orientation.w = 1.0;
+    ring_marker.scale.x = 0.02f;
+    ring_marker.color.r = 1.0f;
+    ring_marker.color.g = 1.0f;
+    ring_marker.color.b = 1.0f;
+    ring_marker.color.a = 0.9f;
+    static constexpr int kRingSegments = 64;
+    ring_marker.points.reserve(kRingSegments);
+    for (int i = 0; i < kRingSegments; ++i) {
+      const float angle =
+        static_cast<float>(2.0 * M_PI * static_cast<double>(i) / static_cast<double>(kRingSegments));
+      geometry_msgs::msg::Point pt;
+      pt.x = gate_radius * std::cos(angle);
+      pt.y = gate_radius * std::sin(angle);
+      pt.z = 0.0;
+      ring_marker.points.push_back(pt);
+    }
+    ring_marker.points.push_back(ring_marker.points.front());
+    markers.markers.push_back(ring_marker);
+  }
 
   if (config_.filter_base || markers_only_viz) {
     const float diameter = 2.0f * config_.base_radius;

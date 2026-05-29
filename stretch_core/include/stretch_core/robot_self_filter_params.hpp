@@ -135,6 +135,10 @@ inline void declareRobotSelfFilterParameters(rclcpp::Node & node)
   node.declare_parameter("attachment_half_extents_z", 0.08);
   node.declare_parameter("attachment_buffer", 0.02);
   node.declare_parameter("self_filter_tf_timeout_sec", 0.05);
+  node.declare_parameter("self_filter_spatial_gate_enabled", true);
+  node.declare_parameter("self_filter_gate_radius_m", 1.5);
+  node.declare_parameter("self_filter_gate_z_min_m", -0.05);
+  node.declare_parameter("self_filter_gate_z_max_m", 1.6);
 }
 
 inline RobotSelfFilterConfig loadRobotSelfFilterConfig(rclcpp::Node & node)
@@ -200,6 +204,14 @@ inline RobotSelfFilterConfig loadRobotSelfFilterConfig(rclcpp::Node & node)
   config.attachment_buffer =
     static_cast<float>(node.get_parameter("attachment_buffer").as_double());
   config.tf_timeout_sec = node.get_parameter("self_filter_tf_timeout_sec").as_double();
+  config.self_filter_spatial_gate_enabled =
+    node.get_parameter("self_filter_spatial_gate_enabled").as_bool();
+  config.self_filter_gate_radius_m =
+    static_cast<float>(node.get_parameter("self_filter_gate_radius_m").as_double());
+  config.self_filter_gate_z_min_m =
+    static_cast<float>(node.get_parameter("self_filter_gate_z_min_m").as_double());
+  config.self_filter_gate_z_max_m =
+    static_cast<float>(node.get_parameter("self_filter_gate_z_max_m").as_double());
   return config;
 }
 
@@ -224,7 +236,11 @@ inline bool isRobotSelfFilterParameter(const std::string & name)
          name == "filter_attachment" || name == "attachment_frame" ||
          name == "attachment_half_extents_x" || name == "attachment_half_extents_y" ||
          name == "attachment_half_extents_z" || name == "attachment_buffer" ||
-         name == "self_filter_tf_timeout_sec";
+         name == "self_filter_tf_timeout_sec" ||
+         name == "self_filter_spatial_gate_enabled" ||
+         name == "self_filter_gate_radius_m" ||
+         name == "self_filter_gate_z_min_m" ||
+         name == "self_filter_gate_z_max_m";
 }
 
 }  // namespace stretch_core
