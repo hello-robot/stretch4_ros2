@@ -1,0 +1,8 @@
+/**:
+  ros__parameters:
+    filter_attachment: true
+    attachment_frame: quick_connect_interface_link
+    attachment_half_extents_x: 0.12
+    attachment_half_extents_y: 0.10
+    attachment_half_extents_z: 0.10
+    attachment_buffer: 0.02

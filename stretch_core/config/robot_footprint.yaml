@@ -1,0 +1,32 @@
+/**:
+  ros__parameters:
+    frame_id: base_footprint
+    footprint_topic: /footprint
+    publish_costmap_footprint_topics: true
+    local_costmap_footprint_topic: /local_costmap/local_costmap/footprint
+    global_costmap_footprint_topic: /global_costmap/global_costmap/footprint
+    joint_states_topic: /joint_states
+    # Prismatic: lift_joint, arm_l1_joint..arm_l4_joint (meters)
+    joint_change_threshold_m: 0.01
+    # Revolute: wrist_*, gripper_* (radians)
+    joint_change_threshold_rad: 0.01
+    footprint_change_epsilon_m: 0.01
+    # 16-gon approximating 0.225 m base radius (meters, base_footprint frame)
+    base_footprint_polygon: [
+      0.225, 0.0,
+      0.2079, 0.0861,
+      0.1591, 0.1591,
+      0.0861, 0.2079,
+      0.0, 0.225,
+      -0.0861, 0.2079,
+      -0.1591, 0.1591,
+      -0.2079, 0.0861,
+      -0.225, 0.0,
+      -0.2079, -0.0861,
+      -0.1591, -0.1591,
+      -0.0861, -0.2079,
+      0.0, -0.225,
+      0.0861, -0.2079,
+      0.1591, -0.1591,
+      0.2079, -0.0861,
+    ]

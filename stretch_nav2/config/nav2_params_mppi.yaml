@@ -14,6 +14,7 @@ controller_server:
 local_costmap:
   local_costmap:
     ros__parameters:
+     # In cases both the footprint and robot_radius parameters have been defined in the configuration, the footprint is used.
       robot_radius: 0.1905 # 0.22
       plugins: ["voxel_layer", "inflation_layer"]
       inflation_layer:

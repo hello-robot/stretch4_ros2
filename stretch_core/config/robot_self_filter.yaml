@@ -1,0 +1,45 @@
+# Shared robot self-filter geometry (lidar + dynamic footprint hull).
+# Used by: dual_lidar_laserscan, robot_footprint_publisher, self_filter_viz.
+# Tool-specific attachment boxes: self_filter_{sg4,pg4,tablet,nil}.yaml
+# Nav2 publisher wiring only (topics, joint thresholds): robot_footprint.yaml
+/**:
+  ros__parameters:
+    frame_id: base_footprint
+    self_filter_tf_timeout_sec: 0.05
+
+    # Base: infinite vertical cylinder in XY (see isInsideBaseCylinder)
+    filter_base: true
+    base_radius: 0.25
+
+    # Arm: capsule arm_l0 (XY) + lift (Z) -> wrist_link
+    filter_arm: true
+    arm_line_start_frame: arm_l0_link
+    arm_line_start_height_frame: lift_link
+    arm_line_height_offset_z: 0.04
+    arm_line_end_frame: wrist_link
+    arm_filter_radius: 0.07
+    arm_filter_radius_buffer: 0.04
+
+    # Arm shoulder at l0
+    filter_arm_shoulder: true
+    arm_shoulder_box_frame: arm_l0_link
+    arm_shoulder_box_origin_x: 0.0
+    arm_shoulder_box_origin_y: -0.06
+    arm_shoulder_box_origin_z: 0.03
+    arm_shoulder_half_extents_x: 0.15
+    arm_shoulder_half_extents_y: 0.15
+    arm_shoulder_half_extents_z: 0.12
+    arm_shoulder_rear_extent: 0.0 # 0.06 todo remove
+    arm_shoulder_base_overshoot: 0.00 # todo reove
+    arm_shoulder_buffer: 0.0 #0.02
+
+    # Wrist: sphere chain (yaw / pitch / roll / flange)
+    filter_wrist: true
+    wrist_chain_frames:
+      - wrist_link
+      - wrist_yaw_link
+      - wrist_pitch_link
+      - wrist_roll_link
+      - tool_attachment_site_link
+    wrist_chain_link_radius: 0.06
+    wrist_chain_buffer: 0.06
