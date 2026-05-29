@@ -33,13 +33,17 @@ struct RobotSelfFilterConfig
   float arm_shoulder_half_extents_x{0.08f};
   float arm_shoulder_half_extents_y{0.10f};
   float arm_shoulder_half_extents_z{0.10f};
-  float arm_shoulder_rear_extent{0.06f};
-  float arm_shoulder_base_overshoot{0.04f};
   float arm_shoulder_buffer{0.02f};
   bool filter_wrist{false};
   std::vector<std::string> wrist_chain_frames;
-  float wrist_chain_link_radius{0.06f};
+  std::vector<float> wrist_chain_box_origin_x;
+  std::vector<float> wrist_chain_box_origin_y;
+  std::vector<float> wrist_chain_box_origin_z;
+  std::vector<float> wrist_chain_half_extents_x;
+  std::vector<float> wrist_chain_half_extents_y;
+  std::vector<float> wrist_chain_half_extents_z;
   float wrist_chain_buffer{0.02f};
+  std::vector<float> wrist_chain_buffers;
   bool filter_attachment{false};
   std::string attachment_frame{"quick_connect_interface_link"};
   float attachment_half_extents_x{0.10f};
@@ -143,11 +147,15 @@ private:
   float arm_radius_sq_{0.0f};
   Eigen::Affine3f arm_shoulder_pose_{Eigen::Affine3f::Identity()};
   Eigen::Vector3f arm_shoulder_half_extents_{Eigen::Vector3f::Zero()};
-  float arm_shoulder_rear_extent_{0.0f};
-  float arm_shoulder_base_overshoot_{0.0f};
   float arm_shoulder_buffer_{0.0f};
-  std::vector<Eigen::Vector3f> wrist_chain_points_;
-  float wrist_chain_radius_sq_{0.0f};
+  struct WristChainBoxState
+  {
+    Eigen::Affine3f pose{Eigen::Affine3f::Identity()};
+    Eigen::Vector3f half_extents{Eigen::Vector3f::Zero()};
+    float filter_buffer{0.02f};
+  };
+  std::vector<WristChainBoxState> wrist_chain_boxes_;
+  float wrist_chain_buffer_{0.02f};
   Eigen::Affine3f attachment_pose_{Eigen::Affine3f::Identity()};
   Eigen::Vector3f attachment_half_extents_{Eigen::Vector3f::Zero()};
   float attachment_buffer_{0.0f};
