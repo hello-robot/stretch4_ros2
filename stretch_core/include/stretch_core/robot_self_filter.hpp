@@ -146,17 +146,21 @@ private:
   Eigen::Vector3f arm_end_{Eigen::Vector3f::Zero()};
   float arm_radius_sq_{0.0f};
   Eigen::Affine3f arm_shoulder_pose_{Eigen::Affine3f::Identity()};
+  Eigen::Affine3f arm_shoulder_inverse_pose_{Eigen::Affine3f::Identity()};
   Eigen::Vector3f arm_shoulder_half_extents_{Eigen::Vector3f::Zero()};
   float arm_shoulder_buffer_{0.0f};
   struct WristChainBoxState
   {
+    std::string frame_name;
     Eigen::Affine3f pose{Eigen::Affine3f::Identity()};
+    Eigen::Affine3f inverse_pose{Eigen::Affine3f::Identity()};
     Eigen::Vector3f half_extents{Eigen::Vector3f::Zero()};
     float filter_buffer{0.02f};
   };
   std::vector<WristChainBoxState> wrist_chain_boxes_;
   float wrist_chain_buffer_{0.02f};
   Eigen::Affine3f attachment_pose_{Eigen::Affine3f::Identity()};
+  Eigen::Affine3f attachment_inverse_pose_{Eigen::Affine3f::Identity()};
   Eigen::Vector3f attachment_half_extents_{Eigen::Vector3f::Zero()};
   float attachment_buffer_{0.0f};
   float base_radius_sq_{0.0f};

@@ -31,8 +31,10 @@
     arm_shoulder_half_extents_z: 0.12
     arm_shoulder_buffer: 0.0
 
-    # Wrist: per-link OBBs (boxes in each link frame; origin_z only for wrist_link index 0)
-    # Filter buffers (wrist_chain_buffer / wrist_chain_buffers) affect lidar only, not /footprint.
+    # Wrist: per-link OBBs (origin_z only for index 0 / wrist_link).
+    # Mounted tool geometry: self_filter_<tool>.yaml attachment on quick_connect (not wrist chain).
+    # Optional 6th frame tool_attachment_site_link only if nil-preset flange hits remain.
+    # Filter buffers affect lidar only, not /footprint. RViz colors: see config/README.md.
     filter_wrist: true
     wrist_chain_frames:
       - wrist_link
@@ -40,12 +42,11 @@
       - wrist_pitch_link
       - wrist_roll_link
       - gripper_camera_link
-      - tool_attachment_site_link
-    wrist_chain_box_origin_x: [0.0, 0.0, 0.0, 0.0, 0.02, 0.0]
-    wrist_chain_box_origin_y: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-    wrist_chain_box_origin_z: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-    wrist_chain_half_extents_x: [0.07, 0.04, 0.04, 0.04, 0.05, 0.03]
-    wrist_chain_half_extents_y: [0.07, 0.04, 0.05, 0.05, 0.04, 0.03]
-    wrist_chain_half_extents_z: [0.05, 0.11, 0.05, 0.05, 0.05, 0.03]
+    wrist_chain_box_origin_x: [0.0, 0.0, 0.0, 0.0, 0.02]
+    wrist_chain_box_origin_y: [0.0, 0.0, 0.0, 0.0, 0.0]
+    wrist_chain_box_origin_z: [0.0, 0.0, 0.0, 0.0, 0.0]
+    wrist_chain_half_extents_x: [0.07, 0.04, 0.04, 0.04, 0.05]
+    wrist_chain_half_extents_y: [0.07, 0.04, 0.05, 0.05, 0.04]
+    wrist_chain_half_extents_z: [0.05, 0.11, 0.05, 0.05, 0.05]
     wrist_chain_buffer: 0.02
-    wrist_chain_buffers: [0.02, 0.04, 0.02, 0.02, 0.04, 0.02]
+    wrist_chain_buffers: [0.02, 0.04, 0.02, 0.02, 0.04]

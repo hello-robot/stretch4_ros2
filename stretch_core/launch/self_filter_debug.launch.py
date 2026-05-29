@@ -40,6 +40,7 @@ def launch_setup(context, *args, **kwargs):
                 ),
                 launch_arguments={
                     'filter_type': 'region',
+                    'launch_filter_node': 'false',
                     'use_rviz': 'false',
                     'tool_preset': tool_preset,
                 }.items(),

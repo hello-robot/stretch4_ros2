@@ -86,29 +86,29 @@ inline void declareRobotSelfFilterParameters(rclcpp::Node & node)
     "wrist_chain_frames",
     std::vector<std::string>{
     "wrist_link", "wrist_yaw_link", "wrist_pitch_link", "wrist_roll_link",
-    "gripper_camera_link", "tool_attachment_site_link"});
+    "gripper_camera_link"});
   node.declare_parameter(
     "wrist_chain_box_origin_x",
-    std::vector<double>{0.0, 0.0, 0.0, 0.0, 0.02, 0.0});
+    std::vector<double>{0.0, 0.0, 0.0, 0.0, 0.02});
   node.declare_parameter(
     "wrist_chain_box_origin_y",
-    std::vector<double>{0.0, 0.0, 0.0, 0.0, 0.0, 0.0});
+    std::vector<double>{0.0, 0.0, 0.0, 0.0, 0.0});
   node.declare_parameter(
     "wrist_chain_box_origin_z",
-    std::vector<double>{0.0, 0.0, 0.0, 0.0, 0.0, 0.0});
+    std::vector<double>{0.0, 0.0, 0.0, 0.0, 0.0});
   node.declare_parameter(
     "wrist_chain_half_extents_x",
-    std::vector<double>{0.07, 0.04, 0.04, 0.04, 0.05, 0.03});
+    std::vector<double>{0.07, 0.04, 0.04, 0.04, 0.05});
   node.declare_parameter(
     "wrist_chain_half_extents_y",
-    std::vector<double>{0.07, 0.04, 0.05, 0.05, 0.04, 0.03});
+    std::vector<double>{0.07, 0.04, 0.05, 0.05, 0.04});
   node.declare_parameter(
     "wrist_chain_half_extents_z",
-    std::vector<double>{0.05, 0.11, 0.05, 0.05, 0.05, 0.03});
+    std::vector<double>{0.05, 0.11, 0.05, 0.05, 0.05});
   node.declare_parameter("wrist_chain_buffer", 0.02);
   node.declare_parameter(
     "wrist_chain_buffers",
-    std::vector<double>{0.02, 0.04, 0.02, 0.02, 0.04, 0.02});
+    std::vector<double>{0.02, 0.04, 0.02, 0.02, 0.04});
   node.declare_parameter("filter_attachment", false);
   node.declare_parameter<std::string>("attachment_frame", "quick_connect_interface_link");
   node.declare_parameter("attachment_half_extents_x", 0.10);

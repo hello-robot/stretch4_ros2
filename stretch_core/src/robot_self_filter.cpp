@@ -50,6 +50,21 @@ geometry_msgs::msg::Point eigenVecToPoint(const Eigen::Vector3f & v)
   return p;
 }
 
+void wristChainDebugColor(size_t index, float & r, float & g, float & b)
+{
+  static constexpr std::array<std::array<float, 3>, 5> kPalette = {{
+    {0.95f, 0.20f, 0.20f},  // 0 wrist_link — red
+    {0.20f, 0.90f, 0.20f},  // 1 wrist_yaw_link — green
+    {0.20f, 0.40f, 0.95f},  // 2 wrist_pitch_link — blue
+    {0.95f, 0.75f, 0.10f},  // 3 wrist_roll_link — amber
+    {0.10f, 0.85f, 0.85f},  // 4 gripper_camera_link — cyan
+  }};
+  const size_t slot = index % kPalette.size();
+  r = kPalette[slot][0];
+  g = kPalette[slot][1];
+  b = kPalette[slot][2];
+}
+
 }  // namespace
 
 void RobotSelfFilter::setConfig(const RobotSelfFilterConfig & config)
@@ -206,6 +221,7 @@ bool RobotSelfFilter::updateArmShoulderBox(
     config_.arm_shoulder_box_origin_z);
   arm_shoulder_pose_ = box_pose;
   arm_shoulder_pose_.translation() += box_pose.rotation() * local_origin;
+  arm_shoulder_inverse_pose_ = arm_shoulder_pose_.inverse();
   arm_shoulder_valid_ = true;
   return true;
 }
@@ -251,7 +267,9 @@ bool RobotSelfFilter::updateWristChain(
     link_pose.translation() += link_pose.rotation() * local_origin;
 
     WristChainBoxState box;
+    box.frame_name = frame;
     box.pose = link_pose;
+    box.inverse_pose = link_pose.inverse();
     box.half_extents = Eigen::Vector3f(
       (i < config_.wrist_chain_half_extents_x.size()) ?
       config_.wrist_chain_half_extents_x[i] : 0.06f,
@@ -293,6 +311,7 @@ bool RobotSelfFilter::updateAttachmentBox(
   }
 
   attachment_pose_ = pose;
+  attachment_inverse_pose_ = attachment_pose_.inverse();
   attachment_valid_ = true;
   return true;
 }
@@ -340,7 +359,7 @@ bool RobotSelfFilter::isInsideArmShoulderBox(const Eigen::Vector3f & point) cons
     return false;
   }
 
-  const Eigen::Vector3f local = arm_shoulder_pose_.inverse() * point;
+  const Eigen::Vector3f local = arm_shoulder_inverse_pose_ * point;
   const float limit_x = arm_shoulder_half_extents_.x() + arm_shoulder_buffer_;
   const float limit_y = arm_shoulder_half_extents_.y() + arm_shoulder_buffer_;
   const float limit_z = arm_shoulder_half_extents_.z() + arm_shoulder_buffer_;
@@ -356,7 +375,7 @@ bool RobotSelfFilter::isInsideWristChain(const Eigen::Vector3f & point) const
     return false;
   }
   for (const auto & box : wrist_chain_boxes_) {
-    const Eigen::Vector3f local = box.pose.inverse() * point;
+    const Eigen::Vector3f local = box.inverse_pose * point;
     const float limit_x = box.half_extents.x() + box.filter_buffer;
     const float limit_y = box.half_extents.y() + box.filter_buffer;
     const float limit_z = box.half_extents.z() + box.filter_buffer;
@@ -376,7 +395,7 @@ bool RobotSelfFilter::isInsideAttachmentBox(const Eigen::Vector3f & point) const
     return false;
   }
 
-  const Eigen::Vector3f local = attachment_pose_.inverse() * point;
+  const Eigen::Vector3f local = attachment_inverse_pose_ * point;
   const float limit_x = attachment_half_extents_.x() + attachment_buffer_;
   const float limit_y = attachment_half_extents_.y() + attachment_buffer_;
   const float limit_z = attachment_half_extents_.z() + attachment_buffer_;
@@ -635,8 +654,8 @@ void RobotSelfFilter::appendSelfFilterMarkers(
       visualization_msgs::msg::Marker wrist_marker;
       wrist_marker.header.frame_id = target_frame;
       wrist_marker.header.stamp = stamp;
-      wrist_marker.ns = "self_filter/wrist";
-      wrist_marker.id = marker_id++;
+      wrist_marker.ns = "self_filter/wrist/" + box.frame_name;
+      wrist_marker.id = static_cast<int>(i);
       wrist_marker.type = visualization_msgs::msg::Marker::CUBE;
       wrist_marker.action = visualization_msgs::msg::Marker::ADD;
 
@@ -646,9 +665,7 @@ void RobotSelfFilter::appendSelfFilterMarkers(
       wrist_marker.scale.x = 2.0f * (box.half_extents.x() + box.filter_buffer);
       wrist_marker.scale.y = 2.0f * (box.half_extents.y() + box.filter_buffer);
       wrist_marker.scale.z = 2.0f * (box.half_extents.z() + box.filter_buffer);
-      wrist_marker.color.r = 0.2f;
-      wrist_marker.color.g = 0.4f;
-      wrist_marker.color.b = 0.95f;
+      wristChainDebugColor(i, wrist_marker.color.r, wrist_marker.color.g, wrist_marker.color.b);
       wrist_marker.color.a = 0.35f;
       markers.markers.push_back(wrist_marker);
     }

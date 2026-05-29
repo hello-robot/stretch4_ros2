@@ -44,6 +44,7 @@ def launch_setup(context, *args, **kwargs):
     )
 
     filter_type = LaunchConfiguration('filter_type')
+    launch_filter_node = LaunchConfiguration('launch_filter_node')
 
     dual_lidar_filter_node = Node(
         package='stretch_core',
@@ -58,6 +59,7 @@ def launch_setup(context, *args, **kwargs):
                 'lidar2_frame': 'lidar_left_link',
             },
         ],
+        condition=IfCondition(launch_filter_node),
     )
 
     use_rviz = LaunchConfiguration('use_rviz')
@@ -100,6 +102,12 @@ def generate_launch_description():
         description="If true, launch Rviz2 automatically.",
     )
 
+    launch_filter_node_arg = DeclareLaunchArgument(
+        'launch_filter_node',
+        default_value='true',
+        description='If true, launch the dual_lidar_laserscan filter node.',
+    )
+
     tool_preset_arg = DeclareLaunchArgument(
         'tool_preset',
         default_value='sg4',
@@ -112,5 +120,6 @@ def generate_launch_description():
         print_filter_cmd,
         error_log,
         use_rviz_arg,
+        launch_filter_node_arg,
         OpaqueFunction(function=launch_setup),
     ])
