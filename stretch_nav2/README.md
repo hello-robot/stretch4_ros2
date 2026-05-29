@@ -39,6 +39,42 @@ In the top bar of Rviz, use `2D Nav Goal` to lay down an arrow where you'd like 
 
 ---
 
+---
+
+## Launch structure + Nav2 params overlay
+
+### Launch ordering
+
+The usual entry point is `navigation_mppi.launch.py`, which includes launch files in this order:
+
+`navigation_mppi.launch.py` → `nav_core.launch.py` → `bringup_launch.py` → `navigation_launch.py`
+
+What each file contains:
+
+- **`navigation_mppi.launch.py`**: top-level “run navigation on the robot” launcher. Starts the Stretch driver, starts the dual-lidar filter that publishes `/scan_filtered`, then launches `nav_core.launch.py` with the merged Nav2 params.
+- **`nav_core.launch.py`**: Stretch wrapper around bringup. Validates the map file, includes `bringup_launch.py`, and optionally launches RViz.
+- **`bringup_launch.py`**: Nav2 bringup orchestrator. Loads/rewrites the `params_file`, then includes localization/SLAM (from `nav2_bringup`) and navigation (from `stretch_nav2`).
+- **`navigation_launch.py`**: Nav2 navigation servers (controller/planner/BT/etc). Runs either as composed components in a container or as separate ROS nodes depending on `use_composition`.
+
+### Nav2 parameter overlay order (`MultiYaml`)
+
+`navigation_mppi.launch.py` passes a `params_file` built with `MultiYaml([...])`. YAML files are merged **in order**; later files override earlier ones at nested keys.
+
+Overlay order:
+
+- `config/original_nav2_params.yaml`: upstream Nav2 baseline
+- `config/nav2_params_core.yaml`: Stretch-specific changes (e.g., `/scan_filtered`, omni AMCL, costmap scan topics)
+- `config/nav2_params_mppi.yaml`: MPPI controller selection + core controller/costmap changes
+- `config/mppi_params.yaml`: MPPI tuning parameters
+
+### Debugging Nav2 components: `use_composition:=False`
+
+By default, Nav2 may run as composable components inside a single container node, which makes per-component logs harder to follow. For debugging, set:
+
+`use_composition:=False`
+
+This runs each Nav2 component as its own ROS node so its logs are visible directly. Note: the `use_composition` launch argument is declared in `bringup_launch.py` / `navigation_launch.py` and must be passed through from the top-level launch file to take effect.
+
 ## Navigation Launch Options:
 Different environments often require different navigation strategies. There’s no single setup that works best everywhere. Below are options you can try to adapt navigation performance to your environment.  
 
@@ -129,78 +165,6 @@ Other useful filters include keepout zones and speed limits. For tutorials on th
 https://docs.nav2.org/tutorials/docs/navigation2_with_speed_filter.html
 https://docs.nav2.org/tutorials/docs/navigation2_with_keepout_filter.html
 
-
-## Switching Controllers Between MPPI and DWB at Runtime
-Nav2 supports multiple controllers, each with different characteristics:  
-
-- **DWB (Dynamic Window Approach):** More accurate in trajectory tracking but treats forward and backward motion the same, which can appear less natural to observers.  
-- **MPPI (Model Predictive Path Integral):** Includes a critic that penalizes not facing forward, producing smoother, more natural motion. However, it tends to be slightly less accurate than DWB.
-
-You can also use a **shim_controller** with DWB as the primary controller. This allows rotation behavior while still leveraging DWB, though motion may not be optimal.
-
-**By default, MPPI is used with `yaw_goal_tolerance = 3.145`.**
----
-
-### Launching the Navigation Stack with Multiple Controllers
-To start the navigation stack with support for **runtime switching between MPPI (no heading) and DWB**, run:
-
-
-```bash
-ros2 launch stretch_nav2 navigation_multiple_controllers.launch.py map:=<path_to_map>/<map_name>.yaml
-```
-
-### Switching Controllers
-We provide a helper script, switch_Controller_config.py, which exposes a service to toggle controllers. When set to true, it switches to MPPI and adjusts yaw_goal_tolerance accordingly.
-
-
-Use the `/switch_controller` service to toggle between MPPI and DWB:
-- **Switch to MPPI (no heading):**
-
-  ```bash
-  ros2 service call /switch_controller std_srvs/srv/SetBool "{data: true}"
-  ```
-
-  Response:\
-  `Switched to MPPIController; set yaw_goal_tolerance = 3.145`
-
-- **Switch to DWB:**
-
-  ```bash
-  ros2 service call /switch_controller std_srvs/srv/SetBool "{data: false}"
-  ```
-
-  Response:\
-  `Switched to DWBController; set yaw_goal_tolerance = 0.08`
-
-### Verifying `yaw_goal_tolerance`
-
-To confirm that the `yaw_goal_tolerance` value has been updated:
-
-```bash
-ros2 param get /controller_server general_goal_checker.yaw_goal_tolerance
-```
-
-## Summary of Different Launch Files
-|                                 | Lidar Launch | params                        | Extra                    |
-|---------------------------------|--------------|-------------------------------|--------------------------|
-| navigation_dwb                  | airy_dual    | nav2_params_dwb               |                          |
-| navigation_mppi_dual_hesai      | dual_hesai   | nav2_params_mppi              |                          |
-| navigation_mppi_filter          | airy_dual    | nav2_params_mppi_filter       | Binary Filter            |
-| navigation_mppi                 | airy_dual    | nav2_params_mppi              |                          |
-| navigation_multiple_controllers | airy_dual    | nav2_params_switch_controller | switch_controller_config |
-
----
-
-<!--### Teleop using a Joystick Controller--> 
-
-## Teleop the Robot
-By default teleoperating with keyboard is enabled. You can run 
-
-```bash
-ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args -r /cmd_vel:=/stretch/cmd_vel
-```
-Make sure you are aware of the speed it is at before moving. If you already moved and wanted to reduce the speed be aware that it will apply the last command you applied so if you don't want the robot to move hit K(button that stops the robot) before reducing the speed.
-
 ---
 
 ## Things to Note and Design Decisions
@@ -220,18 +184,7 @@ Make sure you are aware of the speed it is at before moving. If you already move
   2. Verify that RViz is subscribed to the correct topic.  
   3. Run `ros2 topic info /topic_name -v` to inspect publishers, subscribers, and QoS. Ensure subscriber and publisher QoS match.
 
-- **Testing Navigation with Loop Plan:** Use `loop_plan` to continuously run the robot through multiple locations. You need to set three different locations, and the planner will direct the robot to visit them repeatedly. Instructions are available at [loop_plan](https://github.com/hello-ola/loop_plan).
-
 ---
-
-## Potential Improvements
-
-**Tuning Opportunities:**  
-- Adjust the robot footprint.  
-- Evaluate how the back of the arm affects occlusion behind the robot with the Calder variation.
-
-**Areas for Enhancement:**  
-- **Dynamic Costmap Inflation:** Adjust the costmap inflation radius based on the environment. One approach is to use the costmap to calculate the distance from each cell (or pixel) to the nearest obstacle. By combining this distance information with the robot’s footprint, we can determine an appropriate inflation radius that provides enough clearance for safe navigation. This allows the robot to navigate tightly around obstacles in narrow spaces while maintaining efficiency in open areas, effectively balancing safety and speed. *(Charlie's Idea)*
 
 
 ## License
