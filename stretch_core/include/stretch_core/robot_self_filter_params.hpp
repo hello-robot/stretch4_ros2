@@ -26,6 +26,25 @@ inline std::vector<float> loadFloatArrayParameter(
   return values;
 }
 
+inline std::vector<float> loadOptionalFloatArrayParameter(
+  rclcpp::Node & node,
+  const std::string & name)
+{
+  if (!node.has_parameter(name)) {
+    return {};
+  }
+  const auto raw = node.get_parameter(name).as_double_array();
+  if (raw.empty()) {
+    return {};
+  }
+  std::vector<float> values;
+  values.reserve(raw.size());
+  for (double v : raw) {
+    values.push_back(static_cast<float>(v));
+  }
+  return values;
+}
+
 inline void normalizeWristChainArrays(RobotSelfFilterConfig & config)
 {
   const size_t n = config.wrist_chain_frames.size();
@@ -54,7 +73,9 @@ inline void normalizeWristChainArrays(RobotSelfFilterConfig & config)
   resize(config.wrist_chain_half_extents_x, 0.06f);
   resize(config.wrist_chain_half_extents_y, 0.06f);
   resize(config.wrist_chain_half_extents_z, 0.06f);
-  resize(config.wrist_chain_buffers, config.wrist_chain_buffer);
+  if (!config.wrist_chain_buffers.empty()) {
+    resize(config.wrist_chain_buffers, config.wrist_chain_buffer);
+  }
 
   for (size_t i = 1; i < n; ++i) {
     config.wrist_chain_box_origin_z[i] = 0.0f;
@@ -106,9 +127,7 @@ inline void declareRobotSelfFilterParameters(rclcpp::Node & node)
     "wrist_chain_half_extents_z",
     std::vector<double>{0.05, 0.11, 0.05, 0.05, 0.05});
   node.declare_parameter("wrist_chain_buffer", 0.02);
-  node.declare_parameter(
-    "wrist_chain_buffers",
-    std::vector<double>{0.02, 0.04, 0.02, 0.02, 0.04});
+  node.declare_parameter("wrist_chain_buffers", std::vector<double>{});
   node.declare_parameter("filter_attachment", false);
   node.declare_parameter<std::string>("attachment_frame", "quick_connect_interface_link");
   node.declare_parameter("attachment_half_extents_x", 0.10);
@@ -168,8 +187,7 @@ inline RobotSelfFilterConfig loadRobotSelfFilterConfig(rclcpp::Node & node)
     loadFloatArrayParameter(node, "wrist_chain_half_extents_z", wrist_count, 0.06f);
   config.wrist_chain_buffer =
     static_cast<float>(node.get_parameter("wrist_chain_buffer").as_double());
-  config.wrist_chain_buffers =
-    loadFloatArrayParameter(node, "wrist_chain_buffers", wrist_count, config.wrist_chain_buffer);
+  config.wrist_chain_buffers = loadOptionalFloatArrayParameter(node, "wrist_chain_buffers");
   normalizeWristChainArrays(config);
   config.filter_attachment = node.get_parameter("filter_attachment").as_bool();
   config.attachment_frame = node.get_parameter("attachment_frame").as_string();

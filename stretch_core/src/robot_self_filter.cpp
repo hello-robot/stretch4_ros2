@@ -277,7 +277,9 @@ bool RobotSelfFilter::updateWristChain(
       config_.wrist_chain_half_extents_y[i] : 0.06f,
       (i < config_.wrist_chain_half_extents_z.size()) ?
       config_.wrist_chain_half_extents_z[i] : 0.06f);
-    if (i < config_.wrist_chain_buffers.size()) {
+    if (config_.wrist_chain_buffers.empty()) {
+      box.filter_buffer = wrist_chain_buffer_;
+    } else if (i < config_.wrist_chain_buffers.size()) {
       box.filter_buffer = config_.wrist_chain_buffers[i];
     } else {
       box.filter_buffer = wrist_chain_buffer_;

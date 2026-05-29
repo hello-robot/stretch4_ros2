@@ -26,6 +26,7 @@ def launch_setup(context, *args, **kwargs):
     launch_filter_node = LaunchConfiguration('launch_filter_node').perform(context)
     launch_viz_node = LaunchConfiguration('launch_viz_node').perform(context)
     use_rviz = LaunchConfiguration('use_rviz').perform(context)
+    pub_pc = LaunchConfiguration('pub_pc').perform(context).lower() == 'true'
 
     robot_filter_yaml = robot_self_filter_yaml(stretch_core)
     preset_yaml = tool_preset_yaml(stretch_core, tool_preset)
@@ -53,7 +54,7 @@ def launch_setup(context, *args, **kwargs):
         {
             'lidar1_frame': 'lidar_right_link',
             'lidar2_frame': 'lidar_left_link',
-            'pub_pc': True,
+            'pub_pc': pub_pc,
             'pub_self_filter_markers': True,
         },
     ]
@@ -70,7 +71,7 @@ def launch_setup(context, *args, **kwargs):
                     {
                         'lidar1_frame': 'lidar_right_link',
                         'lidar2_frame': 'lidar_left_link',
-                        'pub_pc': True,
+                        'pub_pc': pub_pc,
                         'pub_self_filter_markers': True,
                     },
                 ],
@@ -125,6 +126,11 @@ def generate_launch_description():
             'use_rviz',
             default_value='true',
             description='Launch RViz with self_filter_debug.rviz.',
+        ),
+        DeclareLaunchArgument(
+            'pub_pc',
+            default_value='false',
+            description='Publish /filtered_points debug cloud.',
         ),
         DeclareLaunchArgument(
             'tool_preset',
