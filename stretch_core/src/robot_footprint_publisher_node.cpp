@@ -120,13 +120,18 @@ public:
       RCLCPP_ERROR(get_logger(), "base_footprint_polygon must have at least 3 vertices (6 values).");
     }
 
+    rclcpp::QoS qos_profile(1);
+    qos_profile.reliable();      
+    qos_profile.durability_volatile();
+
     footprint_pub_ = create_publisher<geometry_msgs::msg::PolygonStamped>(
-      footprint_topic_, rclcpp::QoS(1).transient_local());
+        footprint_topic_, qos_profile);
+
     if (publish_costmap_topics_) {
-      local_footprint_pub_ = create_publisher<geometry_msgs::msg::PolygonStamped>(
-        local_costmap_footprint_topic_, rclcpp::QoS(1).transient_local());
-      global_footprint_pub_ = create_publisher<geometry_msgs::msg::PolygonStamped>(
-        global_costmap_footprint_topic_, rclcpp::QoS(1).transient_local());
+        local_footprint_pub_ = create_publisher<geometry_msgs::msg::PolygonStamped>(
+            local_costmap_footprint_topic_, qos_profile);
+        global_footprint_pub_ = create_publisher<geometry_msgs::msg::PolygonStamped>(
+            global_costmap_footprint_topic_, qos_profile);
     }
 
     joint_states_sub_ = create_subscription<sensor_msgs::msg::JointState>(

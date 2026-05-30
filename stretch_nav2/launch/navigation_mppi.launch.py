@@ -34,7 +34,6 @@ def generate_launch_description():
                 PathJoinSubstitution([stretch_navigation_path, 'config', 'nav2_params_core.yaml']),
                 PathJoinSubstitution([stretch_navigation_path, 'config', 'nav2_params_mppi.yaml']),
                 PathJoinSubstitution([stretch_navigation_path, 'config', 'mppi_params.yaml']),
-                PathJoinSubstitution([stretch_navigation_path, 'config', 'nav2_params_dynamic_footprint.yaml']),
             ]),
             'use_rviz': 'true',
             'use_composition': LaunchConfiguration('use_composition'),

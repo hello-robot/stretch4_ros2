@@ -10,6 +10,8 @@ controller_server:
       #   "ConstraintCritic", "CostCritic", "GoalCritic",
       #    "PathAlignCritic", "PathFollowCritic",
       #   "PathAngleCritic", "PreferForwardCritic"]
+      CostCritic:
+        consider_footprint: true
 
 local_costmap:
   local_costmap:
