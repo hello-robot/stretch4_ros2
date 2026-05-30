@@ -313,7 +313,12 @@ bool RobotSelfFilter::updateAttachmentBox(
     return false;
   }
 
+  const Eigen::Vector3f local_origin(
+    config_.attachment_box_origin_x,
+    config_.attachment_box_origin_y,
+    config_.attachment_box_origin_z);
   attachment_pose_ = pose;
+  attachment_pose_.translation() += pose.rotation() * local_origin;
   attachment_inverse_pose_ = attachment_pose_.inverse();
   attachment_valid_ = true;
   return true;

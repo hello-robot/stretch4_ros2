@@ -46,6 +46,9 @@ struct RobotSelfFilterConfig
   std::vector<float> wrist_chain_buffers;
   bool filter_attachment{false};
   std::string attachment_frame{"quick_connect_interface_link"};
+  float attachment_box_origin_x{0.0f};
+  float attachment_box_origin_y{0.0f};
+  float attachment_box_origin_z{0.0f};
   float attachment_half_extents_x{0.10f};
   float attachment_half_extents_y{0.08f};
   float attachment_half_extents_z{0.08f};

@@ -130,6 +130,9 @@ inline void declareRobotSelfFilterParameters(rclcpp::Node & node)
   node.declare_parameter("wrist_chain_buffers", std::vector<double>{});
   node.declare_parameter("filter_attachment", false);
   node.declare_parameter<std::string>("attachment_frame", "quick_connect_interface_link");
+  node.declare_parameter("attachment_box_origin_x", 0.0);
+  node.declare_parameter("attachment_box_origin_y", 0.0);
+  node.declare_parameter("attachment_box_origin_z", 0.0);
   node.declare_parameter("attachment_half_extents_x", 0.10);
   node.declare_parameter("attachment_half_extents_y", 0.08);
   node.declare_parameter("attachment_half_extents_z", 0.08);
@@ -195,6 +198,12 @@ inline RobotSelfFilterConfig loadRobotSelfFilterConfig(rclcpp::Node & node)
   normalizeWristChainArrays(config);
   config.filter_attachment = node.get_parameter("filter_attachment").as_bool();
   config.attachment_frame = node.get_parameter("attachment_frame").as_string();
+  config.attachment_box_origin_x =
+    static_cast<float>(node.get_parameter("attachment_box_origin_x").as_double());
+  config.attachment_box_origin_y =
+    static_cast<float>(node.get_parameter("attachment_box_origin_y").as_double());
+  config.attachment_box_origin_z =
+    static_cast<float>(node.get_parameter("attachment_box_origin_z").as_double());
   config.attachment_half_extents_x =
     static_cast<float>(node.get_parameter("attachment_half_extents_x").as_double());
   config.attachment_half_extents_y =
@@ -234,6 +243,8 @@ inline bool isRobotSelfFilterParameter(const std::string & name)
          name == "wrist_chain_half_extents_z" ||
          name == "wrist_chain_buffer" || name == "wrist_chain_buffers" ||
          name == "filter_attachment" || name == "attachment_frame" ||
+         name == "attachment_box_origin_x" || name == "attachment_box_origin_y" ||
+         name == "attachment_box_origin_z" ||
          name == "attachment_half_extents_x" || name == "attachment_half_extents_y" ||
          name == "attachment_half_extents_z" || name == "attachment_buffer" ||
          name == "self_filter_tf_timeout_sec" ||
