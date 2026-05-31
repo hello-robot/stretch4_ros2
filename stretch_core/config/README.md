@@ -48,9 +48,12 @@ Launch debug view:
 ros2 launch stretch_core self_filter_debug.launch.py tool_preset:=sg4 use_rviz:=true
 ```
 
-Live gate resize (updates markers on next publish):
+The parameters can be update, and example to resize the live gate:
 
 ```bash
 ros2 param set /pointcloud_to_laserscan self_filter_gate_radius_m 1.7
 ```
+Note: I noticed it only takes effect after running another command with ros2 param set, so if you dont see chnages run the same command twice.
+
+You can use ``` ros2 param list /pointcloud_to_laserscan``` to check the parameters that can be updated.
 
