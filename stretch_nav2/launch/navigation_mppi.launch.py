@@ -35,7 +35,7 @@ def generate_launch_description():
                 PathJoinSubstitution([stretch_navigation_path, 'config', 'nav2_params_mppi.yaml']),
                 PathJoinSubstitution([stretch_navigation_path, 'config', 'mppi_params.yaml']),
             ]),
-            'use_rviz': 'true',
+            'use_rviz': LaunchConfiguration('use_rviz'),
             'use_composition': LaunchConfiguration('use_composition'),
         }.items(),
     )
@@ -45,6 +45,12 @@ def generate_launch_description():
             'tool_preset',
             default_value='sg4',
             description='Mounted tool preset for lidar self-filter: sg4, pg4, tablet, or nil',
+        ),
+        DeclareLaunchArgument(
+            'use_rviz',
+            default_value='true',
+            choices=['true', 'false'],
+            description='Start RViz with navigation; requires a graphical display',
         ),
         DeclareLaunchArgument(
             'use_composition',
