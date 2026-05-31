@@ -34,6 +34,7 @@
   <depend>tf2_sensor_msgs</depend>
   <depend>tf_transformations</depend>
   <depend>trajectory_msgs</depend>
+  <depend>visualization_msgs</depend>
 
   <build_depend>eigen</build_depend>
   <build_export_depend>eigen</build_export_depend>

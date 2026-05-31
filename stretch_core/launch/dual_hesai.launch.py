@@ -1,20 +1,26 @@
 from ament_index_python.packages import get_package_share_directory
 from launch.substitutions import LaunchConfiguration, PythonExpression
-from launch.actions import DeclareLaunchArgument, LogInfo
+from launch.actions import DeclareLaunchArgument, LogInfo, OpaqueFunction
 from launch.conditions import IfCondition, UnlessCondition
 from launch import LaunchDescription
 from launch_ros.actions import Node
 
 import os
+import sys
 import yaml
 import tempfile
 from pathlib import Path
 
+sys.path.insert(0, os.path.dirname(__file__))
+from self_filter_config import dual_lidar_self_filter_parameters, validate_tool_preset
 
-def generate_launch_description():
+
+def launch_setup(context, *args, **kwargs):
     stretch_core = get_package_share_directory('stretch_core')
+    tool_preset = LaunchConfiguration('tool_preset').perform(context)
+    validate_tool_preset(tool_preset)
+    self_filter_params = dual_lidar_self_filter_parameters(stretch_core, tool_preset)
 
-    # Make a YAML config
     template_file = Path(stretch_core) / 'config' / 'hesai_dual_lidar.yaml'
     with open(template_file, "r") as f:
         cfg = yaml.safe_load(f)
@@ -37,11 +43,44 @@ def generate_launch_description():
         parameters=[{'config_path': temp_yaml_path}]
     )
 
-    # Declare launch argument
+    filter_type = LaunchConfiguration('filter_type')
+    launch_filter_node = LaunchConfiguration('launch_filter_node')
+
+    dual_lidar_filter_node = Node(
+        package='stretch_core',
+        executable='dual_lidar_laserscan',
+        name='pointcloud_to_laserscan',
+        output='screen',
+        parameters=[
+            *self_filter_params,
+            {
+                'filter_type': filter_type,
+                'lidar1_frame': 'lidar_right_link',
+                'lidar2_frame': 'lidar_left_link',
+            },
+        ],
+        condition=IfCondition(launch_filter_node),
+    )
+
+    use_rviz = LaunchConfiguration('use_rviz')
+    rviz_config_path = os.path.join(stretch_core, 'rviz', 'lidars.rviz')
+    rviz_node = Node(
+        package="rviz2",
+        executable="rviz2",
+        name="rviz2",
+        output="screen",
+        arguments=["-d", rviz_config_path],
+        condition=IfCondition(use_rviz),
+    )
+
+    return [hesai_node, dual_lidar_filter_node, rviz_node]
+
+
+def generate_launch_description():
     filter_type_arg = DeclareLaunchArgument(
         'filter_type',
         default_value='region',
-        description='Choose the filter node: "region" or "sor"'
+        description='Pipeline preset: region | sor | sor_ransac',
     )
 
     filter_type = LaunchConfiguration('filter_type')
@@ -50,36 +89,11 @@ def generate_launch_description():
         msg=['==== USING FILTER TYPE: ', filter_type]
     )
 
-    dual_lidar_params = {
-        "lidar1_frame": "lidar_right_link",
-        "lidar2_frame": "lidar_left_link",
-        # optional — only if topics differ from defaults:
-        # "lidar1_topic": "/lidar_points_right",
-        # "lidar2_topic": "/lidar_points_left",
-        # "frame_id": "base_footprint",
-    }
-
-    region_filter_node = Node(
-        condition=IfCondition(PythonExpression(["'", filter_type, "' == 'region'"])),
-        package='stretch_core',
-        executable='region_dual_lidar_laserscan',
-        name='pointcloud_to_laserscan',
-        output='screen',
-        parameters=[dual_lidar_params],
-    )
-
-    voxel_filter_node = Node(
-        condition=IfCondition(PythonExpression(["'", filter_type, "' == 'sor'"])),
-        package='stretch_core',
-        executable='voxel_dual_lidar_laserscan',
-        name='pointcloud_to_laserscan',
-        output='screen',
-        parameters=[dual_lidar_params],
-    )
-
     error_log = LogInfo(
-        condition=UnlessCondition(PythonExpression(["'", filter_type, "' == 'region' or '", filter_type, "' == 'sor'"])),
-        msg="Invalid filter_type! Must be 'region' or 'sor'. No filter node will be launched."
+        condition=UnlessCondition(PythonExpression([
+            "'", filter_type, "' in ['region', 'sor', 'sor_ransac']"
+        ])),
+        msg="Invalid filter_type! Must be region, sor, or sor_ransac.",
     )
 
     use_rviz_arg = DeclareLaunchArgument(
@@ -88,27 +102,24 @@ def generate_launch_description():
         description="If true, launch Rviz2 automatically.",
     )
 
-
-    rviz_config_path = os.path.join(
-        get_package_share_directory("stretch_core"), "rviz", "lidars.rviz"
+    launch_filter_node_arg = DeclareLaunchArgument(
+        'launch_filter_node',
+        default_value='true',
+        description='If true, launch the dual_lidar_laserscan filter node.',
     )
 
-    rviz_node = Node(
-        package="rviz2",
-        executable="rviz2",
-        name="rviz2",
-        output="screen",
-        arguments=["-d", rviz_config_path],
-        condition=IfCondition(LaunchConfiguration("use_rviz")),
+    tool_preset_arg = DeclareLaunchArgument(
+        'tool_preset',
+        default_value='sg4',
+        description='Self-filter attachment preset: sg4, pg4, tablet, or nil.',
     )
 
     return LaunchDescription([
-        hesai_node,
         filter_type_arg,
+        tool_preset_arg,
         print_filter_cmd,
-        region_filter_node,
-        voxel_filter_node,
         error_log,
         use_rviz_arg,
-        rviz_node
+        launch_filter_node_arg,
+        OpaqueFunction(function=launch_setup),
     ])

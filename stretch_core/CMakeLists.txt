@@ -19,12 +19,14 @@ find_package(tf2_sensor_msgs REQUIRED)
 find_package(message_filters REQUIRED)
 find_package(PCL REQUIRED)
 find_package(pcl_conversions REQUIRED)
+find_package(visualization_msgs REQUIRED)
 find_package(OpenMP REQUIRED)
 
 set(lidar_filter_dependencies
   rclcpp
   sensor_msgs
   geometry_msgs
+  visualization_msgs
   tf2_ros
   tf2_eigen
   tf2_sensor_msgs
@@ -35,30 +37,56 @@ include_directories(${PCL_INCLUDE_DIRS} ${EIGEN3_INCLUDE_DIRS})
 link_directories(${PCL_LIBRARY_DIRS})
 add_definitions(${PCL_DEFINITIONS})
 
-macro(add_dual_lidar_filter_executable target_name source_file)
-  add_executable(${target_name} ${source_file})
-  ament_target_dependencies(${target_name} ${lidar_filter_dependencies} pcl_conversions)
-  target_include_directories(${target_name} PUBLIC ${EIGEN3_INCLUDE_DIRS})
-  target_link_libraries(${target_name} ${PCL_LIBRARIES})
-  if(OpenMP_CXX_FOUND)
-    target_link_libraries(${target_name} OpenMP::OpenMP_CXX)
-  endif()
-endmacro()
+set(lidar_filter_lib_sources
+  src/robot_self_filter.cpp
+  src/voxel_sor_filter.cpp
+  src/floor_plane_filter.cpp
+  src/dual_lidar_pipeline.cpp
+)
 
-add_executable(region_dual_lidar_laserscan src/region_dual_lidar_laserscan.cpp)
-ament_target_dependencies(region_dual_lidar_laserscan ${lidar_filter_dependencies} pcl_conversions)
-target_include_directories(region_dual_lidar_laserscan PUBLIC ${EIGEN3_INCLUDE_DIRS})
-target_link_libraries(region_dual_lidar_laserscan ${PCL_LIBRARIES})
+add_executable(dual_lidar_laserscan
+  src/dual_lidar_laserscan_node.cpp
+  ${lidar_filter_lib_sources})
+ament_target_dependencies(dual_lidar_laserscan ${lidar_filter_dependencies} pcl_conversions)
+target_include_directories(dual_lidar_laserscan PUBLIC
+  ${EIGEN3_INCLUDE_DIRS}
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
+target_link_libraries(dual_lidar_laserscan ${PCL_LIBRARIES})
+if(OpenMP_CXX_FOUND)
+  target_link_libraries(dual_lidar_laserscan OpenMP::OpenMP_CXX)
+endif()
 
-add_dual_lidar_filter_executable(voxel_dual_lidar_laserscan src/voxel_dual_lidar_laserscan.cpp)
-add_dual_lidar_filter_executable(voxel_dual_lidar_laserscan_RANSAC src/voxel_dual_lidar_laserscan_RANSAC.cpp)
+add_executable(self_filter_viz_node
+  src/self_filter_viz_node.cpp
+  src/robot_self_filter.cpp)
+ament_target_dependencies(self_filter_viz_node ${lidar_filter_dependencies})
+target_include_directories(self_filter_viz_node PUBLIC
+  ${EIGEN3_INCLUDE_DIRS}
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
+
+add_executable(robot_footprint_publisher
+  src/robot_footprint_publisher_node.cpp
+  src/robot_self_filter.cpp)
+ament_target_dependencies(
+  robot_footprint_publisher
+  rclcpp
+  geometry_msgs
+  sensor_msgs
+  visualization_msgs
+  tf2_ros
+  tf2_eigen)
+target_include_directories(robot_footprint_publisher PUBLIC
+  ${EIGEN3_INCLUDE_DIRS}
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
 
 install(TARGETS
-  region_dual_lidar_laserscan
-  voxel_dual_lidar_laserscan
-  voxel_dual_lidar_laserscan_RANSAC
+  dual_lidar_laserscan
+  self_filter_viz_node
+  robot_footprint_publisher
   DESTINATION lib/${PROJECT_NAME}
 )
+
+install(DIRECTORY include/ DESTINATION include)
 
 install(DIRECTORY launch DESTINATION share/${PROJECT_NAME})
 install(DIRECTORY config DESTINATION share/${PROJECT_NAME})

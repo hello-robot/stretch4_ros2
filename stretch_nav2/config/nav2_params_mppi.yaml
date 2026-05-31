@@ -11,10 +11,14 @@ controller_server:
       #    "PathAlignCritic", "PathFollowCritic",
       #   "PathAngleCritic", "PreferForwardCritic"]
 
+
 local_costmap:
   local_costmap:
     ros__parameters:
+     # In cases both the footprint and robot_radius parameters have been defined in the configuration, the footprint is used.
       robot_radius: 0.1905 # 0.22
+      robot_base_frame: base_link
+      footprint: "[[0.225, 0.0], [0.2079, 0.0861], [0.1591, 0.1591], [0.0861, 0.2079], [0.0, 0.225], [-0.0861, 0.2079], [-0.1591, 0.1591], [-0.2079, 0.0861], [-0.225, 0.0], [-0.2079, -0.0861], [-0.1591, -0.1591], [-0.0861, -0.2079], [0.0, -0.225], [0.0861, -0.2079], [0.1591, -0.1591], [0.2079, -0.0861]]"
       plugins: ["voxel_layer", "inflation_layer"]
       inflation_layer:
         inflation_radius: 0.25
@@ -23,5 +27,7 @@ global_costmap:
   global_costmap:
     ros__parameters:
       robot_radius: 0.1905 # 0.22
+      robot_base_frame: base_link
+      footprint: "[[0.225, 0.0], [0.2079, 0.0861], [0.1591, 0.1591], [0.0861, 0.2079], [0.0, 0.225], [-0.0861, 0.2079], [-0.1591, 0.1591], [-0.2079, 0.0861], [-0.225, 0.0], [-0.2079, -0.0861], [-0.1591, -0.1591], [-0.0861, -0.2079], [0.0, -0.225], [0.0861, -0.2079], [0.1591, -0.1591], [0.2079, -0.0861]]"
       inflation_layer:
         inflation_radius: 0.25

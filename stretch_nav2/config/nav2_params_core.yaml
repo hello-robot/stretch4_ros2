@@ -33,10 +33,17 @@ global_costmap:
         scan:
           topic: /scan_filtered ## changed
 
+# Use a footprint-aware global planner for non-circular dynamic footprints.
 planner_server:
   ros__parameters:
+    planner_plugins: ["GridBased"]
     GridBased:
-      use_astar: true #false
+      plugin: "nav2_smac_planner::SmacPlanner2D"
+      tolerance: 0.5
+      allow_unknown: true
+      max_planning_time: 2.0
+      cost_travel_multiplier: 2.0
+      use_final_approach_orientation: false
 
 collision_monitor:
   ros__parameters:

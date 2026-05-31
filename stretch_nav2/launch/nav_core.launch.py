@@ -49,13 +49,21 @@ def generate_launch_description():
         'params_file',
         description='Full path to the ROS2 parameters file to use for Nav2',
     )
-    
+
+    use_composition_param = DeclareLaunchArgument(
+        'use_composition',
+        default_value='True',
+        choices=['True', 'False'],
+        description='Run Nav2 as composed components in a container (False = separate nodes for debugging)',
+    )
+
     navigation_bringup_launch = IncludeLaunchDescription(
         PathJoinSubstitution([stretch_navigation_path, 'launch', 'bringup_launch.py']),
         launch_arguments={
             'map': LaunchConfiguration('map'),
             'slam': LaunchConfiguration('use_slam'),
             'params_file': LaunchConfiguration('params_file'),
+            'use_composition': LaunchConfiguration('use_composition'),
         }.items())
 
     rviz_launch = IncludeLaunchDescription(
@@ -70,6 +78,7 @@ def generate_launch_description():
         use_slam,
         rviz_param,
         params_file,
+        use_composition_param,
         navigation_bringup_launch,
         rviz_launch,
         map_path_check_action,
