@@ -1,5 +1,5 @@
 #include <rclcpp/rclcpp.hpp>
-#include <geometry_msgs/msg/polygon_stamped.hpp>
+#include <geometry_msgs/msg/polygon.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
@@ -84,21 +84,17 @@ float maxVertexDisplacement(
   return max_disp;
 }
 
-geometry_msgs::msg::PolygonStamped toPolygonMsg(
-  const std::vector<Eigen::Vector2f> & hull,
-  const std::string & frame_id,
-  const rclcpp::Time & stamp)
+geometry_msgs::msg::Polygon toPolygonMsg(
+  const std::vector<Eigen::Vector2f> & hull)
 {
-  geometry_msgs::msg::PolygonStamped msg;
-  msg.header.frame_id = frame_id;
-  msg.header.stamp = stamp;
-  msg.polygon.points.reserve(hull.size());
+  geometry_msgs::msg::Polygon msg;
+  msg.points.reserve(hull.size());
   for (const auto & p : hull) {
     geometry_msgs::msg::Point32 pt;
     pt.x = p.x();
     pt.y = p.y();
     pt.z = 0.0f;
-    msg.polygon.points.push_back(pt);
+    msg.points.push_back(pt);
   }
   return msg;
 }
@@ -124,13 +120,13 @@ public:
     qos_profile.reliable();      
     qos_profile.durability_volatile();
 
-    footprint_pub_ = create_publisher<geometry_msgs::msg::PolygonStamped>(
+    footprint_pub_ = create_publisher<geometry_msgs::msg::Polygon>(
         footprint_topic_, qos_profile);
 
     if (publish_costmap_topics_) {
-        local_footprint_pub_ = create_publisher<geometry_msgs::msg::PolygonStamped>(
+        local_footprint_pub_ = create_publisher<geometry_msgs::msg::Polygon>(
             local_costmap_footprint_topic_, qos_profile);
-        global_footprint_pub_ = create_publisher<geometry_msgs::msg::PolygonStamped>(
+        global_footprint_pub_ = create_publisher<geometry_msgs::msg::Polygon>(
             global_costmap_footprint_topic_, qos_profile);
     }
 
@@ -237,8 +233,7 @@ private:
       return false;
     }
 
-    const auto stamp = now();
-    const auto msg = toPolygonMsg(hull, frame_id_, stamp);
+    const auto msg = toPolygonMsg(hull);
     footprint_pub_->publish(msg);
     if (local_footprint_pub_) {
       local_footprint_pub_->publish(msg);
@@ -293,9 +288,9 @@ private:
   tf2_ros::Buffer tf_buffer_;
   tf2_ros::TransformListener tf_listener_;
 
-  rclcpp::Publisher<geometry_msgs::msg::PolygonStamped>::SharedPtr footprint_pub_;
-  rclcpp::Publisher<geometry_msgs::msg::PolygonStamped>::SharedPtr local_footprint_pub_;
-  rclcpp::Publisher<geometry_msgs::msg::PolygonStamped>::SharedPtr global_footprint_pub_;
+  rclcpp::Publisher<geometry_msgs::msg::Polygon>::SharedPtr footprint_pub_;
+  rclcpp::Publisher<geometry_msgs::msg::Polygon>::SharedPtr local_footprint_pub_;
+  rclcpp::Publisher<geometry_msgs::msg::Polygon>::SharedPtr global_footprint_pub_;
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr joint_states_sub_;
   rclcpp::TimerBase::SharedPtr startup_timer_;
 };

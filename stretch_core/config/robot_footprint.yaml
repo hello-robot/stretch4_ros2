@@ -3,8 +3,8 @@
     frame_id: base_footprint
     footprint_topic: /footprint
     publish_costmap_footprint_topics: true
-    local_costmap_footprint_topic: /local_costmap/local_costmap/footprint
-    global_costmap_footprint_topic: /global_costmap/global_costmap/footprint
+    local_costmap_footprint_topic: /local_costmap/footprint
+    global_costmap_footprint_topic: /global_costmap/footprint
     joint_states_topic: /joint_states
     # Prismatic: lift_joint, arm_l1_joint..arm_l4_joint (meters)
     joint_change_threshold_m: 0.01
