@@ -1,6 +1,6 @@
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription
-from launch.substitutions import PathJoinSubstitution
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 from hello_helpers.multi_yaml import MultiYaml
@@ -14,14 +14,25 @@ def generate_launch_description():
         package='stretch_nav2',
         executable='binary_filter_switch.py',
         name='binary_filter_switch',
-        output='screen',)
+        output='screen',
+    )
 
     stretch_driver_launch = IncludeLaunchDescription(
         PathJoinSubstitution([stretch_core_path, 'launch', 'stretch_driver.launch.py']),
-        launch_arguments={'broadcast_odom_tf': 'True', 'mode': 'navigation'}.items())
+        launch_arguments={'broadcast_odom_tf': 'True', 'mode': 'navigation'}.items(),
+    )
 
-    rslidar_launch = IncludeLaunchDescription(
-        PathJoinSubstitution([stretch_core_path, 'launch', 'airy_dual_rslidar.launch.py']),
+    hlidar_launch = IncludeLaunchDescription(
+        PathJoinSubstitution([stretch_core_path, 'launch', 'dual_hesai.launch.py']),
+        launch_arguments={
+            'filter_type': 'sor',
+            'tool_preset': LaunchConfiguration('tool_preset'),
+        }.items(),
+    )
+
+    footprint_launch = IncludeLaunchDescription(
+        PathJoinSubstitution([stretch_core_path, 'launch', 'robot_footprint.launch.py']),
+        launch_arguments={'tool_preset': LaunchConfiguration('tool_preset')}.items(),
     )
 
     navigation_launch = IncludeLaunchDescription(
@@ -33,12 +44,32 @@ def generate_launch_description():
                 PathJoinSubstitution([stretch_navigation_path, 'config', 'nav2_params_mppi_filter.yaml']),
                 PathJoinSubstitution([stretch_navigation_path, 'config', 'mppi_params.yaml']),
             ]),
+            'use_rviz': LaunchConfiguration('use_rviz'),
+            'use_composition': LaunchConfiguration('use_composition'),
         }.items(),
     )
 
     return LaunchDescription([
+        DeclareLaunchArgument(
+            'tool_preset',
+            default_value='sg4',
+            description='Mounted tool preset for lidar self-filter: sg4, pg4, tablet, or nil',
+        ),
+        DeclareLaunchArgument(
+            'use_rviz',
+            default_value='true',
+            choices=['true', 'false'],
+            description='Start RViz with navigation; requires a graphical display',
+        ),
+        DeclareLaunchArgument(
+            'use_composition',
+            default_value='True',
+            choices=['True', 'False'],
+            description='Run Nav2 as composed components in a container (False = separate nodes for debugging)',
+        ),
         binary_filter_switch_node,
         stretch_driver_launch,
-        rslidar_launch,
+        hlidar_launch,
+        footprint_launch,
         navigation_launch,
     ])

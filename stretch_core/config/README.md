@@ -34,7 +34,7 @@ Enable with `pub_self_filter_markers: true` (on by default in `self_filter_debug
 
 | Namespace | Meaning |
 |-----------|---------|
-|`self_filter/gate` | Spatial gate volume (near-field ROI) |
+| `self_filter/gate` | Spatial gate volume (near-field ROI) |
 | `self_filter/gate_ring` | Ground circle at gate radius (easy top-down read) |
 | `self_filter/base` | Base filter geometry (`base_radius`) |
 | `self_filter/arm` | Arm capsule |
