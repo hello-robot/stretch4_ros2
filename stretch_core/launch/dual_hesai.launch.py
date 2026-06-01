@@ -1,6 +1,6 @@
 from ament_index_python.packages import get_package_share_directory
 from launch.substitutions import LaunchConfiguration, PythonExpression
-from launch.actions import DeclareLaunchArgument, LogInfo, OpaqueFunction
+from launch.actions import DeclareLaunchArgument, LogInfo, OpaqueFunction, UnsetEnvironmentVariable
 from launch.conditions import IfCondition, UnlessCondition
 from launch import LaunchDescription
 from launch_ros.actions import Node
@@ -73,7 +73,14 @@ def launch_setup(context, *args, **kwargs):
         condition=IfCondition(use_rviz),
     )
 
-    return [hesai_node, dual_lidar_filter_node, rviz_node]
+    return [
+        hesai_node,
+        dual_lidar_filter_node,
+        UnsetEnvironmentVariable('QT_QPA_PLATFORM_PLUGIN_PATH'),
+        UnsetEnvironmentVariable('QT_QPA_FONTDIR'),
+        UnsetEnvironmentVariable('QT_PLUGIN_PATH'),
+        rviz_node,
+    ]
 
 
 def generate_launch_description():

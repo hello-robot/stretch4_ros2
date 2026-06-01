@@ -3,12 +3,13 @@
 amcl:
   ros__parameters:
     base_frame_id: "base_footprint"
-    do_beamskip: true #false
+    do_beamskip: false
     laser_model_type: "likelihood_field_prob" ## changed
     robot_model_type: "nav2_amcl::OmniMotionModel" ## changed
     update_min_a: 0.15 #0.2
     update_min_d: 0.15 #0.25
     scan_topic: scan_filtered ## changed
+    transform_tolerance: 0.5
 
 bt_navigator:
   ros__parameters:

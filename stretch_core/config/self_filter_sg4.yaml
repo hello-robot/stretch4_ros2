@@ -7,7 +7,8 @@
     attachment_box_origin_x: 0.0
     attachment_box_origin_y: -0.12
     attachment_box_origin_z: 0.0
-    attachment_half_extents_x: 0.12
-    attachment_half_extents_y: 0.12
-    attachment_half_extents_z: 0.05
-    attachment_buffer: 0.05
+    attachment_half_extents_x: 0.13 #0.12
+    attachment_half_extents_y: 0.13 #0.12
+    attachment_half_extents_z: 0.06 #0.05
+    attachment_buffer: 0.04 #0.05
+

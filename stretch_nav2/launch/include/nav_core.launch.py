@@ -1,7 +1,7 @@
 import os
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction, UnsetEnvironmentVariable
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch.launch_context import LaunchContext
@@ -80,6 +80,9 @@ def generate_launch_description():
         params_file,
         use_composition_param,
         navigation_bringup_launch,
+        UnsetEnvironmentVariable('QT_QPA_PLATFORM_PLUGIN_PATH'),
+        UnsetEnvironmentVariable('QT_QPA_FONTDIR'),
+        UnsetEnvironmentVariable('QT_PLUGIN_PATH'),
         rviz_launch,
         map_path_check_action,
     ])
