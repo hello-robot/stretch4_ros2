@@ -1,7 +1,7 @@
 import os
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction, UnsetEnvironmentVariable
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch.launch_context import LaunchContext
@@ -45,11 +45,26 @@ def generate_launch_description():
 
     rviz_param = DeclareLaunchArgument('use_rviz', default_value='true', choices=['true', 'false'])
 
+    params_file = DeclareLaunchArgument(
+        'params_file',
+        description='Full path to the ROS2 parameters file to use for Nav2',
+    )
+
+    use_composition_param = DeclareLaunchArgument(
+        'use_composition',
+        default_value='True',
+        choices=['True', 'False'],
+        description='Run Nav2 as composed components in a container (False = separate nodes for debugging)',
+    )
+
     navigation_bringup_launch = IncludeLaunchDescription(
-        PathJoinSubstitution([stretch_navigation_path, 'launch', 'bringup_launch.py']),
-        launch_arguments={'map': LaunchConfiguration('map'),
-                          'slam': LaunchConfiguration('use_slam'),
-                          'use_rviz': LaunchConfiguration('use_rviz')}.items())
+        PathJoinSubstitution([stretch_navigation_path, 'launch', 'include', 'bringup_launch.py']),
+        launch_arguments={
+            'map': LaunchConfiguration('map'),
+            'slam': LaunchConfiguration('use_slam'),
+            'params_file': LaunchConfiguration('params_file'),
+            'use_composition': LaunchConfiguration('use_composition'),
+        }.items())
 
     rviz_launch = IncludeLaunchDescription(
         PathJoinSubstitution([navigation_bringup_path, 'launch', 'rviz_launch.py']),
@@ -62,7 +77,12 @@ def generate_launch_description():
         map_path_param,
         use_slam,
         rviz_param,
+        params_file,
+        use_composition_param,
         navigation_bringup_launch,
+        UnsetEnvironmentVariable('QT_QPA_PLATFORM_PLUGIN_PATH'),
+        UnsetEnvironmentVariable('QT_QPA_FONTDIR'),
+        UnsetEnvironmentVariable('QT_PLUGIN_PATH'),
         rviz_launch,
         map_path_check_action,
     ])

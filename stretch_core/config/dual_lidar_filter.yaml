@@ -1,0 +1,52 @@
+/**:
+  ros__parameters:
+    # Pipeline preset: region | sor | sor_ransac (see README for active stages)
+    filter_type: region
+    # TF frame for filtered cloud, scan projection, and self-filter markers
+    frame_id: base_footprint
+
+    # Region filter: minimum height (ignored when filter_type is sor_ransac; floor uses plane fit instead)
+    z_min: 0.135
+    # Region filter: maximum height above ground
+    z_max: 1.5
+    # Region filter: maximum horizontal range for LaserScan bins (m)
+    range_max: 30.0
+
+    # Post-projection speckle filter: remove weak isolated LaserScan bins after projection
+    speckle_filter_enabled: true
+    # Reject bins with fewer than this many projected points unless angular neighbors support them
+    speckle_min_points: 2
+    # Check +/- this many LaserScan bins for support
+    speckle_neighbor_window: 3
+    # Keep a weak bin when at least this many neighbors have a similar range
+    speckle_min_neighbors: 2
+    # Maximum range difference (m) for a neighbor to count as support
+    speckle_range_tolerance: 0.15
+
+    # Self-robot filter: cylinder radius around base_footprint to remove base returns (m)
+    base_radius: 0.25
+    # Self-robot filter: enable base cylinder removal (always recommended)
+    filter_base: true
+    # Self-robot filter: remove points inside arm capsule (arm_l0_link to wrist_link)
+    filter_arm: false
+    # Self-robot filter: remove points inside wrist/tool oriented box
+    filter_wrist: false
+    # Publish RViz markers for base/arm/wrist filter volumes on /self_filter_markers
+    pub_self_filter_markers: false
+
+    # VoxelSor: distance form robot a square half-width around robot for near-field denoising (m); far points pass through
+    dist_rob: 2.5
+    # VoxelSor: voxel grid leaf size (m)
+    leaf_size: 0.05
+    # VoxelSor: statistical outlier removal neighbor count
+    sor_mean_k: 50
+    # VoxelSor: statistical outlier removal std-dev multiplier
+    sor_stddev: 0.3
+
+    # FloorRansac: max distance from fitted plane to count as floor (m)
+    plane_fitting_threshold: 0.1
+    # FloorRansac: max tilt from vertical (Z) for plane model (degrees)
+    angle: 10.0
+    # FloorRansac: Z band used only to sample points for plane fitting (not region z_min)
+    floor_detect_z_min: -0.4
+    floor_detect_z_max: 0.1

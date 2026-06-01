@@ -413,7 +413,7 @@ class StretchDriver(Node):
             t = TransformStamped()
             t.header.stamp = current_time
             t.header.frame_id = self.prefix + 'wheel_odom'
-            t.child_frame_id = self.prefix + 'base_link'
+            t.child_frame_id = self.prefix + 'base_footprint'
             t.transform.translation.x = x
             t.transform.translation.y = y
             t.transform.translation.z = 0.0
@@ -423,11 +423,11 @@ class StretchDriver(Node):
             t.transform.rotation.w = q[3]
             self.tf_broadcaster.sendTransform(t)
 
-        # publish odometry via the odom topic
+        # publish odometry via the wheel_odom topic
         odom = Odometry()
         odom.header.stamp = current_time
         odom.header.frame_id = self.prefix + 'wheel_odom'
-        odom.child_frame_id = self.prefix + 'base_link'
+        odom.child_frame_id = self.prefix + 'base_footprint'
         odom.pose.pose.position.x = x
         odom.pose.pose.position.y = y
         odom.pose.pose.orientation.x = q[0]
@@ -478,9 +478,14 @@ class StretchDriver(Node):
             if cg.name == "arm_joint":
                 for link in ['arm_l4_joint', 'arm_l3_joint', 'arm_l2_joint', 'arm_l1_joint']:
                     joint_state.name.append(link)
-                    joint_state.position.append(pos/4.0)
-                    joint_state.velocity.append(vel/4.0)
+                    joint_state.position.append(pos/5.0)
+                    joint_state.velocity.append(vel/5.0)
                     joint_state.effort.append(eff)
+                # diagnostics for arm
+                at_limit_msg.values.append(KeyValue(key=cg.name, value=f"{robot_status['arm']['at_limit']}"))
+                soft_limits_msg.values.append(KeyValue(key=cg.name, value=f"{robot_status['arm']['soft_motion_limits']}"))
+                braking_distance_msg.values.append(KeyValue(key=cg.name, value=f"{robot_status['arm']['braking_distance']}"))
+                continue # arm expands into individual links; do not add joint_arm itself
 
             # add gripper joints to joint state
             if cg.name == "gripper_joint":
@@ -489,7 +494,12 @@ class StretchDriver(Node):
                     joint_state.position.append(pos)
                     joint_state.velocity.append(vel)
                     joint_state.effort.append(eff)
-
+                # diagnostics for gripper
+                gripper_status = robot_status['end_of_arm']['stretch_gripper']
+                at_limit_msg.values.append(KeyValue(key=cg.name, value=f"{gripper_status['at_limit']}"))
+                soft_limits_msg.values.append(KeyValue(key=cg.name, value=f"{gripper_status['soft_motion_limits']}"))
+                braking_distance_msg.values.append(KeyValue(key=cg.name, value=f"{gripper_status['braking_distance']}"))
+                continue # gripper expands into finger links; do not add joint_gripper itself
 
             # add wheel joints to joint state
             if cg.name == "translate_mobile_base":

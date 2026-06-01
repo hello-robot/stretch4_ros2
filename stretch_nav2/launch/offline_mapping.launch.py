@@ -10,14 +10,19 @@ def generate_launch_description():
     return LaunchDescription([
         IncludeLaunchDescription(
             PathJoinSubstitution([stretch_core_path, 'launch', 'stretch_driver.launch.py']),
-            launch_arguments={'broadcast_odom_tf': 'True', 'mode': 'navigation'}.items(),
+            launch_arguments={'broadcast_odom_tf': 'True', 'mode': 'navigation'}.items()
         ),
+        
         IncludeLaunchDescription(
-            PathJoinSubstitution([stretch_core_path, 'launch', 'airy_dual_rslidar.launch.py']),
+            PathJoinSubstitution([stretch_core_path, 'launch', 'dual_hesai.launch.py']),
+            launch_arguments={'filter_type': 'region'}.items(),
         ),
+
         IncludeLaunchDescription(
             PathJoinSubstitution(
-                [FindPackageShare('stretch_nav2'), 'launch', 'slam_toolbox.launch.py']
+                [FindPackageShare('stretch_nav2'), 'launch', 'include', 'slam_toolbox.launch.py']
             ),
+            launch_arguments={'use_rviz': 'true'}.items(),
         ),
     ])
+

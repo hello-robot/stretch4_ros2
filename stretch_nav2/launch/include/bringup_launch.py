@@ -22,6 +22,7 @@ from launch.actions import (
     GroupAction,
     IncludeLaunchDescription,
     SetEnvironmentVariable,
+    LogInfo,
 )
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
@@ -37,7 +38,7 @@ def generate_launch_description():
     bringup_dir = get_package_share_directory('nav2_bringup')
     launch_dir = os.path.join(bringup_dir, 'launch')
     stretch_navigation_dir = get_package_share_directory('stretch_nav2')
-    stretch_navigation_launch_dir = os.path.join(stretch_navigation_dir, 'launch')
+    stretch_navigation_launch_dir = os.path.join(stretch_navigation_dir, 'launch', 'include')
 
     # Create the launch configuration variables
     namespace = LaunchConfiguration('namespace')
@@ -141,6 +142,10 @@ def generate_launch_description():
         'log_level', default_value='info', description='log level'
     )
 
+    print_params_cmd = LogInfo(
+        msg=['==== USING PARAMS FILE AT PATH: ', params_file, ' ====']
+    )
+
     # Specify the actions
     bringup_cmd_group = GroupAction(
         [
@@ -214,6 +219,7 @@ def generate_launch_description():
     ld.add_action(declare_map_yaml_cmd)
     ld.add_action(declare_use_sim_time_cmd)
     ld.add_action(declare_params_file_cmd)
+    ld.add_action(print_params_cmd)
     ld.add_action(declare_autostart_cmd)
     ld.add_action(declare_use_composition_cmd)
     ld.add_action(declare_use_respawn_cmd)

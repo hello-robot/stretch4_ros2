@@ -139,7 +139,7 @@ def generate_launch_description():
         actions=[
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(
-                    [stretch_navigation_path, "/launch/bringup_launch.py"]
+                    [stretch_navigation_path, "/launch/include/bringup_launch.py"]
                 ),
                 launch_arguments={
                     "use_sim_time": "true",

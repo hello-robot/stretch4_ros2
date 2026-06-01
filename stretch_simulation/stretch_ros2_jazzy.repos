@@ -11,18 +11,6 @@ repositories:
     type: git
     url: https://github.com/hello-robot/stretch4_body.git
     version: develop
-  airy_lidar_filter_cpp:
-    type: git
-    url: https://github.com/hello-robot/airy_lidar_filter_cpp
-    version: master
-  nav2_costmap_2d:
-    type: git
-    url: https://github.com/olaghattas/nav2_costmap_2d
-    version: jazzy_debian
-  pddl_executor:
-    type: git
-    url: https://github.com/olaghattas/PDDL-Executor/
-    version: clean-bugfix
   ros2_numpy:
     type: git
     url: https://github.com/Box-Robotics/ros2_numpy

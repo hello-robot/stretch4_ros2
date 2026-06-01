@@ -7,6 +7,11 @@ Panels:
         - /Global Options1
         - /Status1
         - /RobotModel1
+        - /MarkerArray1
+        - /PointCloud23
+        - /TF1/Frames1
+        - /Polygon1
+        - /Polygon1/Topic1
       Splitter Ratio: 0.5
     Tree Height: 1067
   - Class: rviz_common/Selection
@@ -346,6 +351,278 @@ Visualization Manager:
       Use Fixed Frame: true
       Use rainbow: true
       Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: MarkerArray
+      Namespaces:
+        self_filter/arm: true
+        self_filter/arm_shoulder: true
+        self_filter/base: true
+        self_filter/gate: true
+        self_filter/gate_ring: true
+        self_filter/wrist/gripper_camera_link: true
+        self_filter/wrist/wrist_link: true
+        self_filter/wrist/wrist_pitch_link: true
+        self_filter/wrist/wrist_roll_link: true
+        self_filter/wrist/wrist_yaw_link: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /self_filter_markers
+      Value: true
+    - Alpha: 1
+      Autocompute Intensity Bounds: true
+      Autocompute Value Bounds:
+        Max Value: 10
+        Min Value: -10
+        Value: true
+      Axis: Z
+      Channel Name: intensity
+      Class: rviz_default_plugins/LaserScan
+      Color: 255; 255; 255
+      Color Transformer: Intensity
+      Decay Time: 0
+      Enabled: true
+      Invert Rainbow: false
+      Max Color: 255; 255; 255
+      Max Intensity: 4096
+      Min Color: 0; 0; 0
+      Min Intensity: 0
+      Name: LaserScan
+      Position Transformer: XYZ
+      Selectable: true
+      Size (Pixels): 3
+      Size (m): 0.009999999776482582
+      Style: Flat Squares
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /scan_filtered
+      Use Fixed Frame: true
+      Use rainbow: true
+      Value: true
+    - Alpha: 1
+      Autocompute Intensity Bounds: true
+      Autocompute Value Bounds:
+        Max Value: 10
+        Min Value: -10
+        Value: true
+      Axis: Z
+      Channel Name: intensity
+      Class: rviz_default_plugins/PointCloud2
+      Color: 255; 255; 255
+      Color Transformer: Intensity
+      Decay Time: 0
+      Enabled: false
+      Invert Rainbow: false
+      Max Color: 255; 255; 255
+      Max Intensity: 4096
+      Min Color: 0; 0; 0
+      Min Intensity: 0
+      Name: PointCloud2
+      Position Transformer: XYZ
+      Selectable: true
+      Size (Pixels): 3
+      Size (m): 0.009999999776482582
+      Style: Flat Squares
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /filtered_points
+      Use Fixed Frame: true
+      Use rainbow: true
+      Value: false
+    - Class: rviz_default_plugins/TF
+      Enabled: true
+      Filter (blacklist): ""
+      Filter (whitelist): ""
+      Frame Timeout: 15
+      Frames:
+        All Enabled: false
+        arm_l0_link:
+          Value: false
+        arm_l1_link:
+          Value: false
+        arm_l2_link:
+          Value: false
+        arm_l3_link:
+          Value: false
+        arm_l4_link:
+          Value: false
+        base_footprint:
+          Value: false
+        base_link:
+          Value: false
+        camera_center_link:
+          Value: false
+        camera_center_optical_link:
+          Value: false
+        camera_left_link:
+          Value: false
+        camera_left_optical_link:
+          Value: false
+        camera_right_link:
+          Value: false
+        camera_right_optical_link:
+          Value: false
+        gripper_camera_link:
+          Value: false
+        gripper_left_camera_color_optical_frame:
+          Value: false
+        gripper_right_camera_color_optical_frame:
+          Value: false
+        gripper_stereo_camera_color_optical_frame:
+          Value: false
+        head_link:
+          Value: false
+        laser:
+          Value: false
+        lidar_left_link:
+          Value: false
+        lidar_right_link:
+          Value: false
+        lift_link:
+          Value: false
+        line_sensor_0_link:
+          Value: false
+        line_sensor_0_optical_link:
+          Value: false
+        line_sensor_1_link:
+          Value: false
+        line_sensor_1_optical_link:
+          Value: false
+        line_sensor_2_link:
+          Value: false
+        line_sensor_2_optical_link:
+          Value: false
+        line_sensor_3_link:
+          Value: false
+        line_sensor_3_optical_link:
+          Value: false
+        line_sensor_4_link:
+          Value: false
+        line_sensor_4_optical_link:
+          Value: false
+        line_sensor_5_link:
+          Value: false
+        line_sensor_5_optical_link:
+          Value: false
+        mast_link:
+          Value: false
+        tool_attachment_site_link:
+          Value: false
+        wheel_0_link:
+          Value: false
+        wheel_1_link:
+          Value: false
+        wheel_2_link:
+          Value: false
+        wrist_aruco_link:
+          Value: false
+        wrist_link:
+          Value: false
+        wrist_pitch_link:
+          Value: true
+        wrist_reflector_link:
+          Value: false
+        wrist_roll_link:
+          Value: false
+        wrist_yaw_link:
+          Value: true
+      Marker Scale: 1
+      Name: TF
+      Show Arrows: true
+      Show Axes: true
+      Show Names: false
+      Tree:
+        base_footprint:
+          base_link:
+            head_link:
+              camera_center_link:
+                camera_center_optical_link:
+                  {}
+              camera_left_link:
+                camera_left_optical_link:
+                  {}
+              camera_right_link:
+                camera_right_optical_link:
+                  {}
+              lidar_left_link:
+                {}
+              lidar_right_link:
+                {}
+            laser:
+              {}
+            line_sensor_0_link:
+              line_sensor_0_optical_link:
+                {}
+            line_sensor_1_link:
+              line_sensor_1_optical_link:
+                {}
+            line_sensor_2_link:
+              line_sensor_2_optical_link:
+                {}
+            line_sensor_3_link:
+              line_sensor_3_optical_link:
+                {}
+            line_sensor_4_link:
+              line_sensor_4_optical_link:
+                {}
+            line_sensor_5_link:
+              line_sensor_5_optical_link:
+                {}
+            mast_link:
+              lift_link:
+                arm_l0_link:
+                  arm_l1_link:
+                    arm_l2_link:
+                      arm_l3_link:
+                        arm_l4_link:
+                          wrist_link:
+                            wrist_aruco_link:
+                              {}
+                            wrist_reflector_link:
+                              {}
+                            wrist_yaw_link:
+                              wrist_pitch_link:
+                                wrist_roll_link:
+                                  gripper_camera_link:
+                                    gripper_left_camera_color_optical_frame:
+                                      {}
+                                    gripper_right_camera_color_optical_frame:
+                                      {}
+                                    gripper_stereo_camera_color_optical_frame:
+                                      {}
+                                  tool_attachment_site_link:
+                                    {}
+            wheel_0_link:
+              {}
+            wheel_1_link:
+              {}
+            wheel_2_link:
+              {}
+      Update Interval: 0
+      Value: true
+    - Alpha: 1
+      Class: rviz_default_plugins/Polygon
+      Color: 25; 255; 0
+      Enabled: true
+      Name: Polygon
+      Topic:
+        Depth: 5
+        Durability Policy: Transient Local
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /footprint
+      Value: true
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
@@ -392,25 +669,25 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 12.974957466125488
+      Distance: 4.34636116027832
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
         Swap Stereo Eyes: false
         Value: false
       Focal Point:
-        X: 0.5098200440406799
-        Y: -0.04205258935689926
-        Z: 0.9871832132339478
-      Focal Shape Fixed Size: true
+        X: 0.09995681047439575
+        Y: 0.09076042473316193
+        Z: 0.2979707419872284
+      Focal Shape Fixed Size: false
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.6047974824905396
+      Pitch: 0.6547965407371521
       Target Frame: <Fixed Frame>
       Value: Orbit (rviz)
-      Yaw: 3.3322014808654785
+      Yaw: 5.3135809898376465
     Saved: ~
 Window Geometry:
   Displays:

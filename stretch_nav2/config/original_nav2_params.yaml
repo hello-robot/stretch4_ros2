@@ -23,7 +23,7 @@ amcl:
     max_beams: 60
     max_particles: 2000
     min_particles: 500
-    odom_frame_id: "odom"
+    odom_frame_id: "wheel_odom"
     pf_err: 0.05
     pf_z: 0.99
     recovery_alpha_fast: 0.0
@@ -46,7 +46,7 @@ bt_navigator:
   ros__parameters:
     global_frame: map
     robot_base_frame: base_link
-    odom_topic: /odom
+    odom_topic: /wheel_odom
     bt_loop_duration: 10
     default_server_timeout: 20
     wait_for_service_timeout: 1000
@@ -104,7 +104,7 @@ local_costmap:
     ros__parameters:
       update_frequency: 5.0
       publish_frequency: 2.0
-      global_frame: odom
+      global_frame: wheel_odom
       robot_base_frame: base_link
       rolling_window: true
       width: 3
@@ -227,7 +227,7 @@ behavior_server:
       plugin: "nav2_behaviors::Wait"
     assisted_teleop:
       plugin: "nav2_behaviors::AssistedTeleop"
-    local_frame: odom
+    local_frame: wheel_odom
     global_frame: map
     robot_base_frame: base_link
     transform_tolerance: 0.1
@@ -256,7 +256,7 @@ velocity_smoother:
     min_velocity: [-0.5, 0.0, -2.0]
     max_accel: [2.5, 0.0, 3.2]
     max_decel: [-2.5, 0.0, -3.2]
-    odom_topic: "odom"
+    odom_topic: "wheel_odom"
     odom_duration: 0.1
     deadband_velocity: [0.0, 0.0, 0.0]
     velocity_timeout: 1.0
@@ -264,7 +264,7 @@ velocity_smoother:
 collision_monitor:
   ros__parameters:
     base_frame_id: "base_footprint"
-    odom_frame_id: "odom"
+    odom_frame_id: "wheel_odom"
     cmd_vel_in_topic: "cmd_vel_smoothed"
     cmd_vel_out_topic: "cmd_vel"
     state_topic: "collision_monitor_state"
@@ -295,7 +295,7 @@ collision_monitor:
 loopback_simulator:
   ros__parameters:
     base_frame_id: "base_footprint"
-    odom_frame_id: "odom"
+    odom_frame_id: "wheel_odom"
     map_frame_id: "map"
     scan_frame_id: "base_scan"  # tb4_loopback_simulator.launch.py remaps to 'rplidar_link'
     update_duration: 0.02
