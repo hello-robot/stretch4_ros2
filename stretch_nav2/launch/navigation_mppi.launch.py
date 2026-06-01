@@ -27,7 +27,7 @@ def generate_launch_description():
     )
 
     navigation_launch = IncludeLaunchDescription(
-        PathJoinSubstitution([stretch_navigation_path, 'launch', 'nav_core.launch.py']),
+        PathJoinSubstitution([stretch_navigation_path, 'launch', 'include', 'nav_core.launch.py']),
         launch_arguments={
             'params_file': MultiYaml([
                 PathJoinSubstitution([stretch_navigation_path, 'config', 'original_nav2_params.yaml']),

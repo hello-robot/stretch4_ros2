@@ -58,7 +58,7 @@ def generate_launch_description():
     )
 
     navigation_bringup_launch = IncludeLaunchDescription(
-        PathJoinSubstitution([stretch_navigation_path, 'launch', 'bringup_launch.py']),
+        PathJoinSubstitution([stretch_navigation_path, 'launch', 'include', 'bringup_launch.py']),
         launch_arguments={
             'map': LaunchConfiguration('map'),
             'slam': LaunchConfiguration('use_slam'),

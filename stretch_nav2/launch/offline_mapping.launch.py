@@ -20,7 +20,7 @@ def generate_launch_description():
 
         IncludeLaunchDescription(
             PathJoinSubstitution(
-                [FindPackageShare('stretch_nav2'), 'launch', 'slam_toolbox.launch.py']
+                [FindPackageShare('stretch_nav2'), 'launch', 'include', 'slam_toolbox.launch.py']
             ),
             launch_arguments={'use_rviz': 'true'}.items(),
         ),

@@ -43,18 +43,32 @@ In the top bar of Rviz, use `2D Nav Goal` to lay down an arrow where you'd like 
 
 ## Launch structure + Nav2 params overlay
 
+### Which launch files to use
+
+Top-level launch files live directly under `launch/` — these are the ones you run:
+
+| Launch file | Purpose |
+|-------------|---------|
+| `offline_mapping.launch.py` | Build a map with SLAM |
+| `navigation_mppi.launch.py` | Navigate on a saved map (main entry point) |
+| `navigation_mppi_filter.launch.py` | Navigate with binary-filter adaptive params |
+| `binary_filter_launch.py` | Start the binary costmap filter servers |
+| `global_plan_demo.launch.py` | Standalone global planner demo |
+
+Supporting launch files that are included by the above live under `launch/include/` (`nav_core`, `bringup`, `navigation_launch`, `slam_toolbox`). You normally do not run these directly.
+
 ### Launch ordering
 
 The usual entry point is `navigation_mppi.launch.py`, which includes launch files in this order:
 
-`navigation_mppi.launch.py` → `nav_core.launch.py` → `bringup_launch.py` → `navigation_launch.py`
+`navigation_mppi.launch.py` → `include/nav_core.launch.py` → `include/bringup_launch.py` → `include/navigation_launch.py`
 
 What each file contains:
 
-- **`navigation_mppi.launch.py`**: top-level “run navigation on the robot” launcher. Starts the Stretch driver, starts the dual-lidar filter that publishes `/scan_filtered`, then launches `nav_core.launch.py` with the merged Nav2 params.
-- **`nav_core.launch.py`**: Stretch wrapper around bringup. Validates the map file, includes `bringup_launch.py`, and optionally launches RViz.
-- **`bringup_launch.py`**: Nav2 bringup orchestrator. Loads/rewrites the `params_file`, then includes localization/SLAM (from `nav2_bringup`) and navigation (from `stretch_nav2`).
-- **`navigation_launch.py`**: Nav2 navigation servers (controller/planner/BT/etc). Runs either as composed components in a container or as separate ROS nodes depending on `use_composition`.
+- **`navigation_mppi.launch.py`**: top-level “run navigation on the robot” launcher. Starts the Stretch driver, starts the dual-lidar filter that publishes `/scan_filtered`, then launches `include/nav_core.launch.py` with the merged Nav2 params.
+- **`include/nav_core.launch.py`**: Stretch wrapper around bringup. Validates the map file, includes `include/bringup_launch.py`, and optionally launches RViz.
+- **`include/bringup_launch.py`**: Nav2 bringup orchestrator. Loads/rewrites the `params_file`, then includes localization/SLAM (from `nav2_bringup`) and navigation (from `stretch_nav2`).
+- **`include/navigation_launch.py`**: Nav2 navigation servers (controller/planner/BT/etc). Runs either as composed components in a container or as separate ROS nodes depending on `use_composition`.
 
 ### Nav2 parameter overlay order (`MultiYaml`)
 
@@ -73,7 +87,7 @@ By default, Nav2 may run as composable components inside a single container node
 
 `use_composition:=False`
 
-This runs each Nav2 component as its own ROS node so its logs are visible directly. Note: the `use_composition` launch argument is declared in `bringup_launch.py` / `navigation_launch.py` and must be passed through from the top-level launch file to take effect.
+This runs each Nav2 component as its own ROS node so its logs are visible directly. Note: the `use_composition` launch argument is declared in `include/bringup_launch.py` / `include/navigation_launch.py` and must be passed through from the top-level launch file to take effect.
 
 ## Navigation Launch Options:
 Different environments often require different navigation strategies. There’s no single setup that works best everywhere. Below are options you can try to adapt navigation performance to your environment.  
