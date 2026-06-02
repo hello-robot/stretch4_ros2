@@ -23,7 +23,8 @@ lidar:
       ros_send_point_cloud_topic: /lidar_points_left     
       ros_send_imu_topic: /lidar_imu_left                
       send_packet_ros: false                             
-      send_point_cloud_ros: true                         
+      send_point_cloud_ros: true 
+      send_imu_ros: true                           
 
   - driver:
       use_gpu: false
@@ -48,3 +49,4 @@ lidar:
       ros_send_imu_topic: /lidar_imu_right                
       send_packet_ros: false                              
       send_point_cloud_ros: true
+      send_imu_ros: true   
