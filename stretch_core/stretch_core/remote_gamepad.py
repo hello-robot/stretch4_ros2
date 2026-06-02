@@ -7,7 +7,7 @@ from pprint import pprint
 from stretch4_body.core.gamepad_controller import GamePadController
 from stretch4_body.core.hello_utils import ThreadServiceExit
 
-PRINT_DEBUG = True
+PRINT_DEBUG = False
 
 class StretchRemoteGamepad(Node):
     """
