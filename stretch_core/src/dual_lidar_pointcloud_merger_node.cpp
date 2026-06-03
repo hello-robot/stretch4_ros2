@@ -1,7 +1,6 @@
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/header.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
-#include <sensor_msgs/point_cloud2_iterator.hpp>
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
 #include <tf2_eigen/tf2_eigen.hpp>
@@ -11,9 +10,13 @@
 #include <message_filters/synchronizer.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <cstring>
 #include <memory>
 #include <string>
+#include <vector>
+
+#include <omp.h>
 
 namespace
 {
@@ -62,7 +65,69 @@ bool fieldsMatch(
   return true;
 }
 
-sensor_msgs::msg::PointCloud2 mergeClouds(
+size_t pointCount(const sensor_msgs::msg::PointCloud2 & cloud)
+{
+  return static_cast<size_t>(cloud.width) * static_cast<size_t>(cloud.height);
+}
+
+builtin_interfaces::msg::Time olderStamp(
+  const builtin_interfaces::msg::Time & a,
+  const builtin_interfaces::msg::Time & b)
+{
+  if (a.sec != b.sec) {
+    return (a.sec < b.sec) ? a : b;
+  }
+  return (a.nanosec < b.nanosec) ? a : b;
+}
+
+bool appendTransformedCloud(
+  const sensor_msgs::msg::PointCloud2 & input,
+  const Eigen::Affine3f & transform,
+  sensor_msgs::msg::PointCloud2 & output,
+  const size_t output_point_offset)
+{
+  const int x_offset = fieldOffset(input, "x");
+  const int y_offset = fieldOffset(input, "y");
+  const int z_offset = fieldOffset(input, "z");
+  if (x_offset < 0 || y_offset < 0 || z_offset < 0) {
+    return false;
+  }
+
+  const size_t count = pointCount(input);
+
+  // Multi-thread the point transformations
+  #pragma omp parallel for
+  for (size_t i = 0; i < count; ++i) {
+    const auto * src = input.data.data() + i * input.point_step;
+    auto * dst = output.data.data() + (output_point_offset + i) * output.point_step;
+    
+    // Copy all fields (intensity, ring, timestamp, etc.)
+    std::memcpy(dst, src, input.point_step);
+
+    // Extract XYZ
+    float x = 0.0F;
+    float y = 0.0F;
+    float z = 0.0F;
+    std::memcpy(&x, src + x_offset, sizeof(float));
+    std::memcpy(&y, src + y_offset, sizeof(float));
+    std::memcpy(&z, src + z_offset, sizeof(float));
+
+    // Apply transform
+    const Eigen::Vector3f transformed = transform * Eigen::Vector3f(x, y, z);
+    const float tx = transformed.x();
+    const float ty = transformed.y();
+    const float tz = transformed.z();
+    
+    // Overwrite XYZ with transformed coordinates
+    std::memcpy(dst + x_offset, &tx, sizeof(float));
+    std::memcpy(dst + y_offset, &ty, sizeof(float));
+    std::memcpy(dst + z_offset, &tz, sizeof(float));
+  }
+
+  return true;
+}
+
+sensor_msgs::msg::PointCloud2 makeMergedCloudSkeleton(
   const sensor_msgs::msg::PointCloud2 & left,
   const sensor_msgs::msg::PointCloud2 & right,
   const std_msgs::msg::Header & header)
@@ -72,56 +137,12 @@ sensor_msgs::msg::PointCloud2 mergeClouds(
   merged.fields = left.fields;
   merged.point_step = left.point_step;
   merged.height = 1;
-  merged.width = left.width + right.width;
+  merged.width = pointCount(left) + pointCount(right);
   merged.row_step = merged.point_step * merged.width;
   merged.is_bigendian = left.is_bigendian;
   merged.is_dense = left.is_dense && right.is_dense;
   merged.data.resize(merged.row_step);
-  if (!left.data.empty()) {
-    std::memcpy(merged.data.data(), left.data.data(), left.data.size());
-  }
-  if (!right.data.empty()) {
-    std::memcpy(
-      merged.data.data() + left.data.size(), right.data.data(), right.data.size());
-  }
   return merged;
-}
-
-builtin_interfaces::msg::Time newerStamp(
-  const builtin_interfaces::msg::Time & a,
-  const builtin_interfaces::msg::Time & b)
-{
-  if (a.sec != b.sec) {
-    return (a.sec > b.sec) ? a : b;
-  }
-  return (a.nanosec > b.nanosec) ? a : b;
-}
-
-bool transformCloudXyzOnly(
-  const sensor_msgs::msg::PointCloud2 & input,
-  const Eigen::Affine3f & transform,
-  const std::string & target_frame,
-  sensor_msgs::msg::PointCloud2 & output)
-{
-  output = input;
-  output.header.frame_id = target_frame;
-
-  sensor_msgs::PointCloud2ConstIterator<float> x_in(input, "x");
-  sensor_msgs::PointCloud2ConstIterator<float> y_in(input, "y");
-  sensor_msgs::PointCloud2ConstIterator<float> z_in(input, "z");
-
-  sensor_msgs::PointCloud2Iterator<float> x_out(output, "x");
-  sensor_msgs::PointCloud2Iterator<float> y_out(output, "y");
-  sensor_msgs::PointCloud2Iterator<float> z_out(output, "z");
-
-  for (; x_in != x_in.end(); ++x_in, ++y_in, ++z_in, ++x_out, ++y_out, ++z_out) {
-    const Eigen::Vector3f transformed =
-      transform * Eigen::Vector3f(*x_in, *y_in, *z_in);
-    *x_out = transformed.x();
-    *y_out = transformed.y();
-    *z_out = transformed.z();
-  }
-  return true;
 }
 
 }  // namespace
@@ -150,16 +171,16 @@ public:
     timestamp_field_ = get_parameter("timestamp_field").as_string();
     const double sync_slop = get_parameter("sync_slop_sec").as_double();
 
-    rclcpp::QoS qos(rclcpp::KeepLast(1));
-    qos.reliable();
+    rclcpp::SensorDataQoS qos;
 
     pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(output_topic, qos);
 
     left_sub_.subscribe(this, left_topic, qos.get_rmw_qos_profile());
     right_sub_.subscribe(this, right_topic, qos.get_rmw_qos_profile());
 
+    // Increased queue size slightly to handle 10Hz buffer safety
     sync_ = std::make_shared<Sync>(
-      SyncPolicy(10), left_sub_, right_sub_);
+      SyncPolicy(20), left_sub_, right_sub_);
     sync_->setMaxIntervalDuration(rclcpp::Duration::from_seconds(sync_slop));
     sync_->registerCallback(
       std::bind(
@@ -186,32 +207,32 @@ private:
     if (!has_ring || !has_timestamp) {
       RCLCPP_WARN_THROTTLE(
         get_logger(), *get_clock(), 5000,
-        "Cloud from %s missing required fields (has %s=%d, %s=%d). Fields: [%s]",
-        cloud.header.frame_id.c_str(),
-        ring_field_.c_str(), has_ring,
-        timestamp_field_.c_str(), has_timestamp,
-        fieldNames(cloud).c_str());
+        "Cloud from %s missing required fields. Fields: [%s]",
+        cloud.header.frame_id.c_str(), fieldNames(cloud).c_str());
       return false;
     }
     return true;
   }
 
-  bool transformCloud(
-    const sensor_msgs::msg::PointCloud2 & input,
-    sensor_msgs::msg::PointCloud2 & output)
+  bool getCachedTransform(const std::string& source_frame, Eigen::Affine3f& transform, bool& is_ready)
   {
+    if (is_ready) {
+      return true;
+    }
+
     try {
+      // Use TimePointZero to grab the latest available static transform instantly without blocking
       const auto tf_stamped = tf_buffer_.lookupTransform(
-        target_frame_, input.header.frame_id, input.header.stamp,
-        rclcpp::Duration::from_seconds(0.05));
-      const Eigen::Affine3f transform =
-        tf2::transformToEigen(tf_stamped.transform).cast<float>();
-      return transformCloudXyzOnly(input, transform, target_frame_, output);
+        target_frame_, source_frame, tf2::TimePointZero);
+      transform = tf2::transformToEigen(tf_stamped.transform).cast<float>();
+      is_ready = true;
+      RCLCPP_INFO(get_logger(), "Successfully cached static transform for %s", source_frame.c_str());
+      return true;
     } catch (const tf2::TransformException & ex) {
-      RCLCPP_DEBUG(
-        get_logger(),
-        "Could not transform cloud from %s to %s: %s",
-        input.header.frame_id.c_str(), target_frame_.c_str(), ex.what());
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 2000,
+        "Waiting for static transform from %s to %s...",
+        source_frame.c_str(), target_frame_.c_str());
       return false;
     }
   }
@@ -222,36 +243,43 @@ private:
   {
     if (!logged_fields_) {
       logged_fields_ = true;
-      RCLCPP_INFO(
-        get_logger(), "Left cloud fields: [%s]", fieldNames(*left).c_str());
-      RCLCPP_INFO(
-        get_logger(), "Right cloud fields: [%s]", fieldNames(*right).c_str());
+      RCLCPP_INFO(get_logger(), "Left cloud fields: [%s]", fieldNames(*left).c_str());
+      RCLCPP_INFO(get_logger(), "Right cloud fields: [%s]", fieldNames(*right).c_str());
     }
 
     if (!hasRequiredFields(*left) || !hasRequiredFields(*right)) {
       return;
     }
 
-    if (left->point_step != right->point_step ||
-      !fieldsMatch(left->fields, right->fields))
-    {
+    if (left->point_step != right->point_step || !fieldsMatch(left->fields, right->fields)) {
       RCLCPP_WARN_THROTTLE(
         get_logger(), *get_clock(), 5000,
         "Left/right point clouds have mismatched fields or point_step; skipping merge");
       return;
     }
 
-    sensor_msgs::msg::PointCloud2 left_tf;
-    sensor_msgs::msg::PointCloud2 right_tf;
-    if (!transformCloud(*left, left_tf) || !transformCloud(*right, right_tf)) {
-      return;
+    // Try to get transforms from cache (or populate cache if first run)
+    if (!getCachedTransform(left->header.frame_id, left_transform_, left_tf_ready_) ||
+        !getCachedTransform(right->header.frame_id, right_transform_, right_tf_ready_)) 
+    {
+      return; // Skip this frame until static transforms are published and cached
     }
 
     std_msgs::msg::Header header;
     header.frame_id = target_frame_;
-    header.stamp = newerStamp(left_tf.header.stamp, right_tf.header.stamp);
+    header.stamp = olderStamp(left->header.stamp, right->header.stamp);
 
-    const auto merged = mergeClouds(left_tf, right_tf, header);
+    auto merged = makeMergedCloudSkeleton(*left, *right, header);
+    
+    if (!appendTransformedCloud(*left, left_transform_, merged, 0) ||
+        !appendTransformedCloud(*right, right_transform_, merged, pointCount(*left)))
+    {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 5000,
+        "Could not transform merged point cloud because x/y/z fields are missing");
+      return;
+    }
+
     if (!hasRequiredFields(merged)) {
       return;
     }
@@ -263,6 +291,13 @@ private:
   std::string target_frame_;
   std::string ring_field_;
   std::string timestamp_field_;
+
+  // TF Caching variables
+  bool left_tf_ready_{false};
+  bool right_tf_ready_{false};
+  Eigen::Affine3f left_transform_;
+  Eigen::Affine3f right_transform_;
+
   tf2_ros::Buffer tf_buffer_;
   tf2_ros::TransformListener tf_listener_;
   message_filters::Subscriber<sensor_msgs::msg::PointCloud2> left_sub_;
