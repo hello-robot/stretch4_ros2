@@ -11,7 +11,7 @@ import launch_ros
 
 from launch.conditions import IfCondition
 from stretch4_urdf import get_urdf
-from stretch_mujoco import Stretch4MujocoSimulator
+from stretch4_mujoco import Stretch4MujocoSimulator
 
 if system() == "Linux":
     # this fixes rviz launch issue
@@ -45,7 +45,7 @@ def launch(context):
     use_robocasa = context.perform_substitution(stretch_driver_params["use_robocasa"]) == "true"
 
     if use_robocasa:
-        from stretch_mujoco.robocasa_gen import choose_layout, choose_style, get_styles, layouts
+        from stretch4_mujoco.robocasa_gen import choose_layout, choose_style, get_styles, layouts
 
         robocasa_layout = choose_layout()
         robocasa_layout = layouts[robocasa_layout]
@@ -174,7 +174,7 @@ def generate_launch_description():
             "scene_xml", default_value="", description='The absolute path to a Mujoco scene xml',
         ),
         DeclareLaunchArgument(
-            "scene_name", default_value="", description='The name of a scene xml within stretch_mujoco/models, e.g. some_rooms',
+            "scene_name", default_value="", description='The name of a scene xml within stretch4_mujoco/models, e.g. some_rooms',
         ),
         DeclareLaunchArgument(
             "robocasa_task", default_value="PnPCounterToCab"
