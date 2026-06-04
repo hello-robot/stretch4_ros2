@@ -3,14 +3,14 @@ repositories:
     type: git
     url: https://github.com/hello-robot/stretch4_ros2
     version: jazzy
-  stretch4_web_teleop:
-    type: git
-    url: https://github.com/hello-robot/stretch4_web_teleop
-    version: feature/mobile-xp
   stretch4_body:
     type: git
     url: https://github.com/hello-robot/stretch4_body.git
     version: develop
+  nav2_costmap_2d:
+    type: git
+    url: https://github.com/olaghattas/nav2_costmap_2d
+    version: jazzy_debian
   ros2_numpy:
     type: git
     url: https://github.com/Box-Robotics/ros2_numpy

@@ -127,30 +127,30 @@ sudo apt-get update -y
 
 
 echo "Doing rosdep install"
-rosdep install --rosdistro=jazzy -iy --from-paths src
+rosdep install --rosdistro=jazzy -iy --from-paths src --skip-keys="hesai_ros_driver airy_lidar_filter_cpp"
 echo "Doing apt-get remove"
 
-echo "Install web interface dependencies..."
-cd ~/ament_ws/src/stretch4_web_teleop
-pip3 install -r requirements.txt --ignore-installed --break-system-packages
-npm install --force
-npx playwright install
-echo "Generating web interface certs..."
-cd ~/ament_ws/src/stretch4_web_teleop/certificates
-curl -JLO "https://dl.filippo.io/mkcert/latest?for=linux/amd64"
-chmod +x mkcert-v*-linux-amd64
-sudo cp mkcert-v*-linux-amd64 /usr/local/bin/mkcert
-CAROOT=`pwd` mkcert --install
-mkdir -p ~/.local/share/mkcert
-rm -rf ~/.local/share/mkcert/root*
-cp root* ~/.local/share/mkcert
-mkcert ${HELLO_FLEET_ID} ${HELLO_FLEET_ID}.local ${HELLO_FLEET_ID}.dev localhost 127.0.0.1 0.0.0.0 ::1
-rm mkcert-v*-linux-amd64
-cd ~/ament_ws/src/stretch4_web_teleop
-touch .env
-echo certfile=${HELLO_FLEET_ID}+6.pem >> .env
-echo keyfile=${HELLO_FLEET_ID}+6-key.pem >> .env
-cd ~/ament_ws/
+# echo "Install web interface dependencies..."
+# cd ~/ament_ws/src/stretch4_web_teleop
+# pip3 install -r requirements.txt --ignore-installed --break-system-packages
+# npm install --force
+# npx playwright install
+# echo "Generating web interface certs..."
+# cd ~/ament_ws/src/stretch4_web_teleop/certificates
+# curl -JLO "https://dl.filippo.io/mkcert/latest?for=linux/amd64"
+# chmod +x mkcert-v*-linux-amd64
+# sudo cp mkcert-v*-linux-amd64 /usr/local/bin/mkcert
+# CAROOT=`pwd` mkcert --install
+# mkdir -p ~/.local/share/mkcert
+# rm -rf ~/.local/share/mkcert/root*
+# cp root* ~/.local/share/mkcert
+# mkcert ${HELLO_FLEET_ID} ${HELLO_FLEET_ID}.local ${HELLO_FLEET_ID}.dev localhost 127.0.0.1 0.0.0.0 ::1
+# rm mkcert-v*-linux-amd64
+# cd ~/ament_ws/src/stretch4_web_teleop
+# touch .env
+# echo certfile=${HELLO_FLEET_ID}+6.pem >> .env
+# echo keyfile=${HELLO_FLEET_ID}+6-key.pem >> .env
+# cd ~/ament_ws/
 
 
 # Try to install python3-pcl from PPA, but don't fail if it's not available
@@ -160,7 +160,7 @@ cd ~/ament_ws/
 # sudo apt-get install python3-pcl -y
 # set -e
 
+echo "Buid ROS 2 wokspace"
 cd ~/ament_ws
-
 colcon build
 source ./install/setup.bash

@@ -53,12 +53,20 @@ RUN curl -sL https://deb.nodesource.com/setup_22.x | bash - \
 RUN apt-get update && apt-get install -y \
     rpl \
     gnome-terminal \
+    terminator \
+    gedit \
+    nano \
     && rm -rf /var/lib/apt/lists/*
 
 # Remove distutils-installed packages to avoid conflicts
 RUN rm -rf /usr/lib/python3/dist-packages/sympy* || true
 RUN rm -rf /usr/lib/python3/dist-packages/blinker* || true
 RUN rm -rf /usr/lib/python3/dist-packages/transforms3d* || true
+RUN rm -rf /usr/lib/python3/dist-packages/psutil* || true
+RUN rm -rf /usr/lib/python3/dist-packages/kiwisolver* || true
+RUN rm -rf /usr/lib/python3/dist-packages/typing_extensions* || true
+RUN rm -rf /usr/lib/python3/dist-packages/numpy* || true
+RUN rm -rf /usr/lib/python3/dist-packages/scipy* || true
 
 
 # Set up environment variables
@@ -104,12 +112,24 @@ RUN pip3 install pyquaternion transforms3d
 # Set up Mujoco
 # Note: The setup.sh script is interactive, so we'll need to provide "y" to download kitchen assets
 RUN rm -rf /usr/lib/python3/dist-packages/kiwisolver* || true
+RUN rm -rf /usr/lib/python3/dist-packages/packaging* || true
+RUN pip3 uninstall -y coverage || true
 RUN /bin/bash -c "source ~/ament_ws/install/setup.bash && \
     echo 'y' | bash ~/ament_ws/src/stretch4_ros2/stretch_simulation/stretch_mujoco_driver/setup.bash"
 
+    # Force NumPy-2-compatible transforms3d after rosdep/setup scripts
+RUN apt-get update && \
+    apt-get install -y ros-jazzy-tf-transformations && \
+    # apt-get remove -y python3-transforms3d || true && \
+    # rm -rf /usr/lib/python3/dist-packages/transforms3d* && \
+    pip3 install --no-cache-dir --force-reinstall transforms3d==0.4.2 && \
+    python3 -c "import numpy, transforms3d; print('numpy:', numpy.__version__); print('transforms3d:', transforms3d.__version__, transforms3d.__file__)"
+    
 # Build the workspace
 WORKDIR /root/ament_ws
-RUN /bin/bash -c "source ./install/setup.bash && colcon build"
+RUN /bin/bash -c "rm -rf build install log && \
+                  source /opt/ros/jazzy/setup.bash && \
+                  colcon build"
 
 # Set up Stretch Web Teleop URDF export
 # WORKDIR /root/ament_ws/src/stretch4_ros2/stretch_description/urdf
@@ -120,9 +140,6 @@ RUN /bin/bash -c "source ./install/setup.bash && colcon build"
 
 # Create maps directory
 RUN mkdir -p ${HELLO_FLEET_PATH}/maps
-
-# Set working directory back to ament_ws
-WORKDIR /root/ament_ws
 
 # Set up display for GUI applications
 ENV DISPLAY=:0
