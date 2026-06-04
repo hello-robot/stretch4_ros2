@@ -8,14 +8,14 @@ import numpy as np
 import threading
 
 from sensor_msgs.msg._compressed_image import CompressedImage
-from stretch_mujoco import Stretch4MujocoSimulator
-from stretch_mujoco.enums.actuators import Actuators
-from stretch_mujoco.enums.stretch_sensors import StretchSensors
-from stretch_mujoco.enums.stretch_cameras import CameraSettings, StretchCameras
-from stretch_mujoco.utils import get_absolute_path_stretch_xml, models_path
+from stretch4_mujoco import Stretch4MujocoSimulator
+from stretch4_mujoco.enums.actuators import Actuators
+from stretch4_mujoco.enums.stretch_sensors import StretchSensors
+from stretch4_mujoco.enums.stretch_cameras import CameraSettings, StretchCameras
+from stretch4_mujoco.utils import get_absolute_path_stretch_xml, models_path
 
 from rclpy.qos import QoSProfile, ReliabilityPolicy, QoSDurabilityPolicy
-from stretch_core.rwlock import RWLock
+# from stretch_core.rwlock import RWLock
 from stretch_mujoco_driver.joint_trajectory_server import JointTrajectoryAction
 import tf2_ros
 from tf_transformations import quaternion_from_euler
@@ -44,15 +44,14 @@ from tf2_ros.static_transform_broadcaster import StaticTransformBroadcaster
 
 from sensor_msgs.msg import PointCloud2, PointField
 import sensor_msgs_py.point_cloud2 as pc2
-from cv_bridge import CvBridge
-
+import ros2_numpy
 
 from rcl_interfaces.msg import SetParametersResult
 from sensor_msgs.msg import BatteryState, JointState, Imu, MagneticField, Joy
 from std_msgs.msg import Bool, String, Float64MultiArray
 
-from hello_helpers.joint_qpos_conversion import SE4_dw4_sg4_Idx
-from hello_helpers.joint_qpos_conversion import get_Idx
+from hello_helpers.joy_conversion import SE4_dw4_sg4_Idx
+from hello_helpers.joy_conversion import get_Idx
 
 from hello_helpers.joy_conversion import (
     unpack_joy_to_gamepad_state,
@@ -99,10 +98,8 @@ class StretchMujocoDriver(Node):
 
         self.latest_gamepad_joy_msg = get_default_joy_msg()
 
-        self.bridge = CvBridge()
-
         self.robot_stop_lock = threading.Lock()
-        self.robot_mode_rwlock = RWLock()
+        # self.robot_mode_rwlock = RWLock()
 
         # Robocasa set-up
         if self.use_robocasa:
@@ -213,7 +210,7 @@ class StretchMujocoDriver(Node):
 
     def robocasa_setup(self):
 
-        from stretch_mujoco.robocasa_gen import (
+        from stretch4_mujoco.robocasa_gen import (
             layout_from_str,
             style_from_str,
             model_generation_wizard,
@@ -251,45 +248,45 @@ class StretchMujocoDriver(Node):
         return model, xml, objects_info
 
     def set_gamepad_motion_callback(self, joy):
-        self.robot_mode_rwlock.acquire_read()
+        # self.robot_mode_rwlock.acquire_read()
         if self.robot_mode != "gamepad":
             self.logger.error(
                 "{0} Stretch Driver must be in gamepad mode to "
                 "receive a Joy msg on gamepad_joy topic. "
                 "Current mode = {1}.".format(self.node_name, self.robot_mode)
             )
-            self.robot_mode_rwlock.release_read()
+            # self.robot_mode_rwlock.release_read()
             return
         self.latest_gamepad_joy_msg = joy
         self.last_gamepad_joy_time = self.get_clock().now()
-        self.robot_mode_rwlock.release_read()
+        # self.robot_mode_rwlock.release_read()
 
     # MOBILE BASE VELOCITY METHODS ############
 
     def set_mobile_base_velocity_callback(self, twist):
-        self.robot_mode_rwlock.acquire_read()
+        # self.robot_mode_rwlock.acquire_read()
         if self.robot_mode != "navigation":
             self.logger.error(
                 "{0} action server must be in navigation mode to "
                 "receive a twist on cmd_vel. "
                 "Current mode = {1}.".format(self.node_name, self.robot_mode)
             )
-            self.robot_mode_rwlock.release_read()
+            # self.robot_mode_rwlock.release_read()
             return
         self.linear_velocity_mps = twist.linear.x
         self.linear_velocity_mps_y = twist.linear.y
         self.angular_velocity_radps = twist.angular.z
         self.last_twist_time = self.get_clock().now()
-        self.robot_mode_rwlock.release_read()
+        # self.robot_mode_rwlock.release_read()
 
     def set_robot_streaming_position_callback(self, msg: Float64MultiArray):
-        self.robot_mode_rwlock.acquire_read()
+        # self.robot_mode_rwlock.acquire_read()
         if not self.streaming_position_activated:
             self.logger.error(
                 "Streaming position is not activated."
                 " Please activate streaming position to receive command to joint_position_cmd."
             )
-            self.robot_mode_rwlock.release_read()
+            # self.robot_mode_rwlock.release_read()
             return
 
         if self.robot_mode not in ["position", "navigation"]:
@@ -298,12 +295,12 @@ class StretchMujocoDriver(Node):
                 "enabled to receive command to joint_position_cmd. "
                 "Current mode = {1}.".format(self.node_name, self.robot_mode)
             )
-            self.robot_mode_rwlock.release_read()
+            # self.robot_mode_rwlock.release_read()
             return
 
         qpos = msg.data
         self.move_to_position(qpos)
-        self.robot_mode_rwlock.release_read()
+        # self.robot_mode_rwlock.release_read()
 
     def move_to_position(self, qpos: list):
         try:
@@ -372,7 +369,7 @@ class StretchMujocoDriver(Node):
 
     def command_mobile_base_velocity_and_publish_state(self):
 
-        self.robot_mode_rwlock.acquire_read()
+        # self.robot_mode_rwlock.acquire_read()
 
         # During gamepad mode, the robot can be controlled with provided gamepad dongle plugged into the robot
         # Or a Joy message type could also be published which can be used for controlling robot with an remote gamepad.
@@ -505,7 +502,7 @@ class StretchMujocoDriver(Node):
         # are connected in series such that moving the most proximal
         # joint moves all the other joints in the global frame.
         joint_state.name = [
-            "wrist_extension",
+            # "wrist_extension",
             "lift_joint",
             "arm_l1_joint",
             "arm_l2_joint",
@@ -517,22 +514,19 @@ class StretchMujocoDriver(Node):
         positions = [pos_out / 5.0 for i in range(5)]
         # set lift position
         positions.insert(0, pos_up)
-        # set wrist_extension position
-        positions.insert(0, pos_out)
+
 
         # set velocities of the telescoping joints
         velocities = [vel_out / 5.0 for i in range(5)]
         # set lift velocity
         velocities.insert(0, vel_up)
-        # set wrist_extension velocity
-        velocities.insert(0, vel_out)
+
 
         # set efforts of the telescoping joints
         efforts = [eff_out for i in range(5)]
         # set lift effort
         efforts.insert(0, eff_up)
-        # set wrist_extension effort
-        efforts.insert(0, eff_out)
+
 
         dex_wrist_attached = True
 
@@ -546,8 +540,8 @@ class StretchMujocoDriver(Node):
 
         # if 'stretch_gripper' in self.sim.end_of_arm.joints:
         end_of_arm_joint_names = end_of_arm_joint_names + [
-            "gripper_finger_left_joint",
             "gripper_finger_right_joint",
+            "gripper_finger_left_joint",
         ]
 
         joint_state.name.extend(end_of_arm_joint_names)
@@ -659,7 +653,7 @@ class StretchMujocoDriver(Node):
         # j.header.stamp = current_time
         # self.gamepad_state_pub.publish(j)
 
-        self.robot_mode_rwlock.release_read()
+        # self.robot_mode_rwlock.release_read()
         # must happen after the read release, otherwise the write lock in change_mode() will cause a deadlock
         if (self.prev_runstop_state is None and runstop_status) or (
             self.prev_runstop_state is not None
@@ -696,11 +690,12 @@ class StretchMujocoDriver(Node):
             header.frame_id = get_camera_frame(camera)
             header.stamp = current_time
 
-            ros_image = self.bridge.cv2_to_imgmsg(
+            ros_image = ros2_numpy.msgify(
+                Image,
                 frame,
                 encoding="bgr8" if not camera.is_depth else "32FC1",
-                header=header,
             )
+            ros_image.header = header
             self.camera_publishers[camera.name].publish(ros_image)
 
             settings: CameraSettings = camera.initial_camera_settings
@@ -714,18 +709,24 @@ class StretchMujocoDriver(Node):
             if camera.is_depth:
                 ros_image_compressed = compress_depth_image(frame)
             else:
-                ros_image_compressed: CompressedImage = (
-                    self.bridge.cv2_to_compressed_imgmsg(frame, "png")
-                )
-            ros_image_compressed.header.frame_id = get_camera_frame(camera)
+                success, encoded_image = cv2.imencode(".png", frame)
+                if not success:
+                    self.logger.error(f"Failed to encode compressed image for {camera.name}")
+                    continue
+
+                ros_image_compressed = CompressedImage()
+                ros_image_compressed.format = "png"
+                ros_image_compressed.data = encoded_image.tobytes()
+
+            ros_image_compressed.header = header
             self.camera_compressed_publishers[camera.name].publish(ros_image_compressed)
 
             if camera.is_depth:
-                if camera == StretchCameras.cam_d405_depth:
+                if camera == StretchCameras.cam_gripper_depth:
                     pointcloud_msg = create_pointcloud_rgb_msg(
                         camera_info_msg=camera_info,
                         rgb_image=camera_data.get_camera_data(
-                            StretchCameras.cam_d405_rgb
+                            StretchCameras.cam_gripper_rgb
                         ),
                         depth_image=frame,
                     )
@@ -755,7 +756,7 @@ class StretchMujocoDriver(Node):
 
     # CHANGE MODES ################
     def change_mode(self, new_mode, code_to_run=None):
-        self.robot_mode_rwlock.acquire_write()
+        # self.robot_mode_rwlock.acquire_write()
 
         self.robot_mode = new_mode
 
@@ -763,7 +764,7 @@ class StretchMujocoDriver(Node):
             code_to_run()
 
         self.logger.info(f"Changed to mode = {self.robot_mode}")
-        self.robot_mode_rwlock.release_write()
+        # self.robot_mode_rwlock.release_write()
 
     def turn_on_navigation_mode(self):
         # Navigation mode enables mobile base velocity control via
@@ -989,10 +990,10 @@ class StretchMujocoDriver(Node):
         return SetParametersResult(successful=True)
 
     def home_the_robot(self):
-        self.robot_mode_rwlock.acquire_read()
+        # self.robot_mode_rwlock.acquire_read()
         can_home = self.robot_mode in self.control_modes
         last_robot_mode = copy.copy(self.robot_mode)
-        self.robot_mode_rwlock.release_read()
+        # self.robot_mode_rwlock.release_read()
         if not can_home:
             errmsg = f"Cannot home while in mode={last_robot_mode}."
             self.logger.error(errmsg)
@@ -1003,10 +1004,10 @@ class StretchMujocoDriver(Node):
         return True, "Homed."
 
     def stow_the_robot(self):
-        self.robot_mode_rwlock.acquire_read()
+        # self.robot_mode_rwlock.acquire_read()
         can_stow = self.robot_mode in self.control_modes
         last_robot_mode = copy.copy(self.robot_mode)
-        self.robot_mode_rwlock.release_read()
+        # self.robot_mode_rwlock.release_read()
         if not can_stow:
             errmsg = f"Cannot stow while in mode={last_robot_mode}."
             self.logger.error(errmsg)
@@ -1021,18 +1022,18 @@ class StretchMujocoDriver(Node):
 
     def runstop_the_robot(self, runstopped, just_change_mode=False):
         if runstopped:
-            self.robot_mode_rwlock.acquire_read()
+            # self.robot_mode_rwlock.acquire_read()
             already_runstopped = self.robot_mode == "runstopped"
             if not already_runstopped:
                 self.prerunstop_mode = copy.copy(self.robot_mode)
-            self.robot_mode_rwlock.release_read()
+            # self.robot_mode_rwlock.release_read()
             if already_runstopped:
                 return
             self.change_mode("runstopped", lambda: None)
         else:
-            self.robot_mode_rwlock.acquire_read()
+            # self.robot_mode_rwlock.acquire_read()
             already_not_runstopped = self.robot_mode != "runstopped"
-            self.robot_mode_rwlock.release_read()
+            # self.robot_mode_rwlock.release_read()
             if already_not_runstopped:
                 return
             self.change_mode(self.prerunstop_mode, lambda: None)
@@ -1193,7 +1194,7 @@ class StretchMujocoDriver(Node):
         self.logger.info(f"rate = {self.joint_state_rate} Hz")
         self.logger.info(f"twist timeout = {self.timeout_s} s")
 
-        self.base_frame_id = "base_link"
+        self.base_frame_id = "base_footprint"
         self.logger.info(f"base_frame_id = {self.base_frame_id}")
         self.odom_frame_id = "odom"
         self.logger.info(f"odom_frame_id = {self.odom_frame_id}")
@@ -1460,9 +1461,9 @@ def get_camera_topic_name(camera: StretchCameras):
     """
     Topic names to match the camera topics published by the real Stretch robot.
     """
-    if camera == StretchCameras.cam_d405_rgb:
+    if camera == StretchCameras.cam_gripper_rgb:
         return "/gripper_camera/image_raw"
-    if camera == StretchCameras.cam_d405_depth:
+    if camera == StretchCameras.cam_gripper_depth:
         return "/gripper_camera/depth/image_rect_raw"
     if camera == StretchCameras.cam_nav_rgb_se4_left:
         return "/cameras_head/left/image_raw"
@@ -1483,9 +1484,9 @@ def get_camera_info_topic_name(camera: StretchCameras):
     """
     Topic names to match the camera_info topics published by the real Stretch robot.
     """
-    if camera == StretchCameras.cam_d405_rgb:
+    if camera == StretchCameras.cam_gripper_rgb:
         return "/gripper_camera/camera_info"
-    if camera == StretchCameras.cam_d405_depth:
+    if camera == StretchCameras.cam_gripper_depth:
         return "/gripper_camera/depth/camera_info"
     if camera == StretchCameras.cam_nav_rgb_se4_left:
         return "/cameras_head/left/camera_info"
@@ -1506,7 +1507,7 @@ def get_camera_pointcloud_topic_name(camera: StretchCameras):
     """
     Topic names to match the pointcloud2 topics published by the real Stretch robot.
     """
-    if camera == StretchCameras.cam_d405_depth:
+    if camera == StretchCameras.cam_gripper_depth:
         return "/gripper_camera/depth/color/points"
     if camera == StretchCameras.cam_hemilidar_left:
         return "/lidar_points_left"
@@ -1521,9 +1522,9 @@ def get_camera_frame(camera: StretchCameras):
     """
     Matches the simulation camera with the optical frame on the robot urdf.
     """
-    if camera == StretchCameras.cam_d405_rgb:
+    if camera == StretchCameras.cam_gripper_rgb:
         return "gripper_camera_color_optical_frame"
-    if camera == StretchCameras.cam_d405_depth:
+    if camera == StretchCameras.cam_gripper_depth:
         return "gripper_camera_color_optical_frame" # We don't have a depth optical frame in the URDF.
         return "gripper_camera_depth_optical_frame"
     if camera == StretchCameras.cam_nav_rgb_se4_left:
@@ -1535,6 +1536,7 @@ def get_camera_frame(camera: StretchCameras):
     if camera == StretchCameras.cam_hemilidar_left:
         return "lidar_left_link"
     if camera == StretchCameras.cam_hemilidar_right:
+        return "lidar_right_link"
         return "lidar_right_link"
 
     raise NotImplementedError(f"Camera {camera} frame is not implemented")
