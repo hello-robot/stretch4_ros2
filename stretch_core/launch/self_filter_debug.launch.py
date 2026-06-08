@@ -26,7 +26,7 @@ def launch_setup(context, *args, **kwargs):
     launch_filter_node = LaunchConfiguration('launch_filter_node').perform(context)
     launch_viz_node = LaunchConfiguration('launch_viz_node').perform(context)
     use_rviz = LaunchConfiguration('use_rviz').perform(context)
-    pub_pc = LaunchConfiguration('pub_pc').perform(context).lower() == 'true'
+    pub_pc = LaunchConfiguration('pub_pointcloud').perform(context).lower() == 'true'
 
     robot_filter_yaml = robot_self_filter_yaml(stretch_core)
     preset_yaml = tool_preset_yaml(stretch_core, tool_preset)

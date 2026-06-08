@@ -1,7 +1,17 @@
 /**:
   ros__parameters:
-    # Pipeline preset: region | sor | sor_ransac (see README for active stages)
+    # Pipeline preset: region | sor | sor_ransac | self_voxel | none | custom
     filter_type: region
+    # Publish LaserScan on output_topic (default true)
+    pub_laserscan: true
+    # Publish merged PointCloud2 with ring/timestamp on pointcloud_topic (default false)
+    pub_pointcloud: false
+    pointcloud_topic: /lidar_points
+    # Used when filter_type is custom
+    enable_self_robot_filter: true
+    enable_region_filter: true
+    enable_voxel_sor_filter: false
+    enable_floor_ransac_filter: false
     # TF frame for filtered cloud, scan projection, and self-filter markers
     frame_id: base_footprint
 

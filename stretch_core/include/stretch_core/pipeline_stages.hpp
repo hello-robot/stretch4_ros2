@@ -33,6 +33,28 @@ inline bool hasStage(PipelineStages stages, PipelineStage stage)
   return (stages & static_cast<PipelineStages>(stage)) != 0;
 }
 
+inline PipelineStages stagesFromEnables(
+  bool self_robot,
+  bool region,
+  bool voxel_sor,
+  bool floor_ransac)
+{
+  PipelineStages stages = 0;
+  if (self_robot) {
+    stages = stages | PipelineStage::SelfRobot;
+  }
+  if (region) {
+    stages = stages | PipelineStage::Region;
+  }
+  if (voxel_sor) {
+    stages = stages | PipelineStage::VoxelSor;
+  }
+  if (floor_ransac) {
+    stages = stages | PipelineStage::FloorRansac;
+  }
+  return stages;
+}
+
 inline PipelineStages stagesFromFilterType(const std::string & filter_type)
 {
   if (filter_type == "region") {
@@ -44,6 +66,15 @@ inline PipelineStages stagesFromFilterType(const std::string & filter_type)
   if (filter_type == "sor_ransac") {
     return PipelineStage::SelfRobot | PipelineStage::Region | PipelineStage::VoxelSor |
            PipelineStage::FloorRansac;
+  }
+  if (filter_type == "self_voxel") {
+    return PipelineStage::SelfRobot | PipelineStage::VoxelSor;
+  }
+  if (filter_type == "none") {
+    return 0;
+  }
+  if (filter_type == "custom") {
+    return 0;
   }
   throw std::invalid_argument("Unknown filter_type: " + filter_type);
 }

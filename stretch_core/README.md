@@ -4,21 +4,31 @@
 
 ## Dual Hesai LiDAR filtering
 
-The `dual_lidar_laserscan` node (`pointcloud_to_laserscan`) fuses the left and right Hesai point clouds, runs a configurable filter pipeline, and publishes `/scan_filtered` as a `LaserScan` in `base_footprint`.
+The `dual_lidar_laserscan` node (`pointcloud_to_laserscan`) fuses the left and right Hesai point clouds, runs a configurable filter pipeline, and can publish `/scan_filtered` (`LaserScan`) and/or `/lidar_points` (`PointCloud2` with ring/timestamp) in `base_footprint`.
+
+Output toggles (defaults: laserscan on, pointcloud off):
+
+- `pub_laserscan` — publish `LaserScan` on `output_topic` (default `/scan_filtered`)
+- `pub_pointcloud` — publish field-preserving merged cloud on `pointcloud_topic` (default `/lidar_points`)
+
+When only `pub_laserscan` is on, the pipeline uses a fast xyz-only path (no ring/timestamp copy). When `pub_pointcloud` is on, one field-preserving pass builds the merged cloud; LaserScan (if enabled) is projected from that same cloud.
 
 ### Filter pipeline
 
-Processing is handled by `DualLidarPipeline`. Choose which stages run with the `filter_type` launch parameter (or the `filter_type` ROS parameter on the node):
+Processing is handled by `DualLidarPipeline`. Each stage runs only when enabled. Choose stages with `filter_type` presets or `filter_type:=custom` plus `enable_*` booleans:
 
 | `filter_type` | Stages |
 |---------------|--------|
-| `region` | Robot self-filter, region (height/range crop) |
-| `sor` | Robot self-filter, region, voxel grid + statistical outlier removal (near robot) |
-| `sor_ransac` | Same as `sor`, plus floor plane removal via RANSAC |
+| `region` | SelfRobot, Region |
+| `sor` | SelfRobot, Region, VoxelSor |
+| `sor_ransac` | SelfRobot, Region, VoxelSor, FloorRansac |
+| `self_voxel` | SelfRobot, VoxelSor (no region) |
+| `none` | No filters |
+| `custom` | Use `enable_self_robot_filter`, `enable_region_filter`, `enable_voxel_sor_filter`, `enable_floor_ransac_filter` |
 
-For each lidar point (in `base_footprint`): apply the region crop, then a cheap spatial gate, then TF-driven robot geometry checks (base, arm, shoulder, wrist chain, tool attachment) only inside that gate. After fusion, an optional speckle filter cleans weak isolated scan bins.
+For each lidar point (in `base_footprint`): optionally apply region crop, then a cheap spatial gate, then TF-driven robot geometry checks only inside that gate. Optional voxel/SOR denoises near-field points. LaserScan projection and speckle filtering run only when `pub_laserscan` is true.
 
-Use `region` for mapping (lighter processing). Use `sor` for navigation (denoise close returns). Use `sor_ransac` when floor points should be removed by plane fit instead of a fixed `z_min`.
+Use `region` for mapping. Use `sor` for navigation. Use `self_voxel` with `pub_pointcloud:=true` for a filtered merged cloud without region crop.
 
 ### Launch
 

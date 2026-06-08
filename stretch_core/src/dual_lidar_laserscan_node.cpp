@@ -1,11 +1,11 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/laser_scan.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
+#include <std_msgs/msg/header.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
 #include <tf2_eigen/tf2_eigen.hpp>
-#include <pcl_conversions/pcl_conversions.h>
 
 #include <cmath>
 #include <sstream>
@@ -14,6 +14,7 @@
 
 #include "stretch_core/dual_lidar_pipeline.hpp"
 #include "stretch_core/pipeline_stages.hpp"
+#include "stretch_core/pointcloud2_utils.hpp"
 #include "stretch_core/robot_self_filter.hpp"
 #include "stretch_core/robot_self_filter_params.hpp"
 
@@ -45,16 +46,7 @@ public:
     declareParameters();
     loadParameters();
     configurePipeline();
-
-    pub_ = create_publisher<sensor_msgs::msg::LaserScan>(scan_topic_, rclcpp::SensorDataQoS());
-    if (pub_pc_) {
-      pub_cloud_ = create_publisher<sensor_msgs::msg::PointCloud2>(
-        "/filtered_points", rclcpp::SensorDataQoS());
-    }
-    if (pub_self_filter_markers_) {
-      pub_markers_ = create_publisher<visualization_msgs::msg::MarkerArray>(
-        self_filter_markers_topic_, rclcpp::QoS(1).reliable());
-    }
+    setupPublishers();
 
     scan_cfg_.angle_min = -static_cast<float>(M_PI);
     scan_cfg_.angle_max = static_cast<float>(M_PI);
@@ -62,6 +54,11 @@ public:
     scan_cfg_.range_max = pipeline_config_.region.range_max;
     scan_cfg_.num_ranges = static_cast<int>(
       (scan_cfg_.angle_max - scan_cfg_.angle_min) / scan_cfg_.angle_increment);
+
+    if (pub_self_filter_markers_) {
+      pub_markers_ = create_publisher<visualization_msgs::msg::MarkerArray>(
+        self_filter_markers_topic_, rclcpp::QoS(1).reliable());
+    }
 
     param_callback_handle_ = add_on_set_parameters_callback(
       std::bind(&DualLidarLaserScanNode::onParameterChange, this, std::placeholders::_1));
@@ -92,7 +89,7 @@ public:
 
   void activateSubscription()
   {
-    rclcpp::QoS qos(rclcpp::KeepLast(1)); // take freshest pc 
+    rclcpp::QoS qos(rclcpp::KeepLast(1));
     qos.reliable();
     sub1_ = create_subscription<sensor_msgs::msg::PointCloud2>(
       lidar1_topic_, qos,
@@ -115,7 +112,14 @@ private:
     declare_parameter<std::string>("lidar2_frame", "lidar_left_link");
     declare_parameter<std::string>("frame_id", "base_footprint");
     declare_parameter<std::string>("output_topic", "/scan_filtered");
-    declare_parameter<bool>("pub_pc", false);
+    declare_parameter<bool>("pub_laserscan", true);
+    declare_parameter<bool>("pub_pointcloud", false);
+    declare_parameter<std::string>("pointcloud_topic", "/lidar_points");
+
+    declare_parameter<bool>("enable_self_robot_filter", true);
+    declare_parameter<bool>("enable_region_filter", true);
+    declare_parameter<bool>("enable_voxel_sor_filter", false);
+    declare_parameter<bool>("enable_floor_ransac_filter", false);
 
     declare_parameter("z_min", 0.135);
     declare_parameter("z_max", 1.5);
@@ -151,7 +155,15 @@ private:
     lidar2_frame_ = get_parameter("lidar2_frame").as_string();
     target_frame_ = get_parameter("frame_id").as_string();
     scan_topic_ = get_parameter("output_topic").as_string();
-    pub_pc_ = get_parameter("pub_pc").as_bool();
+    pub_laserscan_ = get_parameter("pub_laserscan").as_bool();
+    pub_pointcloud_ = get_parameter("pub_pointcloud").as_bool();
+    pointcloud_topic_ = get_parameter("pointcloud_topic").as_string();
+
+    enable_self_robot_filter_ = get_parameter("enable_self_robot_filter").as_bool();
+    enable_region_filter_ = get_parameter("enable_region_filter").as_bool();
+    enable_voxel_sor_filter_ = get_parameter("enable_voxel_sor_filter").as_bool();
+    enable_floor_ransac_filter_ = get_parameter("enable_floor_ransac_filter").as_bool();
+
     pub_self_filter_markers_ = get_parameter("pub_self_filter_markers").as_bool();
     self_filter_markers_topic_ = get_parameter("self_filter_markers_topic").as_string();
 
@@ -185,6 +197,21 @@ private:
     loadSelfFilterParams();
   }
 
+  void setupPublishers()
+  {
+    if (pub_laserscan_) {
+      pub_ = create_publisher<sensor_msgs::msg::LaserScan>(scan_topic_, rclcpp::SensorDataQoS());
+    } else {
+      pub_.reset();
+    }
+    if (pub_pointcloud_) {
+      pub_cloud_ = create_publisher<sensor_msgs::msg::PointCloud2>(
+        pointcloud_topic_, rclcpp::SensorDataQoS());
+    } else {
+      pub_cloud_.reset();
+    }
+  }
+
   void loadSelfFilterParams()
   {
     self_filter_config_ = stretch_core::loadRobotSelfFilterConfig(*this);
@@ -207,13 +234,22 @@ private:
     }
     if (self_filter_config_.filter_attachment || force_markers) {
       self_filter_.updateAttachmentBox(
-        tf_buffer_, target_frame_, tf_time, get_logger(), *get_clock(), self_filter_config_.filter_attachment && force_markers);
+        tf_buffer_, target_frame_, tf_time, get_logger(), *get_clock(),
+        self_filter_config_.filter_attachment && force_markers);
     }
   }
 
   void configurePipeline()
   {
-    stages_ = stretch_core::stagesFromFilterType(filter_type_);
+    if (filter_type_ == "custom") {
+      stages_ = stretch_core::stagesFromEnables(
+        enable_self_robot_filter_,
+        enable_region_filter_,
+        enable_voxel_sor_filter_,
+        enable_floor_ransac_filter_);
+    } else {
+      stages_ = stretch_core::stagesFromFilterType(filter_type_);
+    }
     pipeline_.setStages(stages_);
     pipeline_.setConfig(pipeline_config_);
 
@@ -224,10 +260,12 @@ private:
     }
     RCLCPP_INFO(
       get_logger(),
-      "Pipeline: filter_type=%s stages=[%s]%s",
+      "Pipeline: filter_type=%s stages=[%s]%s | pub_laserscan=%s pub_pointcloud=%s",
       filter_type_.c_str(),
       joinStageNames(names).c_str(),
-      z_min_note.c_str());
+      z_min_note.c_str(),
+      pub_laserscan_ ? "true" : "false",
+      pub_pointcloud_ ? "true" : "false");
   }
 
   tf2::TimePoint lidarTfTime() const
@@ -265,24 +303,34 @@ private:
       return;
     }
 
+    if (!pub_laserscan_ && !pub_pointcloud_) {
+      return;
+    }
+
     const tf2::TimePoint tf_time = lidarTfTime();
     const bool force_markers = pub_self_filter_markers_;
     updateSelfFilterTransforms(tf_time, force_markers);
 
-    const auto output = pipeline_.process(
-      msg1_, msg2_, tf_lidar1_, tf_lidar2_, self_filter_, scan_cfg_, pub_pc_, get_logger());
+    std_msgs::msg::Header output_header;
+    output_header.frame_id = target_frame_;
+    output_header.stamp = stretch_core::olderStamp(msg1_->header.stamp, msg2_->header.stamp);
 
-    if (output.ranges.empty() && stretch_core::hasStage(stages_, stretch_core::PipelineStage::VoxelSor)) {
-      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000, "Pipeline produced no scan data this cycle.");
+    const auto output = pipeline_.process(
+      msg1_, msg2_, tf_lidar1_, tf_lidar2_, self_filter_, scan_cfg_,
+      pub_laserscan_, pub_pointcloud_, output_header, get_logger());
+
+    if (pub_laserscan_ &&
+      output.ranges.empty() &&
+      stretch_core::hasStage(stages_, stretch_core::PipelineStage::VoxelSor))
+    {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 2000,
+        "Pipeline produced no scan data this cycle.");
       return;
     }
 
-    if (pub_pc_ && output.debug_cloud && pub_cloud_) {
-      sensor_msgs::msg::PointCloud2 cloud_msg;
-      pcl::toROSMsg(*output.debug_cloud, cloud_msg);
-      cloud_msg.header.stamp = now();
-      cloud_msg.header.frame_id = target_frame_;
-      pub_cloud_->publish(cloud_msg);
+    if (pub_pointcloud_ && output.merged_cloud && pub_cloud_) {
+      pub_cloud_->publish(*output.merged_cloud);
     }
 
     if (pub_self_filter_markers_ && pub_markers_) {
@@ -291,16 +339,18 @@ private:
       pub_markers_->publish(marker_array);
     }
 
-    auto scan = std::make_shared<sensor_msgs::msg::LaserScan>();
-    scan->header.stamp = now();
-    scan->header.frame_id = "laser";
-    scan->angle_min = scan_cfg_.angle_min;
-    scan->angle_max = scan_cfg_.angle_max;
-    scan->angle_increment = scan_cfg_.angle_increment;
-    scan->range_min = self_filter_config_.base_radius;
-    scan->range_max = scan_cfg_.range_max;
-    scan->ranges = output.ranges;
-    pub_->publish(*scan);
+    if (pub_laserscan_ && pub_) {
+      auto scan = std::make_shared<sensor_msgs::msg::LaserScan>();
+      scan->header.stamp = now();
+      scan->header.frame_id = "laser";
+      scan->angle_min = scan_cfg_.angle_min;
+      scan->angle_max = scan_cfg_.angle_max;
+      scan->angle_increment = scan_cfg_.angle_increment;
+      scan->range_min = self_filter_config_.base_radius;
+      scan->range_max = scan_cfg_.range_max;
+      scan->ranges = output.ranges;
+      pub_->publish(*scan);
+    }
   }
 
   rcl_interfaces::msg::SetParametersResult onParameterChange(
@@ -320,6 +370,18 @@ private:
           result.successful = false;
           result.reason = ex.what();
         }
+      } else if (name == "enable_self_robot_filter") {
+        enable_self_robot_filter_ = param.as_bool();
+        configurePipeline();
+      } else if (name == "enable_region_filter") {
+        enable_region_filter_ = param.as_bool();
+        configurePipeline();
+      } else if (name == "enable_voxel_sor_filter") {
+        enable_voxel_sor_filter_ = param.as_bool();
+        configurePipeline();
+      } else if (name == "enable_floor_ransac_filter") {
+        enable_floor_ransac_filter_ = param.as_bool();
+        configurePipeline();
       } else if (name == "z_min") {
         pipeline_config_.region.z_min = static_cast<float>(param.as_double());
         pipeline_.setConfig(pipeline_config_);
@@ -368,17 +430,23 @@ private:
       } else if (name == "speckle_range_tolerance") {
         pipeline_config_.speckle_range_tolerance = static_cast<float>(param.as_double());
         pipeline_.setConfig(pipeline_config_);
-      } else if (name == "pub_pc") {
-        pub_pc_ = param.as_bool();
-        if (pub_pc_) {
+      } else if (name == "pub_laserscan") {
+        pub_laserscan_ = param.as_bool();
+        setupPublishers();
+      } else if (name == "pub_pointcloud") {
+        pub_pointcloud_ = param.as_bool();
+        setupPublishers();
+      } else if (name == "pointcloud_topic") {
+        pointcloud_topic_ = param.as_string();
+        if (pub_pointcloud_) {
           pub_cloud_ = create_publisher<sensor_msgs::msg::PointCloud2>(
-            "/filtered_points", rclcpp::SensorDataQoS());
-        } else {
-          pub_cloud_.reset();
+            pointcloud_topic_, rclcpp::SensorDataQoS());
         }
       } else if (name == "output_topic") {
         scan_topic_ = param.as_string();
-        pub_ = create_publisher<sensor_msgs::msg::LaserScan>(scan_topic_, rclcpp::SensorDataQoS());
+        if (pub_laserscan_) {
+          pub_ = create_publisher<sensor_msgs::msg::LaserScan>(scan_topic_, rclcpp::SensorDataQoS());
+        }
       } else if (name == "frame_id" || name == "arm_line_start_frame" ||
         name == "arm_line_start_height_frame" || name == "arm_line_end_frame" ||
         name == "arm_shoulder_box_frame" || name == "wrist_chain_frames" ||
@@ -420,13 +488,19 @@ private:
   std::string lidar1_frame_;
   std::string lidar2_frame_;
   std::string scan_topic_;
+  std::string pointcloud_topic_;
   std::string target_frame_;
   std::string self_filter_markers_topic_;
 
   Eigen::Matrix4f tf_lidar1_;
   Eigen::Matrix4f tf_lidar2_;
   bool tf_available_{false};
-  bool pub_pc_{false};
+  bool pub_laserscan_{true};
+  bool pub_pointcloud_{false};
+  bool enable_self_robot_filter_{true};
+  bool enable_region_filter_{true};
+  bool enable_voxel_sor_filter_{false};
+  bool enable_floor_ransac_filter_{false};
   bool pub_self_filter_markers_{false};
 };
 

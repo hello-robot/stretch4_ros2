@@ -4,13 +4,15 @@ Shared YAML under this directory configures the dual-lidar pipeline, robot self-
 
 ## Point filter order (single pass per lidar point)
 
-In `dual_lidar_pipeline.cpp` each point is transformed to `base_footprint`, then:
+In `dual_lidar_pipeline.cpp` each point is transformed to `base_footprint`, then (only if the stage is enabled):
 
-1. **Region filter** — cheap height/range crop (`z_min`, `z_max`, `range_max` from `dual_lidar_filter.yaml`).
-2. **Self-filter spatial gate** — cheap XY cylinder (+ optional Z band) from `robot_self_filter.yaml`.
-3. **Robot self-filter geometry** — expensive TF-driven volumes (base, arm, shoulder, wrist, attachment) only for points inside the gate.
+1. **Region filter** — height/range crop (`z_min`, `z_max`, `range_max`).
+2. **Self-filter spatial gate** — cheap XY cylinder (+ optional Z band).
+3. **Robot self-filter geometry** — TF-driven volumes (base, arm, shoulder, wrist, attachment) inside the gate.
 
-Far points skip step 3 and remain as obstacles. Region and gate are different jobs: region shapes the scan; gate limits where robot geometry runs.
+Optional **VoxelSor** runs once on the compacted cloud per lidar. **FloorRansac** applies during LaserScan projection when enabled.
+
+Output modes: `pub_laserscan` only uses a fast xyz path; `pub_pointcloud` preserves all `PointCloud2` fields (ring, timestamp). Both toggles on share one field-preserving filter pass; scan is projected from the merged cloud.
 
 ## Spatial gate vs other radii
 

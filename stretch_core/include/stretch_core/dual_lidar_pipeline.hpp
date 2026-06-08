@@ -5,6 +5,7 @@
 
 #include <rclcpp/logger.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
+#include <std_msgs/msg/header.hpp>
 #include <sensor_msgs/point_cloud2_iterator.hpp>
 
 #include <cmath>
@@ -47,7 +48,7 @@ struct PipelineOutput
 {
   std::vector<float> ranges;
   std::vector<int> hit_counts;
-  pcl::PointCloud<pcl::PointXYZ>::Ptr debug_cloud;
+  std::optional<sensor_msgs::msg::PointCloud2> merged_cloud;
 };
 
 class DualLidarPipeline
@@ -63,11 +64,20 @@ public:
     const Eigen::Matrix4f & tf_lidar2,
     RobotSelfFilter & self_filter,
     const ScanProjectionConfig & scan_cfg,
-    bool build_debug_cloud,
+    bool pub_laserscan,
+    bool pub_pointcloud,
+    const std_msgs::msg::Header & output_header,
     rclcpp::Logger logger) const;
 
 private:
-  pcl::PointCloud<pcl::PointXYZ>::Ptr extractAndPreFilter(
+  bool passesPointFilters(const Eigen::Vector3f & point, RobotSelfFilter & self_filter) const;
+
+  pcl::PointCloud<pcl::PointXYZ>::Ptr filterAndCompactXyz(
+    const sensor_msgs::msg::PointCloud2::ConstSharedPtr & msg,
+    const Eigen::Matrix4f & tf_matrix,
+    RobotSelfFilter & self_filter) const;
+
+  sensor_msgs::msg::PointCloud2 filterAndCompactPc2(
     const sensor_msgs::msg::PointCloud2::ConstSharedPtr & msg,
     const Eigen::Matrix4f & tf_matrix,
     RobotSelfFilter & self_filter) const;
@@ -76,12 +86,20 @@ private:
     const pcl::PointCloud<pcl::PointXYZ>::Ptr & cloud,
     const std::optional<std::array<float, 4>> & floor_coeffs,
     const ScanProjectionConfig & scan_cfg,
-    bool build_debug_cloud,
+    PipelineOutput & output) const;
+
+  void projectPointsFromPointCloud2(
+    const sensor_msgs::msg::PointCloud2 & cloud,
+    const std::optional<std::array<float, 4>> & floor_coeffs,
+    const ScanProjectionConfig & scan_cfg,
     PipelineOutput & output) const;
 
   void applySpeckleFilter(
     const ScanProjectionConfig & scan_cfg,
     PipelineOutput & output) const;
+
+  pcl::PointCloud<pcl::PointXYZ>::Ptr pointCloud2ToXyz(
+    const sensor_msgs::msg::PointCloud2 & cloud) const;
 
   DualLidarPipelineConfig config_;
   PipelineStages stages_{0};

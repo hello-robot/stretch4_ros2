@@ -41,6 +41,7 @@ set(lidar_filter_lib_sources
   src/robot_self_filter.cpp
   src/voxel_sor_filter.cpp
   src/floor_plane_filter.cpp
+  src/pointcloud2_utils.cpp
   src/dual_lidar_pipeline.cpp
 )
 
