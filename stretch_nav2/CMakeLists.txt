@@ -39,6 +39,7 @@ install(PROGRAMS
   stretch_nav2/switch_controller_config.py
   stretch_nav2/binary_filter_switch.py
   stretch_nav2/global_plan_demo.py
+  stretch_nav2/gripper_interceptor.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
