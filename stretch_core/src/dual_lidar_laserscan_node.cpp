@@ -120,7 +120,6 @@ private:
     declare_parameter("z_min", 0.135);
     declare_parameter("z_max", 1.5);
     declare_parameter("range_max", 30.0);
-    declare_parameter("range_min", 0.25);
 
     stretch_core::declareRobotSelfFilterParameters(*this);
     declare_parameter("pub_self_filter_markers", false);
@@ -189,14 +188,6 @@ private:
   void loadSelfFilterParams()
   {
     self_filter_config_ = stretch_core::loadRobotSelfFilterConfig(*this);
-    const double range_min = get_parameter("range_min").as_double();
-    if (std::abs(range_min - static_cast<double>(self_filter_config_.base_radius)) > 1e-4) {
-      RCLCPP_WARN(
-        get_logger(),
-        "range_min (%.3f) is deprecated; applying as base_radius.",
-        range_min);
-      self_filter_config_.base_radius = static_cast<float>(range_min);
-    }
     self_filter_.setConfig(self_filter_config_);
   }
 
@@ -395,8 +386,6 @@ private:
       {
         result.successful = false;
         result.reason = "Parameter cannot be changed at runtime.";
-      } else if (name == "range_min") {
-        RCLCPP_WARN(get_logger(), "range_min is deprecated; set base_radius instead.");
       } else {
         result.successful = false;
         result.reason = "Unknown parameter";
