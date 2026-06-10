@@ -383,7 +383,6 @@ class StretchDriver(Node):
         # Publish status
         self.robot.pull_status()
         robot_status = copy.deepcopy(self.robot.status) # get copy of the current robot status
-            
         # use current time as stamp
         current_clock = self.get_clock().now()
         current_time = current_clock.to_msg()
@@ -523,15 +522,17 @@ class StretchDriver(Node):
 
             if joint_status_key in ["wrist_roll", "wrist_pitch", "wrist_yaw", "stretch_gripper"]:
                 status = robot_status["end_of_arm"]
+                is_homed = bool(status[joint_status_key]['pos_calibrated'])
             else: 
                 status=robot_status
-    
+                is_homed = bool(status[joint_status_key]['motor']['pos_calibrated'])
+                is_runstopped = bool(status[joint_status_key]['motor']['runstop_on'])
+
             at_limit_msg.values.append(KeyValue(key=cg.name, value=f"{status[joint_status_key]["at_limit"]}"))
             soft_limits_msg.values.append(KeyValue(key=cg.name, value=f"{status[joint_status_key]["soft_motion_limits"]}"))
             braking_distance_msg.values.append(KeyValue(key=cg.name, value=f"{status[joint_status_key]["braking_distance"]}"))
-            is_homed_msg.values.append(KeyValue(key=cg.name, value=f"{status[joint_status_key]["is_homed"]}"))
-        
-        is_runstopped_msg.values.append(KeyValue(key="power_periph", value=f"{robot_status['power_periph']['runstop_event']}"))
+            is_homed_msg.values.append(KeyValue(key=cg.name, value=f"{is_homed}"))
+            is_runstopped_msg.values.append(KeyValue(key=cg.name, value=f"{is_runstopped}"))
 
         joint_state_diagnostics.status.append(is_runstopped_msg)
         joint_state_diagnostics.status.append(is_homed_msg)
