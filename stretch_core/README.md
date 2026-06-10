@@ -4,14 +4,9 @@
 
 ## Dual Hesai LiDAR filtering
 
-The `dual_lidar_laserscan` node (`pointcloud_to_laserscan`) fuses the left and right Hesai point clouds, runs a configurable filter pipeline, and can publish `/scan_filtered` (`LaserScan`) and/or `/lidar_points` (`PointCloud2` with ring/timestamp) in `base_footprint`.
+The `dual_lidar_laserscan` node (`pointcloud_to_laserscan`) fuses the left and right Hesai point clouds, runs a configurable filter pipeline, and always publishes `/scan_filtered` (`LaserScan`) in `base_footprint`.
 
-Output toggles (defaults: laserscan on, pointcloud off):
-
-- `pub_laserscan` — publish `LaserScan` on `output_topic` (default `/scan_filtered`)
-- `pub_pointcloud` — publish field-preserving merged cloud on `pointcloud_topic` (default `/lidar_points`)
-
-When only `pub_laserscan` is on, the pipeline uses a fast xyz-only path (no ring/timestamp copy). When `pub_pointcloud` is on, one field-preserving pass builds the merged cloud; LaserScan (if enabled) is projected from that same cloud.
+- `pub_pointcloud` — optional debug output: publish a filtered merged xyz cloud on `pointcloud_topic` (default `/lidar_pointcloud`, off by default)
 
 ### Filter pipeline
 
@@ -26,9 +21,9 @@ Processing is handled by `DualLidarPipeline`. Each stage runs only when enabled.
 | `none` | No filters |
 | `custom` | Use `enable_self_robot_filter`, `enable_region_filter`, `enable_voxel_sor_filter`, `enable_floor_ransac_filter` |
 
-For each lidar point (in `base_footprint`): optionally apply region crop, then a cheap spatial gate, then TF-driven robot geometry checks only inside that gate. Optional voxel/SOR denoises near-field points. LaserScan projection and speckle filtering run only when `pub_laserscan` is true.
+For each lidar point (in `base_footprint`): optionally apply region crop, then a cheap spatial gate, then TF-driven robot geometry checks only inside that gate. Optional voxel/SOR denoises near-field points, then points are projected to LaserScan with optional speckle filtering.
 
-Use `region` for mapping. Use `sor` for navigation. Use `self_voxel` with `pub_pointcloud:=true` for a filtered merged cloud without region crop.
+Use `region` for mapping. Use `sor` for navigation. Use `self_voxel` with `pub_pointcloud:=true` to visualize a filtered merged cloud without region crop.
 
 ### Launch
 

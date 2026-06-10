@@ -12,7 +12,7 @@ In `dual_lidar_pipeline.cpp` each point is transformed to `base_footprint`, then
 
 Optional **VoxelSor** runs once on the compacted cloud per lidar. **FloorRansac** applies during LaserScan projection when enabled.
 
-Output modes: `pub_laserscan` only uses a fast xyz path; `pub_pointcloud` preserves all `PointCloud2` fields (ring, timestamp). Both toggles on share one field-preserving filter pass; scan is projected from the merged cloud.
+The node always publishes `LaserScan` on `output_topic` (default `/scan_filtered`). Set `pub_pointcloud: true` to also publish a debug xyz `PointCloud2` on `pointcloud_topic`.
 
 ## Spatial gate vs other radii
 

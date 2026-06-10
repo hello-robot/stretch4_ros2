@@ -1,7 +1,5 @@
 #pragma once
 
-#include <sensor_msgs/msg/point_cloud2.hpp>
-
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
 
@@ -23,9 +21,6 @@ public:
 
   pcl::PointCloud<pcl::PointXYZ>::Ptr filter(
     const pcl::PointCloud<pcl::PointXYZ>::Ptr & cloud_in) const;
-
-  sensor_msgs::msg::PointCloud2 filterPointCloud2(
-    const sensor_msgs::msg::PointCloud2 & cloud_in) const;
 
 private:
   VoxelSorFilterConfig config_;

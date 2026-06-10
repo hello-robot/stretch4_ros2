@@ -2,11 +2,9 @@
   ros__parameters:
     # Pipeline preset: region | sor | sor_ransac | self_voxel | none | custom
     filter_type: region
-    # Publish LaserScan on output_topic (default true)
-    pub_laserscan: true
-    # Publish merged PointCloud2 with ring/timestamp on pointcloud_topic (default false)
+    # Debug only: publish filtered merged xyz cloud 
     pub_pointcloud: false
-    pointcloud_topic: /lidar_points
+    pointcloud_topic: /lidar_pointcloud
     # Used when filter_type is custom
     enable_self_robot_filter: true
     enable_region_filter: true

@@ -64,7 +64,6 @@ public:
     const Eigen::Matrix4f & tf_lidar2,
     RobotSelfFilter & self_filter,
     const ScanProjectionConfig & scan_cfg,
-    bool pub_laserscan,
     bool pub_pointcloud,
     const std_msgs::msg::Header & output_header,
     rclcpp::Logger logger) const;
@@ -77,29 +76,14 @@ private:
     const Eigen::Matrix4f & tf_matrix,
     RobotSelfFilter & self_filter) const;
 
-  sensor_msgs::msg::PointCloud2 filterAndCompactPc2(
-    const sensor_msgs::msg::PointCloud2::ConstSharedPtr & msg,
-    const Eigen::Matrix4f & tf_matrix,
-    RobotSelfFilter & self_filter) const;
-
   void projectPointsFused(
     const pcl::PointCloud<pcl::PointXYZ>::Ptr & cloud,
-    const std::optional<std::array<float, 4>> & floor_coeffs,
-    const ScanProjectionConfig & scan_cfg,
-    PipelineOutput & output) const;
-
-  void projectPointsFromPointCloud2(
-    const sensor_msgs::msg::PointCloud2 & cloud,
-    const std::optional<std::array<float, 4>> & floor_coeffs,
     const ScanProjectionConfig & scan_cfg,
     PipelineOutput & output) const;
 
   void applySpeckleFilter(
     const ScanProjectionConfig & scan_cfg,
     PipelineOutput & output) const;
-
-  pcl::PointCloud<pcl::PointXYZ>::Ptr pointCloud2ToXyz(
-    const sensor_msgs::msg::PointCloud2 & cloud) const;
 
   DualLidarPipelineConfig config_;
   PipelineStages stages_{0};
