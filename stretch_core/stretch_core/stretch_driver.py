@@ -470,6 +470,8 @@ class StretchDriver(Node):
         at_limit_msg = DiagnosticStatus(name="at_limit")
         soft_limits_msg = DiagnosticStatus(name="soft_motion_limits")
         braking_distance_msg = DiagnosticStatus(name="braking_distance")
+        is_homed_msg = DiagnosticStatus(name="is_homed")
+        is_runstopped_msg = DiagnosticStatus(name="is_runstopped")
 
         for cg in self.joint_trajectory_action.command_groups:
             pos, vel, eff = cg.joint_state(robot_status)
@@ -527,7 +529,12 @@ class StretchDriver(Node):
             at_limit_msg.values.append(KeyValue(key=cg.name, value=f"{status[joint_status_key]["at_limit"]}"))
             soft_limits_msg.values.append(KeyValue(key=cg.name, value=f"{status[joint_status_key]["soft_motion_limits"]}"))
             braking_distance_msg.values.append(KeyValue(key=cg.name, value=f"{status[joint_status_key]["braking_distance"]}"))
+            is_homed_msg.values.append(KeyValue(key=cg.name, value=f"{status[joint_status_key]["is_homed"]}"))
+        
+        is_runstopped_msg.values.append(KeyValue(key="power_periph", value=f"{robot_status['power_periph']['runstop_event']}"))
 
+        joint_state_diagnostics.status.append(is_runstopped_msg)
+        joint_state_diagnostics.status.append(is_homed_msg)
         joint_state_diagnostics.status.append(at_limit_msg)
         joint_state_diagnostics.status.append(soft_limits_msg)
         joint_state_diagnostics.status.append(braking_distance_msg)
