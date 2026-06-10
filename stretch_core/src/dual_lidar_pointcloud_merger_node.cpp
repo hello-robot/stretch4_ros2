@@ -10,10 +10,12 @@
 #include <message_filters/synchronizer.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include <omp.h>
@@ -80,31 +82,179 @@ builtin_interfaces::msg::Time olderStamp(
   return (a.nanosec < b.nanosec) ? a : b;
 }
 
+struct PointFieldLayout
+{
+  int x_offset{-1};
+  int y_offset{-1};
+  int z_offset{-1};
+  uint32_t point_step{0};
+  bool valid{false};
+
+  bool xyzContiguous() const
+  {
+    return valid &&
+           y_offset == x_offset + static_cast<int>(sizeof(float)) &&
+           z_offset == y_offset + static_cast<int>(sizeof(float));
+  }
+
+  static PointFieldLayout fromCloud(const sensor_msgs::msg::PointCloud2 & cloud)
+  {
+    PointFieldLayout layout;
+    layout.x_offset = fieldOffset(cloud, "x");
+    layout.y_offset = fieldOffset(cloud, "y");
+    layout.z_offset = fieldOffset(cloud, "z");
+    layout.point_step = cloud.point_step;
+    layout.valid = layout.x_offset >= 0 && layout.y_offset >= 0 && layout.z_offset >= 0;
+    return layout;
+  }
+};
+
+struct LinearTransform3f
+{
+  float r00{1.0F};
+  float r01{0.0F};
+  float r02{0.0F};
+  float r10{0.0F};
+  float r11{1.0F};
+  float r12{0.0F};
+  float r20{0.0F};
+  float r21{0.0F};
+  float r22{1.0F};
+  float tx{0.0F};
+  float ty{0.0F};
+  float tz{0.0F};
+
+  static LinearTransform3f fromAffine(const Eigen::Affine3f & transform)
+  {
+    const auto & matrix = transform.matrix();
+    LinearTransform3f linear;
+    linear.r00 = matrix(0, 0);
+    linear.r01 = matrix(0, 1);
+    linear.r02 = matrix(0, 2);
+    linear.r10 = matrix(1, 0);
+    linear.r11 = matrix(1, 1);
+    linear.r12 = matrix(1, 2);
+    linear.r20 = matrix(2, 0);
+    linear.r21 = matrix(2, 1);
+    linear.r22 = matrix(2, 2);
+    linear.tx = matrix(0, 3);
+    linear.ty = matrix(1, 3);
+    linear.tz = matrix(2, 3);
+    return linear;
+  }
+
+  void transform(float x, float y, float z, float & out_x, float & out_y, float & out_z) const
+  {
+    out_x = r00 * x + r01 * y + r02 * z + tx;
+    out_y = r10 * x + r11 * y + r12 * z + ty;
+    out_z = r20 * x + r21 * y + r22 * z + tz;
+  }
+};
+
+sensor_msgs::msg::PointCloud2 voxelDownsample(
+  const sensor_msgs::msg::PointCloud2 & input,
+  const PointFieldLayout & layout,
+  const float leaf_size)
+{
+  sensor_msgs::msg::PointCloud2 output = input;
+  if (leaf_size <= 0.0F || !layout.valid) {
+    return output;
+  }
+
+  const size_t count = pointCount(input);
+  const size_t point_step = layout.point_step;
+  const float inv_leaf = 1.0F / leaf_size;
+
+  struct VoxelKey
+  {
+    int32_t x{0};
+    int32_t y{0};
+    int32_t z{0};
+  };
+
+  struct VoxelKeyHash
+  {
+    size_t operator()(const VoxelKey & key) const noexcept
+    {
+      return (static_cast<size_t>(key.x) * 73856093U) ^
+             (static_cast<size_t>(key.y) * 19349663U) ^
+             (static_cast<size_t>(key.z) * 83492791U);
+    }
+  };
+
+  struct VoxelKeyEqual
+  {
+    bool operator()(const VoxelKey & a, const VoxelKey & b) const noexcept
+    {
+      return a.x == b.x && a.y == b.y && a.z == b.z;
+    }
+  };
+
+  std::unordered_map<VoxelKey, size_t, VoxelKeyHash, VoxelKeyEqual> occupied;
+  occupied.reserve(count / 8U);
+
+  std::vector<size_t> kept;
+  kept.reserve(count / 8U);
+
+  for (size_t i = 0; i < count; ++i) {
+    const auto * src = input.data.data() + i * point_step;
+    float x = 0.0F;
+    float y = 0.0F;
+    float z = 0.0F;
+    std::memcpy(&x, src + layout.x_offset, sizeof(float));
+    std::memcpy(&y, src + layout.y_offset, sizeof(float));
+    std::memcpy(&z, src + layout.z_offset, sizeof(float));
+
+    const VoxelKey key{
+      static_cast<int32_t>(std::floor(x * inv_leaf)),
+      static_cast<int32_t>(std::floor(y * inv_leaf)),
+      static_cast<int32_t>(std::floor(z * inv_leaf)),
+    };
+
+    if (occupied.emplace(key, i).second) {
+      kept.push_back(i);
+    }
+  }
+
+  output.height = 1;
+  output.width = static_cast<uint32_t>(kept.size());
+  output.row_step = output.point_step * output.width;
+  output.data.resize(output.row_step);
+
+  for (size_t out_index = 0; out_index < kept.size(); ++out_index) {
+    std::memcpy(
+      output.data.data() + out_index * point_step,
+      input.data.data() + kept[out_index] * point_step,
+      point_step);
+  }
+
+  return output;
+}
+
 bool appendTransformedCloud(
   const sensor_msgs::msg::PointCloud2 & input,
-  const Eigen::Affine3f & transform,
+  const PointFieldLayout & layout,
+  const LinearTransform3f & transform,
   sensor_msgs::msg::PointCloud2 & output,
   const size_t output_point_offset)
 {
-  const int x_offset = fieldOffset(input, "x");
-  const int y_offset = fieldOffset(input, "y");
-  const int z_offset = fieldOffset(input, "z");
-  if (x_offset < 0 || y_offset < 0 || z_offset < 0) {
+  if (!layout.valid || layout.point_step != input.point_step) {
     return false;
   }
 
   const size_t count = pointCount(input);
+  const size_t point_step = layout.point_step;
+  const int x_offset = layout.x_offset;
+  const int y_offset = layout.y_offset;
+  const int z_offset = layout.z_offset;
+  const bool xyz_contiguous = layout.xyzContiguous();
+  const size_t xyz_end = static_cast<size_t>(z_offset) + sizeof(float);
 
-  // Multi-thread the point transformations
   #pragma omp parallel for
   for (size_t i = 0; i < count; ++i) {
-    const auto * src = input.data.data() + i * input.point_step;
-    auto * dst = output.data.data() + (output_point_offset + i) * output.point_step;
-    
-    // Copy all fields (intensity, ring, timestamp, etc.)
-    std::memcpy(dst, src, input.point_step);
+    const auto * src = input.data.data() + i * point_step;
+    auto * dst = output.data.data() + (output_point_offset + i) * point_step;
 
-    // Extract XYZ
     float x = 0.0F;
     float y = 0.0F;
     float z = 0.0F;
@@ -112,16 +262,28 @@ bool appendTransformedCloud(
     std::memcpy(&y, src + y_offset, sizeof(float));
     std::memcpy(&z, src + z_offset, sizeof(float));
 
-    // Apply transform
-    const Eigen::Vector3f transformed = transform * Eigen::Vector3f(x, y, z);
-    const float tx = transformed.x();
-    const float ty = transformed.y();
-    const float tz = transformed.z();
-    
-    // Overwrite XYZ with transformed coordinates
-    std::memcpy(dst + x_offset, &tx, sizeof(float));
-    std::memcpy(dst + y_offset, &ty, sizeof(float));
-    std::memcpy(dst + z_offset, &tz, sizeof(float));
+    float tx = 0.0F;
+    float ty = 0.0F;
+    float tz = 0.0F;
+    transform.transform(x, y, z, tx, ty, tz);
+
+    if (xyz_contiguous) {
+      const size_t head_bytes = static_cast<size_t>(x_offset);
+      if (head_bytes > 0) {
+        std::memcpy(dst, src, head_bytes);
+      }
+      std::memcpy(dst + x_offset, &tx, sizeof(float));
+      std::memcpy(dst + y_offset, &ty, sizeof(float));
+      std::memcpy(dst + z_offset, &tz, sizeof(float));
+      if (xyz_end < point_step) {
+        std::memcpy(dst + xyz_end, src + xyz_end, point_step - xyz_end);
+      }
+    } else {
+      std::memcpy(dst, src, point_step);
+      std::memcpy(dst + x_offset, &tx, sizeof(float));
+      std::memcpy(dst + y_offset, &ty, sizeof(float));
+      std::memcpy(dst + z_offset, &tz, sizeof(float));
+    }
   }
 
   return true;
@@ -162,6 +324,7 @@ public:
     declare_parameter<std::string>("ring_field", "ring");
     declare_parameter<std::string>("timestamp_field", "timestamp");
     declare_parameter<double>("sync_slop_sec", 0.05);
+    declare_parameter<double>("merger_voxel_leaf_size", 0.0);
 
     const auto left_topic = get_parameter("left_topic").as_string();
     const auto right_topic = get_parameter("right_topic").as_string();
@@ -170,8 +333,10 @@ public:
     ring_field_ = get_parameter("ring_field").as_string();
     timestamp_field_ = get_parameter("timestamp_field").as_string();
     const double sync_slop = get_parameter("sync_slop_sec").as_double();
+    merger_voxel_leaf_size_ = get_parameter("merger_voxel_leaf_size").as_double();
 
     rclcpp::SensorDataQoS qos;
+    // qos.keep_last(1);
 
     pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(output_topic, qos);
 
@@ -192,6 +357,12 @@ public:
       "Merging %s + %s -> %s in %s (preserving '%s' and '%s' per-point fields)",
       left_topic.c_str(), right_topic.c_str(), output_topic.c_str(),
       target_frame_.c_str(), ring_field_.c_str(), timestamp_field_.c_str());
+    if (merger_voxel_leaf_size_ > 0.0) {
+      RCLCPP_INFO(
+        get_logger(),
+        "Voxel downsample enabled: merger_voxel_leaf_size=%.3f m in lidar frame (before transform)",
+        merger_voxel_leaf_size_);
+    }
   }
 
 private:
@@ -214,7 +385,10 @@ private:
     return true;
   }
 
-  bool getCachedTransform(const std::string& source_frame, Eigen::Affine3f& transform, bool& is_ready)
+  bool cacheTransform(
+    const std::string & source_frame,
+    LinearTransform3f & linear_out,
+    bool & is_ready)
   {
     if (is_ready) {
       return true;
@@ -224,7 +398,9 @@ private:
       // Use TimePointZero to grab the latest available static transform instantly without blocking
       const auto tf_stamped = tf_buffer_.lookupTransform(
         target_frame_, source_frame, tf2::TimePointZero);
-      transform = tf2::transformToEigen(tf_stamped.transform).cast<float>();
+      const Eigen::Affine3f affine =
+        tf2::transformToEigen(tf_stamped.transform).cast<float>();
+      linear_out = LinearTransform3f::fromAffine(affine);
       is_ready = true;
       RCLCPP_INFO(get_logger(), "Successfully cached static transform for %s", source_frame.c_str());
       return true;
@@ -241,14 +417,29 @@ private:
     const sensor_msgs::msg::PointCloud2::ConstSharedPtr & left,
     const sensor_msgs::msg::PointCloud2::ConstSharedPtr & right)
   {
-    if (!logged_fields_) {
-      logged_fields_ = true;
-      RCLCPP_INFO(get_logger(), "Left cloud fields: [%s]", fieldNames(*left).c_str());
-      RCLCPP_INFO(get_logger(), "Right cloud fields: [%s]", fieldNames(*right).c_str());
-    }
-
     if (!hasRequiredFields(*left) || !hasRequiredFields(*right)) {
       return;
+    }
+
+    if (!field_layout_cached_) {
+      field_layout_ = PointFieldLayout::fromCloud(*left);
+      if (!field_layout_.valid) {
+        RCLCPP_WARN_THROTTLE(
+          get_logger(), *get_clock(), 5000,
+          "Could not cache x/y/z field offsets from incoming point cloud");
+        return;
+      }
+      field_layout_cached_ = true;
+      RCLCPP_INFO(get_logger(), "Left cloud fields: [%s]", fieldNames(*left).c_str());
+      RCLCPP_INFO(get_logger(), "Right cloud fields: [%s]", fieldNames(*right).c_str());
+      RCLCPP_INFO(
+        get_logger(),
+        "Cached point layout: point_step=%u x=%d y=%d z=%d contiguous_xyz=%s",
+        field_layout_.point_step,
+        field_layout_.x_offset,
+        field_layout_.y_offset,
+        field_layout_.z_offset,
+        field_layout_.xyzContiguous() ? "true" : "false");
     }
 
     if (left->point_step != right->point_step || !fieldsMatch(left->fields, right->fields)) {
@@ -259,20 +450,46 @@ private:
     }
 
     // Try to get transforms from cache (or populate cache if first run)
-    if (!getCachedTransform(left->header.frame_id, left_transform_, left_tf_ready_) ||
-        !getCachedTransform(right->header.frame_id, right_transform_, right_tf_ready_)) 
+    if (!cacheTransform(left->header.frame_id, left_tf_linear_, left_tf_ready_) ||
+        !cacheTransform(right->header.frame_id, right_tf_linear_, right_tf_ready_))
     {
       return; // Skip this frame until static transforms are published and cached
+    }
+
+    const sensor_msgs::msg::PointCloud2 * left_in = left.get();
+    const sensor_msgs::msg::PointCloud2 * right_in = right.get();
+    sensor_msgs::msg::PointCloud2 left_voxel;
+    sensor_msgs::msg::PointCloud2 right_voxel;
+    if (merger_voxel_leaf_size_ > 0.0) {
+      left_voxel = voxelDownsample(
+        *left, field_layout_, static_cast<float>(merger_voxel_leaf_size_));
+      right_voxel = voxelDownsample(
+        *right, field_layout_, static_cast<float>(merger_voxel_leaf_size_));
+      left_in = &left_voxel;
+      right_in = &right_voxel;
+
+      if (!logged_voxel_stats_) {
+        logged_voxel_stats_ = true;
+        RCLCPP_INFO(
+          get_logger(),
+          "Voxel downsample: left %zu -> %u, right %zu -> %u points (leaf=%.3f m)",
+          pointCount(*left),
+          left_voxel.width,
+          pointCount(*right),
+          right_voxel.width,
+          merger_voxel_leaf_size_);
+      }
     }
 
     std_msgs::msg::Header header;
     header.frame_id = target_frame_;
     header.stamp = olderStamp(left->header.stamp, right->header.stamp);
 
-    auto merged = makeMergedCloudSkeleton(*left, *right, header);
-    
-    if (!appendTransformedCloud(*left, left_transform_, merged, 0) ||
-        !appendTransformedCloud(*right, right_transform_, merged, pointCount(*left)))
+    auto merged = makeMergedCloudSkeleton(*left_in, *right_in, header);
+
+    if (!appendTransformedCloud(*left_in, field_layout_, left_tf_linear_, merged, 0) ||
+        !appendTransformedCloud(
+        *right_in, field_layout_, right_tf_linear_, merged, pointCount(*left_in)))
     {
       RCLCPP_WARN_THROTTLE(
         get_logger(), *get_clock(), 5000,
@@ -287,16 +504,18 @@ private:
     pub_->publish(merged);
   }
 
-  bool logged_fields_{false};
+  bool field_layout_cached_{false};
+  bool logged_voxel_stats_{false};
+  double merger_voxel_leaf_size_{0.0};
+  PointFieldLayout field_layout_;
   std::string target_frame_;
   std::string ring_field_;
   std::string timestamp_field_;
 
-  // TF Caching variables
   bool left_tf_ready_{false};
   bool right_tf_ready_{false};
-  Eigen::Affine3f left_transform_;
-  Eigen::Affine3f right_transform_;
+  LinearTransform3f left_tf_linear_;
+  LinearTransform3f right_tf_linear_;
 
   tf2_ros::Buffer tf_buffer_;
   tf2_ros::TransformListener tf_listener_;
