@@ -36,7 +36,6 @@ def launch_setup(context, *args, **kwargs):
         yaml.dump(cfg, tmp_file, sort_keys=False)
         temp_yaml_path = tmp_file.name
 
-    pub_laserscan = LaunchConfiguration('pub_laserscan').perform(context).lower() == 'true'
     pub_pointcloud = LaunchConfiguration('pub_pointcloud').perform(context).lower() == 'true'
 
     hesai_node = Node(
@@ -60,7 +59,6 @@ def launch_setup(context, *args, **kwargs):
                 'filter_type': filter_type,
                 'lidar1_frame': 'lidar_right_link',
                 'lidar2_frame': 'lidar_left_link',
-                'pub_laserscan': pub_laserscan,
                 'pub_pointcloud': pub_pointcloud,
             },
         ],
@@ -127,7 +125,6 @@ def generate_launch_description():
         description='Self-filter attachment preset: sg4, pg4, tablet, or nil.',
     )
 
-    pub_laserscan_arg = DeclareLaunchArgument('pub_laserscan', default_value='true', description='Publish a laserscan from the filter node.')
     pub_pointcloud_arg = DeclareLaunchArgument('pub_pointcloud', default_value='false', description='Publish a pointcloud from the filter node.')
 
     return LaunchDescription([
@@ -135,7 +132,6 @@ def generate_launch_description():
         tool_preset_arg,
         print_filter_cmd,
         error_log,
-        pub_laserscan_arg,
         pub_pointcloud_arg,
         use_rviz_arg,
         launch_filter_node_arg,
