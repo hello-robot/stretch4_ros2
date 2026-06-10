@@ -1,6 +1,6 @@
 from ament_index_python.packages import get_package_share_directory
 from launch.substitutions import LaunchConfiguration, PythonExpression
-from launch.actions import DeclareLaunchArgument, LogInfo, OpaqueFunction, UnsetEnvironmentVariable
+from launch.actions import DeclareLaunchArgument, LogInfo, OpaqueFunction
 from launch.conditions import IfCondition, UnlessCondition
 from launch import LaunchDescription
 from launch_ros.actions import Node
@@ -36,6 +36,9 @@ def launch_setup(context, *args, **kwargs):
         yaml.dump(cfg, tmp_file, sort_keys=False)
         temp_yaml_path = tmp_file.name
 
+    pub_laserscan = LaunchConfiguration('pub_laserscan').perform(context).lower() == 'true'
+    pub_pointcloud = LaunchConfiguration('pub_pointcloud').perform(context).lower() == 'true'
+
     hesai_node = Node(
         package='hesai_ros_driver',
         executable='hesai_ros_driver_node',
@@ -57,6 +60,8 @@ def launch_setup(context, *args, **kwargs):
                 'filter_type': filter_type,
                 'lidar1_frame': 'lidar_right_link',
                 'lidar2_frame': 'lidar_left_link',
+                'pub_laserscan': pub_laserscan,
+                'pub_pointcloud': pub_pointcloud,
             },
         ],
         condition=IfCondition(launch_filter_node),
@@ -73,12 +78,13 @@ def launch_setup(context, *args, **kwargs):
         condition=IfCondition(use_rviz),
     )
 
+    os.environ.pop('QT_QPA_PLATFORM_PLUGIN_PATH', None)
+    os.environ.pop('QT_QPA_FONTDIR', None)
+    os.environ.pop('QT_PLUGIN_PATH', None)
+
     return [
         hesai_node,
         dual_lidar_filter_node,
-        UnsetEnvironmentVariable('QT_QPA_PLATFORM_PLUGIN_PATH'),
-        UnsetEnvironmentVariable('QT_QPA_FONTDIR'),
-        UnsetEnvironmentVariable('QT_PLUGIN_PATH'),
         rviz_node,
     ]
 
@@ -121,11 +127,16 @@ def generate_launch_description():
         description='Self-filter attachment preset: sg4, pg4, tablet, or nil.',
     )
 
+    pub_laserscan_arg = DeclareLaunchArgument('pub_laserscan', default_value='true', description='Publish a laserscan from the filter node.')
+    pub_pointcloud_arg = DeclareLaunchArgument('pub_pointcloud', default_value='false', description='Publish a pointcloud from the filter node.')
+
     return LaunchDescription([
         filter_type_arg,
         tool_preset_arg,
         print_filter_cmd,
         error_log,
+        pub_laserscan_arg,
+        pub_pointcloud_arg,
         use_rviz_arg,
         launch_filter_node_arg,
         OpaqueFunction(function=launch_setup),

@@ -84,11 +84,14 @@ sensor_msgs::msg::PointCloud2 mergePointClouds(
   merged.data.resize(merged.row_step);
 
   const size_t left_count = pointCount(left);
-  for (size_t i = 0; i < left_count; ++i) {
-    copyPoint(left, i, merged, i);
+  const size_t right_count = pointCount(right);
+  const size_t left_bytes = left_count * left.point_step;
+  const size_t right_bytes = right_count * right.point_step;
+  if (left_bytes > 0) {
+    std::memcpy(merged.data.data(), left.data.data(), left_bytes);
   }
-  for (size_t i = 0; i < pointCount(right); ++i) {
-    copyPoint(right, i, merged, left_count + i);
+  if (right_bytes > 0) {
+    std::memcpy(merged.data.data() + left_bytes, right.data.data(), right_bytes);
   }
 
   return merged;

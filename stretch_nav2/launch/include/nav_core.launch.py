@@ -21,6 +21,11 @@ def generate_launch_description():
                                             'maps', 'dual_ds3.yaml']),
         description='Full path to the map.yaml file to use for navigation')
 
+    use_localization = DeclareLaunchArgument(
+        'use_localization', default_value='True',
+        description='Whether to enable localization or not'
+    )
+
     use_slam = DeclareLaunchArgument(
         'use_slam',
         default_value='False',
@@ -70,6 +75,7 @@ def generate_launch_description():
             'slam': LaunchConfiguration('use_slam'),
             'params_file': LaunchConfiguration('params_file'),
             'use_composition': LaunchConfiguration('use_composition'),
+            'use_localization': LaunchConfiguration('use_localization'),     
         }.items())
 
     rviz_launch = IncludeLaunchDescription(
@@ -82,6 +88,7 @@ def generate_launch_description():
     return LaunchDescription([
         map_path_param,
         use_slam,
+        use_localization,
         rviz_param,
         rviz_config_param,
         params_file,

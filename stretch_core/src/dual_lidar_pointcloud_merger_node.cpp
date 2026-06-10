@@ -236,7 +236,8 @@ bool appendTransformedCloud(
   const PointFieldLayout & layout,
   const LinearTransform3f & transform,
   sensor_msgs::msg::PointCloud2 & output,
-  const size_t output_point_offset)
+  const size_t output_point_offset,
+  const double filter_radius)
 {
   if (!layout.valid || layout.point_step != input.point_step) {
     return false;
@@ -249,6 +250,7 @@ bool appendTransformedCloud(
   const int z_offset = layout.z_offset;
   const bool xyz_contiguous = layout.xyzContiguous();
   const size_t xyz_end = static_cast<size_t>(z_offset) + sizeof(float);
+  const float radius_sq = static_cast<float>(filter_radius * filter_radius);
 
   #pragma omp parallel for
   for (size_t i = 0; i < count; ++i) {
@@ -266,6 +268,13 @@ bool appendTransformedCloud(
     float ty = 0.0F;
     float tz = 0.0F;
     transform.transform(x, y, z, tx, ty, tz);
+
+    if (radius_sq > 0.0f && ((tx * tx) + (ty * ty) < radius_sq)) {
+      float nan_val = std::numeric_limits<float>::quiet_NaN();
+      tx = nan_val;
+      ty = nan_val;
+      tz = nan_val;
+    }
 
     if (xyz_contiguous) {
       const size_t head_bytes = static_cast<size_t>(x_offset);
@@ -292,7 +301,8 @@ bool appendTransformedCloud(
 sensor_msgs::msg::PointCloud2 makeMergedCloudSkeleton(
   const sensor_msgs::msg::PointCloud2 & left,
   const sensor_msgs::msg::PointCloud2 & right,
-  const std_msgs::msg::Header & header)
+  const std_msgs::msg::Header & header,
+  const double filter_radius)
 {
   sensor_msgs::msg::PointCloud2 merged;
   merged.header = header;
@@ -302,7 +312,8 @@ sensor_msgs::msg::PointCloud2 makeMergedCloudSkeleton(
   merged.width = pointCount(left) + pointCount(right);
   merged.row_step = merged.point_step * merged.width;
   merged.is_bigendian = left.is_bigendian;
-  merged.is_dense = left.is_dense && right.is_dense;
+  //If filtering is active, it's false (to support Nan). Otherwise, match the input clouds.
+  merged.is_dense = (filter_radius > 0.0) ? false : (left.is_dense && right.is_dense);
   merged.data.resize(merged.row_step);
   return merged;
 }
@@ -325,6 +336,7 @@ public:
     declare_parameter<std::string>("timestamp_field", "timestamp");
     declare_parameter<double>("sync_slop_sec", 0.05);
     declare_parameter<double>("merger_voxel_leaf_size", 0.0);
+    declare_parameter<double>("cylinder_filter_radius", 0.3);
 
     const auto left_topic = get_parameter("left_topic").as_string();
     const auto right_topic = get_parameter("right_topic").as_string();
@@ -334,6 +346,7 @@ public:
     timestamp_field_ = get_parameter("timestamp_field").as_string();
     const double sync_slop = get_parameter("sync_slop_sec").as_double();
     merger_voxel_leaf_size_ = get_parameter("merger_voxel_leaf_size").as_double();
+    cylinder_filter_radius_ = get_parameter("cylinder_filter_radius").as_double();
 
     rclcpp::SensorDataQoS qos;
     // qos.keep_last(1);
@@ -485,11 +498,11 @@ private:
     header.frame_id = target_frame_;
     header.stamp = olderStamp(left->header.stamp, right->header.stamp);
 
-    auto merged = makeMergedCloudSkeleton(*left_in, *right_in, header);
+    auto merged = makeMergedCloudSkeleton(*left_in, *right_in, header, cylinder_filter_radius_);
 
-    if (!appendTransformedCloud(*left_in, field_layout_, left_tf_linear_, merged, 0) ||
+    if (!appendTransformedCloud(*left_in, field_layout_, left_tf_linear_, merged, 0, cylinder_filter_radius_) ||
         !appendTransformedCloud(
-        *right_in, field_layout_, right_tf_linear_, merged, pointCount(*left_in)))
+        *right_in, field_layout_, right_tf_linear_, merged, pointCount(*left_in), cylinder_filter_radius_))
     {
       RCLCPP_WARN_THROTTLE(
         get_logger(), *get_clock(), 5000,
@@ -511,6 +524,7 @@ private:
   std::string target_frame_;
   std::string ring_field_;
   std::string timestamp_field_;
+  double cylinder_filter_radius_{0.0};
 
   bool left_tf_ready_{false};
   bool right_tf_ready_{false};
