@@ -317,7 +317,8 @@ private:
       return;
     }
 
-    const tf2::TimePoint tf_time = lidarTfTime();
+    // const tf2::TimePoint tf_time = lidarTfTime();
+    const tf2::TimePoint tf_time = tf2::TimePointZero;
     const bool force_markers = pub_self_filter_markers_;
     updateSelfFilterTransforms(tf_time, force_markers);
 
