@@ -511,7 +511,6 @@ class StretchDriver(Node):
                 status_dict = robot_status["end_of_arm"][joint_status_key]
                 is_homed = bool(status_dict.get('pos_calibrated', False))
                 is_homing = bool(status_dict.get('is_homing', False))
-                is_runstopped = False # EOA doesn't have individual runstop
             else: 
                 status_dict = robot_status[joint_status_key]
                 is_homed = bool(status_dict['motor'].get('pos_calibrated', False))
