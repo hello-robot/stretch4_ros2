@@ -722,11 +722,11 @@ class StretchMujocoDriver(Node):
             self.camera_compressed_publishers[camera.name].publish(ros_image_compressed)
 
             if camera.is_depth:
-                if camera == StretchCameras.cam_gripper_depth:
+                if camera == StretchCameras.cam_gripper_se4_stereo_depth:
                     pointcloud_msg = create_pointcloud_rgb_msg(
                         camera_info_msg=camera_info,
                         rgb_image=camera_data.get_camera_data(
-                            StretchCameras.cam_gripper_rgb
+                            StretchCameras.cam_gripper_se4_stereo_depth
                         ),
                         depth_image=frame,
                     )
@@ -1461,9 +1461,11 @@ def get_camera_topic_name(camera: StretchCameras):
     """
     Topic names to match the camera topics published by the real Stretch robot.
     """
-    if camera == StretchCameras.cam_gripper_rgb:
-        return "/gripper_camera/image_raw"
-    if camera == StretchCameras.cam_gripper_depth:
+    if camera == StretchCameras.cam_gripper_se4_left_rgb:
+        return "/gripper_camera/left/image_raw"
+    if camera == StretchCameras.cam_gripper_se4_right_rgb:
+        return "/gripper_camera/right/image_raw"
+    if camera == StretchCameras.cam_gripper_se4_stereo_depth:
         return "/gripper_camera/depth/image_rect_raw"
     if camera == StretchCameras.cam_nav_rgb_se4_left:
         return "/cameras_head/left/image_raw"
@@ -1484,9 +1486,11 @@ def get_camera_info_topic_name(camera: StretchCameras):
     """
     Topic names to match the camera_info topics published by the real Stretch robot.
     """
-    if camera == StretchCameras.cam_gripper_rgb:
-        return "/gripper_camera/camera_info"
-    if camera == StretchCameras.cam_gripper_depth:
+    if camera == StretchCameras.cam_gripper_se4_left_rgb:
+        return "/gripper_camera/left/camera_info"
+    if camera == StretchCameras.cam_gripper_se4_right_rgb:
+        return "/gripper_camera/right/camera_info"
+    if camera == StretchCameras.cam_gripper_se4_stereo_depth:
         return "/gripper_camera/depth/camera_info"
     if camera == StretchCameras.cam_nav_rgb_se4_left:
         return "/cameras_head/left/camera_info"
@@ -1507,7 +1511,7 @@ def get_camera_pointcloud_topic_name(camera: StretchCameras):
     """
     Topic names to match the pointcloud2 topics published by the real Stretch robot.
     """
-    if camera == StretchCameras.cam_gripper_depth:
+    if camera == StretchCameras.cam_gripper_se4_stereo_depth:
         return "/gripper_camera/depth/color/points"
     if camera == StretchCameras.cam_hemilidar_left:
         return "/lidar_points_left"
@@ -1522,11 +1526,12 @@ def get_camera_frame(camera: StretchCameras):
     """
     Matches the simulation camera with the optical frame on the robot urdf.
     """
-    if camera == StretchCameras.cam_gripper_rgb:
-        return "gripper_camera_color_optical_frame"
-    if camera == StretchCameras.cam_gripper_depth:
-        return "gripper_camera_color_optical_frame" # We don't have a depth optical frame in the URDF.
-        return "gripper_camera_depth_optical_frame"
+    if camera == StretchCameras.cam_gripper_se4_left_rgb:
+        return "gripper_left_camera_color_optical_frame"
+    if camera == StretchCameras.cam_gripper_se4_right_rgb:
+        return "gripper_right_camera_color_optical_frame"
+    if camera == StretchCameras.cam_gripper_se4_stereo_depth:
+        return "gripper_stereo_camera_color_optical_frame"
     if camera == StretchCameras.cam_nav_rgb_se4_left:
         return "camera_left_optical_link"
     if camera == StretchCameras.cam_nav_rgb_se4_right:
@@ -1536,7 +1541,6 @@ def get_camera_frame(camera: StretchCameras):
     if camera == StretchCameras.cam_hemilidar_left:
         return "lidar_left_link"
     if camera == StretchCameras.cam_hemilidar_right:
-        return "lidar_right_link"
         return "lidar_right_link"
 
     raise NotImplementedError(f"Camera {camera} frame is not implemented")
