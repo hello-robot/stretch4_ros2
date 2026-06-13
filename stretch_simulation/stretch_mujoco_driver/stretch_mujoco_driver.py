@@ -722,14 +722,14 @@ class StretchMujocoDriver(Node):
             self.camera_compressed_publishers[camera.name].publish(ros_image_compressed)
 
             if camera.is_depth:
-                if camera == StretchCameras.cam_gripper_se4_stereo_depth:
-                    pointcloud_msg = create_pointcloud_rgb_msg(
-                        camera_info_msg=camera_info,
-                        rgb_image=camera_data.get_camera_data(
-                            StretchCameras.cam_gripper_se4_stereo_depth
-                        ),
-                        depth_image=frame,
-                    )
+                # if camera == StretchCameras.cam_gripper_se4_stereo_depth:
+                #     pointcloud_msg = create_pointcloud_rgb_msg(
+                #         camera_info_msg=camera_info,
+                #         rgb_image=camera_data.get_camera_data(
+                #             StretchCameras.cam_gripper_se4_stereo_depth
+                #         ),
+                #         depth_image=frame,
+                #     )
                 # elif camera == StretchCameras.cam_hemilidar_left:
                 #     pointcloud_msg = create_pointcloud_rgb_msg(
                 #         camera_info_msg=camera_info,
@@ -750,8 +750,9 @@ class StretchMujocoDriver(Node):
                 #             StretchCameras.cam_hemilidar_right, auto_rotate=False
                 #         ),
                 #     )
-                else:
-                    pointcloud_msg = create_pointcloud_msg(camera_info, frame)
+                # else:
+                #     pointcloud_msg = create_pointcloud_msg(camera_info, frame)
+                pointcloud_msg = create_pointcloud_msg(camera_info, frame)
                 self.pointcloud_publishers[camera.name].publish(pointcloud_msg)
 
     # CHANGE MODES ################
