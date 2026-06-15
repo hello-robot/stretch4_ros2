@@ -383,7 +383,6 @@ class StretchDriver(Node):
         # Publish status
         self.robot.pull_status()
         robot_status = copy.deepcopy(self.robot.status) # get copy of the current robot status
-            
         # use current time as stamp
         current_clock = self.get_clock().now()
         current_time = current_clock.to_msg()
@@ -470,64 +469,64 @@ class StretchDriver(Node):
         at_limit_msg = DiagnosticStatus(name="at_limit")
         soft_limits_msg = DiagnosticStatus(name="soft_motion_limits")
         braking_distance_msg = DiagnosticStatus(name="braking_distance")
+        is_homed_msg = DiagnosticStatus(name="is_homed")
+        is_homing_msg = DiagnosticStatus(name="is_homing")
+        is_runstopped_msg = DiagnosticStatus(name="is_runstopped")
 
         for cg in self.joint_trajectory_action.command_groups:
             pos, vel, eff = cg.joint_state(robot_status)
 
-            # add telescoping joints to joint state
             if cg.name == "arm_joint":
                 for link in ['arm_l4_joint', 'arm_l3_joint', 'arm_l2_joint', 'arm_l1_joint']:
                     joint_state.name.append(link)
                     joint_state.position.append(pos/5.0)
                     joint_state.velocity.append(vel/5.0)
                     joint_state.effort.append(eff)
-                # diagnostics for arm
-                at_limit_msg.values.append(KeyValue(key=cg.name, value=f"{robot_status['arm']['at_limit']}"))
-                soft_limits_msg.values.append(KeyValue(key=cg.name, value=f"{robot_status['arm']['soft_motion_limits']}"))
-                braking_distance_msg.values.append(KeyValue(key=cg.name, value=f"{robot_status['arm']['braking_distance']}"))
-                continue # arm expands into individual links; do not add joint_arm itself
-
-            # add gripper joints to joint state
-            if cg.name == "gripper_joint":
+            elif cg.name == "gripper_joint":
                 for link in ['gripper_finger_left_joint', 'gripper_finger_right_joint']:
                     joint_state.name.append(link)
                     joint_state.position.append(pos)
                     joint_state.velocity.append(vel)
                     joint_state.effort.append(eff)
-                # diagnostics for gripper
-                gripper_status = robot_status['end_of_arm']['stretch_gripper']
-                at_limit_msg.values.append(KeyValue(key=cg.name, value=f"{gripper_status['at_limit']}"))
-                soft_limits_msg.values.append(KeyValue(key=cg.name, value=f"{gripper_status['soft_motion_limits']}"))
-                braking_distance_msg.values.append(KeyValue(key=cg.name, value=f"{gripper_status['braking_distance']}"))
-                continue # gripper expands into finger links; do not add joint_gripper itself
-
-            # add wheel joints to joint state
-            if cg.name == "translate_mobile_base":
+            elif cg.name == "translate_mobile_base":
                 for w in ['wheel_0_joint', 'wheel_1_joint', 'wheel_2_joint']:
                     joint_state.name.append(w)
                     joint_state.position.append(0.0)
                     joint_state.velocity.append(0.0)
                     joint_state.effort.append(0.0)
-                continue # skip adding mobile_base joint
+            else:
+                joint_state.name.append(cg.name)
+                joint_state.position.append(pos)
+                joint_state.velocity.append(vel)
+                joint_state.effort.append(eff)
 
-            joint_state.name.append(cg.name)
-            joint_state.position.append(pos)
-            joint_state.velocity.append(vel)
-            joint_state.effort.append(eff)
+            if cg.name == "translate_mobile_base":
+                continue
 
             joint_status_key = cg.name.replace("_joint","")
             if joint_status_key == "gripper":
                 joint_status_key = "stretch_gripper"
 
             if joint_status_key in ["wrist_roll", "wrist_pitch", "wrist_yaw", "stretch_gripper"]:
-                status = robot_status["end_of_arm"]
+                status_dict = robot_status["end_of_arm"][joint_status_key]
+                is_homed = bool(status_dict.get('pos_calibrated', False))
+                is_homing = bool(status_dict.get('is_homing', False))
             else: 
-                status=robot_status
-    
-            at_limit_msg.values.append(KeyValue(key=cg.name, value=f"{status[joint_status_key]["at_limit"]}"))
-            soft_limits_msg.values.append(KeyValue(key=cg.name, value=f"{status[joint_status_key]["soft_motion_limits"]}"))
-            braking_distance_msg.values.append(KeyValue(key=cg.name, value=f"{status[joint_status_key]["braking_distance"]}"))
+                status_dict = robot_status[joint_status_key]
+                is_homed = bool(status_dict['motor'].get('pos_calibrated', False))
+                is_homing = bool(status_dict['motor'].get('is_homing', False))
+                is_runstopped = bool(status_dict['motor'].get('runstop_on', False))
 
+            at_limit_msg.values.append(KeyValue(key=cg.name, value=f"{status_dict['at_limit']}"))
+            soft_limits_msg.values.append(KeyValue(key=cg.name, value=f"{status_dict['soft_motion_limits']}"))
+            braking_distance_msg.values.append(KeyValue(key=cg.name, value=f"{status_dict['braking_distance']}"))
+            is_homed_msg.values.append(KeyValue(key=cg.name, value=f"{is_homed}"))
+            is_homing_msg.values.append(KeyValue(key=cg.name, value=f"{is_homing}"))
+            is_runstopped_msg.values.append(KeyValue(key=cg.name, value=f"{is_runstopped}"))
+
+        joint_state_diagnostics.status.append(is_runstopped_msg)
+        joint_state_diagnostics.status.append(is_homed_msg)
+        joint_state_diagnostics.status.append(is_homing_msg)
         joint_state_diagnostics.status.append(at_limit_msg)
         joint_state_diagnostics.status.append(soft_limits_msg)
         joint_state_diagnostics.status.append(braking_distance_msg)
