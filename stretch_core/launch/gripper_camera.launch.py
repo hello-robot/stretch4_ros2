@@ -59,7 +59,7 @@ def launch_setup(context, *args, **kwargs):
             "i_width": 640,
             "i_height": 400,
             # "i_fps": 30.0,
-            "i_publish_topic": False
+            "i_publish_topic": True
         },
         "right": {
             # Options for full FOV: (640x400), (800x500), (960x600), (1024x640), (1280x800)
