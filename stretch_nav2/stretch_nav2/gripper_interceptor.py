@@ -2,9 +2,11 @@
 import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionClient
+from rclpy.parameter import Parameter
 
 from geometry_msgs.msg import PoseStamped
 from nav2_msgs.action import NavigateToPose
+from rcl_interfaces.msg import SetParametersResult
 
 import tf2_ros
 from tf2_geometry_msgs import do_transform_pose
@@ -14,9 +16,10 @@ class GripperGoalInterceptor(Node):
         super().__init__('gripper_goal_interceptor')
 
         # 1. Declare parameters with defaults
-        self.declare_parameter('gripper_frame', 'link_gripper')
+        self.declare_parameter('gripper_frame', 'wrist_link')
         self.declare_parameter('base_frame', 'base_link')
         self.declare_parameter('global_frame', 'map')
+        self.add_on_set_parameters_callback(self.on_set_parameters_callback)
 
         # 2. Initialize TF2 Buffer and Listener
         self.tf_buffer = tf2_ros.Buffer()
@@ -25,7 +28,7 @@ class GripperGoalInterceptor(Node):
         # 3. Create Subscription to the RViz click topic
         self.subscription = self.create_subscription(
             PoseStamped,
-            '/grippre_goal_pose',
+            '/gripper_goal_pose',
             self.goal_callback,
             10
         )
@@ -35,6 +38,35 @@ class GripperGoalInterceptor(Node):
         
         self.get_logger().info("Gripper Goal Interceptor Node started.")
         self.get_logger().info(f"Tracking Gripper: {self.get_gripper_frame()} | Base: {self.get_base_frame()}")
+
+    def on_set_parameters_callback(self, params):
+        """Callback that triggers whenever a parameter is altered via CLI or services."""
+        result = SetParametersResult()
+        result.successful = True
+        
+        for param in params:
+            if param.name == 'gripper_frame':
+                if param.type_ == Parameter.Type.STRING:
+                    self.get_logger().info(f"Parameter 'gripper_frame' dynamically updated to: '{param.value}'")
+                else:
+                    result.successful = False
+                    result.reason = "gripper_frame must be a string"
+                    
+            elif param.name == 'base_frame':
+                if param.type_ == Parameter.Type.STRING:
+                    self.get_logger().info(f"Parameter 'base_frame' dynamically updated to: '{param.value}'")
+                else:
+                    result.successful = False
+                    result.reason = "base_frame must be a string"
+                    
+            elif param.name == 'global_frame':
+                if param.type_ == Parameter.Type.STRING:
+                    self.get_logger().info(f"Parameter 'global_frame' dynamically updated to: '{param.value}'")
+                else:
+                    result.successful = False
+                    result.reason = "global_frame must be a string"
+                    
+        return result
 
     def get_gripper_frame(self):
         return self.get_parameter('gripper_frame').get_parameter_value().string_value
@@ -63,10 +95,8 @@ class GripperGoalInterceptor(Node):
                 self.get_logger().error(f"Failed to transform clicked pose to global frame '{global_frame}': {e}")
                 return
 
-        # 5. Lookup the link_gripper -> map transform dynamically *right now*
+        # 5. Lookup the link_gripper -> map transform dynamically
         try:
-            # We look up the target frame relative to our source frame
-            # This gives us the mathematical transformation matrix needed to shift perspectives
             transform = self.tf_buffer.lookup_transform(
                 target_frame=gripper_frame,
                 source_frame=global_frame,

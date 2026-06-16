@@ -3,6 +3,7 @@ from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.substitutions import FindPackageShare
 from hello_helpers.multi_yaml import MultiYaml
+from launch_ros.actions import Node
 
 
 def generate_launch_description():
@@ -78,7 +79,7 @@ def generate_launch_description():
             description='Run Nav2 as composed components in a container (False = separate nodes for debugging)',
         ),
         stretch_driver_launch,
-        gripper_interceptor_node
+        gripper_interceptor_node,
         # gripper_camera_launch,
         hlidar_launch,
         footprint_launch,
