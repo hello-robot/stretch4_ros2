@@ -13,6 +13,7 @@ from stretch4_mujoco.enums.actuators import Actuators
 from stretch4_mujoco.enums.stretch_sensors import StretchSensors
 from stretch4_mujoco.enums.stretch_cameras import CameraSettings, StretchCameras
 from stretch4_mujoco.utils import get_absolute_path_stretch_xml, models_path
+from stretch4_mujoco.pointcloud_utils import depth_to_points
 
 from rclpy.qos import QoSProfile, ReliabilityPolicy, QoSDurabilityPolicy
 # from stretch_core.rwlock import RWLock
@@ -1352,18 +1353,13 @@ def create_laser_scan_msg(lidar_data: np.ndarray, timestamp: TimeMsg, frame_id: 
 
 
 def create_pointcloud_msg(camera_info_msg: CameraInfo, depth_image):
+
     fx = camera_info_msg.k[0]
     fy = camera_info_msg.k[4]
     cx = camera_info_msg.k[2]
     cy = camera_info_msg.k[5]
 
-    height, width = depth_image.shape
-    xx, yy = np.meshgrid(np.arange(width), np.arange(height))
-    valid = (depth_image > 0) & np.isfinite(depth_image)
-
-    z = depth_image[valid]
-    x = (xx[valid] - cx) * z / fx
-    y = (yy[valid] - cy) * z / fy
+    x,y,z = depth_to_points(depth_image, fx, fy, cx, cy)
 
     points = np.stack((x, y, z), axis=-1)
 
@@ -1378,16 +1374,10 @@ def create_pointcloud_rgb_msg(
     fy = camera_info_msg.k[4]
     cx = camera_info_msg.k[2]
     cy = camera_info_msg.k[5]
-
-    height, width = depth_image.shape
-
-    xx, yy = np.meshgrid(np.arange(width), np.arange(height))
+    
+    x,y,z = depth_to_points(depth_image, fx, fy, cx, cy)
+    
     valid = (depth_image > 0) & np.isfinite(depth_image)
-
-    z = depth_image[valid]
-    x = (xx[valid] - cx) * z / fx
-    y = (yy[valid] - cy) * z / fy
-
     r = rgb_image[:, :, 2][valid]
     g = rgb_image[:, :, 1][valid]
     b = rgb_image[:, :, 0][valid]
