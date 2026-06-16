@@ -1,6 +1,6 @@
 services:
   stretch-simulation: 
-    image: stretch4-simulation
+    image: stretch-simulation:latest
     container_name: stretch4-sim-container
     build:
       context: .
