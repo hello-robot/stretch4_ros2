@@ -8,7 +8,7 @@ lidar:
         device_ip_address: 192.168.1.202
         udp_port: 2378
         ptc_port: 9347
-        use_ptc_connected: false
+        use_ptc_connected: true #false
         host_ip_address: ""
         correction_file_path: "/home/hello-robot/stretch_user/stretch-yyy-xxxx/calibration_hesais/left_lidar_calibration.dat"
       
@@ -35,7 +35,7 @@ lidar:
         device_ip_address: 192.168.1.201
         udp_port: 2368
         ptc_port: 9347
-        use_ptc_connected: false
+        use_ptc_connected: true #false
         host_ip_address: ""
         correction_file_path: "/home/hello-robot/stretch_user/stretch-yyy-xxxx/calibration_hesais/right_lidar_calibration.dat"
       
