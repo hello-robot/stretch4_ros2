@@ -56,6 +56,16 @@ RViz markers are published on `/self_filter_markers` when `pub_self_filter_marke
 
 Tuning notes (filter order, gate radius, marker colors): see [config/README.md](config/README.md).
 
+### Head lidar PTP check
+
+Read-only verification of JT128 return mode, PTP lock offset, locked status, and jitter (direct PTC TCP, no ROS topics):
+
+```bash
+ros2 run stretch_core stretch_lidar_check
+```
+
+Options: `--left`, `--right`, `--duration 30`, `--json`, `--verbose`.
+
 ## API
 
 For comprehensive API documentation, please refer to [Coming soon](#TODO).
