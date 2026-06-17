@@ -13,7 +13,7 @@ lidar:
         correction_file_path: "/home/hello-robot/stretch_user/stretch-yyy-xxxx/calibration_hesais/left_lidar_calibration.dat"
       
       # Public module settings go back outside
-      use_timestamp_type: 1
+      use_timestamp_type: 0 ## uses lidar timestamp
       fov_start: -1
       fov_end:  -1
       
@@ -21,7 +21,8 @@ lidar:
       ros_frame_id: lidar_left_link                      
       ros_send_packet_topic: /lidar_packets_left         
       ros_send_point_cloud_topic: /lidar_points_left     
-      ros_send_imu_topic: /lidar_imu_left                
+      ros_send_imu_topic: /lidar_imu_left 
+      ros_send_ptp_topic: /lidar_ptp_left   # Topic used to send PTP lock status, offset through ROS            
       send_packet_ros: false                             
       send_point_cloud_ros: true 
       send_imu_ros: true                           
@@ -38,7 +39,7 @@ lidar:
         host_ip_address: ""
         correction_file_path: "/home/hello-robot/stretch_user/stretch-yyy-xxxx/calibration_hesais/right_lidar_calibration.dat"
       
-      use_timestamp_type: 1
+      use_timestamp_type: 0 ## uses lidar timestamp
       fov_start: -1
       fov_end:  -1
       
@@ -46,7 +47,8 @@ lidar:
       ros_frame_id: lidar_right_link                      
       ros_send_packet_topic: /lidar_packets_right         
       ros_send_point_cloud_topic: /lidar_points_right     
-      ros_send_imu_topic: /lidar_imu_right                
+      ros_send_imu_topic: /lidar_imu_right 
+      ros_send_ptp_topic: /lidar_ptp_right   # Topic used to send PTP lock status, offset through ROS         
       send_packet_ros: false                              
       send_point_cloud_ros: true
       send_imu_ros: true   
