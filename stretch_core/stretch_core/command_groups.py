@@ -172,9 +172,45 @@ class GripperCommandGroup(BaseCommandGroup):
 
 
 class ParallelGripperCommandGroup(BaseCommandGroup):
+
     @override
     def __init__(self) -> None:
-        raise NotImplementedError
+        super().__init__('parallel_gripper_joint')
+
+    @override
+    @check_active()
+    def queue_execution(self, robot: Any, **kwargs: Any) -> None:
+        goal_m = self.goal['position']
+        goal_mm = goal_m * 1000.0
+        robot.end_of_arm.move_to_mm('parallel_gripper', goal_mm, self.goal['velocity'], self.goal['acceleration'])
+
+    @override
+    @check_active()
+    def monitor_execution(self, robot_status: Dict[str, Any], **kwargs: Any) -> Tuple[str, float]:
+        desired_m = self.goal['position']
+        actual_mm = robot_status['end_of_arm']['parallel_gripper'].get('pos_mm', 0.0)
+        actual_m = actual_mm / 1000.0
+        
+        self.error: float = desired_m - actual_m
+        return self.name, desired_m, actual_m, self.error
+
+    @override
+    @check_active()
+    def cancel_execution(self, robot: Any, **kwargs: Any) -> None:
+        robot.end_of_arm.move_by_mm('parallel_gripper', 0.0)
+
+    @override
+    @check_active()
+    def is_finished(self, robot_status: Dict[str, Any], **kwargs: Any) -> bool:
+        return abs(self.error) < 0.002
+
+    @override
+    def joint_state(self, robot_status: Dict[str, Any], **kwargs: Any) -> Tuple[float, float, float]:
+        gripper_status = robot_status['end_of_arm']['parallel_gripper']
+        pos_m = gripper_status.get('pos_mm', 0.0) / 1000.0
+
+        return (pos_m, gripper_status.get('vel', 0.0), gripper_status.get('effort', 0.0))
+
 
 class ArmCommandGroup(BaseCommandGroup):
 

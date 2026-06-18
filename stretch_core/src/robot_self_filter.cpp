@@ -41,6 +41,17 @@ geometry_msgs::msg::Quaternion eigenQuatToMsg(const Eigen::Quaternionf & q)
   return msg;
 }
 
+float boxBroadphaseRadiusSq(const Eigen::Vector3f & half_extents, float buffer)
+{
+  // Conservative sphere around an OBB. Points outside this sphere cannot be
+  // inside the exact box, so we avoid the more expensive inverse transform.
+  const Eigen::Vector3f padded(
+    half_extents.x() + buffer,
+    half_extents.y() + buffer,
+    half_extents.z() + buffer);
+  return padded.squaredNorm();
+}
+
 geometry_msgs::msg::Point eigenVecToPoint(const Eigen::Vector3f & v)
 {
   geometry_msgs::msg::Point p;
@@ -79,12 +90,16 @@ void RobotSelfFilter::setConfig(const RobotSelfFilterConfig & config)
     config_.arm_shoulder_half_extents_y,
     config_.arm_shoulder_half_extents_z);
   arm_shoulder_buffer_ = config_.arm_shoulder_buffer;
+  arm_shoulder_broadphase_radius_sq_ = boxBroadphaseRadiusSq(
+    arm_shoulder_half_extents_, arm_shoulder_buffer_);
   wrist_chain_buffer_ = config_.wrist_chain_buffer;
   attachment_half_extents_ = Eigen::Vector3f(
     config_.attachment_half_extents_x,
     config_.attachment_half_extents_y,
     config_.attachment_half_extents_z);
   attachment_buffer_ = config_.attachment_buffer;
+  attachment_broadphase_radius_sq_ = boxBroadphaseRadiusSq(
+    attachment_half_extents_, attachment_buffer_);
   gate_radius_sq_ = config_.self_filter_gate_radius_m * config_.self_filter_gate_radius_m;
 }
 
@@ -191,6 +206,11 @@ bool RobotSelfFilter::updateArmSegment(
     lift_pos.z() + config_.arm_line_height_offset_z);
   arm_end_ = Eigen::Vector3f(
     end.x(), end.y(), end.z() + config_.arm_line_height_offset_z);
+
+  // Conservative sphere around the capsule for fast reject.
+  arm_broadphase_center_ = 0.5f * (arm_start_ + arm_end_);
+  const float broadphase_radius = 0.5f * (arm_end_ - arm_start_).norm() + std::sqrt(arm_radius_sq_);
+  arm_broadphase_radius_sq_ = broadphase_radius * broadphase_radius;
   arm_valid_ = true;
   return true;
 }
@@ -285,6 +305,7 @@ bool RobotSelfFilter::updateWristChain(
     } else {
       box.filter_buffer = wrist_chain_buffer_;
     }
+    box.broadphase_radius_sq = boxBroadphaseRadiusSq(box.half_extents, box.filter_buffer);
     wrist_chain_boxes_.push_back(box);
   }
 
@@ -354,21 +375,30 @@ bool RobotSelfFilter::isWithinSelfFilterGate(const Eigen::Vector3f & point) cons
 
 bool RobotSelfFilter::isSelfFiltered(const Eigen::Vector3f & point) const
 {
-  if (isInsideBaseCylinder(point)) {
+  if (config_.filter_base && isInsideBaseCylinder(point)) {
     return true;
   }
-  if (config_.filter_arm && isInsideArmCapsule(point)) {
+
+  if (config_.filter_arm &&
+    arm_valid_ &&
+    (point - arm_broadphase_center_).squaredNorm() <= arm_broadphase_radius_sq_ &&
+    squaredDistancePointToSegment(point, arm_start_, arm_end_) <= arm_radius_sq_)
+  {
     return true;
   }
+
   if (config_.filter_arm_shoulder && isInsideArmShoulderBox(point)) {
     return true;
   }
+
   if (config_.filter_wrist && isInsideWristChain(point)) {
     return true;
   }
+
   if (config_.filter_attachment && isInsideAttachmentBox(point)) {
     return true;
   }
+
   return false;
 }
 
@@ -377,12 +407,18 @@ bool RobotSelfFilter::isInsideArmCapsule(const Eigen::Vector3f & point) const
   if (!arm_valid_) {
     return false;
   }
+  if ((point - arm_broadphase_center_).squaredNorm() > arm_broadphase_radius_sq_) {
+    return false;
+  }
   return squaredDistancePointToSegment(point, arm_start_, arm_end_) <= arm_radius_sq_;
 }
 
 bool RobotSelfFilter::isInsideArmShoulderBox(const Eigen::Vector3f & point) const
 {
   if (!arm_shoulder_valid_) {
+    return false;
+  }
+  if ((point - arm_shoulder_pose_.translation()).squaredNorm() > arm_shoulder_broadphase_radius_sq_) {
     return false;
   }
 
@@ -402,6 +438,9 @@ bool RobotSelfFilter::isInsideWristChain(const Eigen::Vector3f & point) const
     return false;
   }
   for (const auto & box : wrist_chain_boxes_) {
+    if ((point - box.pose.translation()).squaredNorm() > box.broadphase_radius_sq) {
+      continue;
+    }
     const Eigen::Vector3f local = box.inverse_pose * point;
     const float limit_x = box.half_extents.x() + box.filter_buffer;
     const float limit_y = box.half_extents.y() + box.filter_buffer;
@@ -419,6 +458,9 @@ bool RobotSelfFilter::isInsideWristChain(const Eigen::Vector3f & point) const
 bool RobotSelfFilter::isInsideAttachmentBox(const Eigen::Vector3f & point) const
 {
   if (!attachment_valid_) {
+    return false;
+  }
+  if ((point - attachment_pose_.translation()).squaredNorm() > attachment_broadphase_radius_sq_) {
     return false;
   }
 

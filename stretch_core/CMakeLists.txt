@@ -39,7 +39,7 @@ add_definitions(${PCL_DEFINITIONS})
 
 set(lidar_filter_lib_sources
   src/robot_self_filter.cpp
-  src/voxel_sor_filter.cpp
+  src/sor_filter.cpp
   src/floor_plane_filter.cpp
   src/dual_lidar_pipeline.cpp
 )

@@ -4,7 +4,6 @@
 #include <cmath>
 
 #include <omp.h>
-#include <pcl/filters/filter.h>
 #include <pcl_conversions/pcl_conversions.h>
 #include <rclcpp/logging.hpp>
 
@@ -31,6 +30,13 @@ bool isFullCircleScan(const ScanProjectionConfig & scan_cfg)
   return span >= full_circle - (1.5f * scan_cfg.angle_increment);
 }
 
+void finalizeCloud(const pcl::PointCloud<pcl::PointXYZ>::Ptr & cloud)
+{
+  cloud->width = static_cast<uint32_t>(cloud->points.size());
+  cloud->height = 1;
+  cloud->is_dense = true;
+}
+
 pcl::PointCloud<pcl::PointXYZ>::Ptr cullFloorPoints(
   const pcl::PointCloud<pcl::PointXYZ>::Ptr & cloud,
   const std::array<float, 4> & coeffs,
@@ -55,9 +61,7 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr cullFloorPoints(
     }
   }
 
-  culled->width = static_cast<uint32_t>(culled->points.size());
-  culled->height = 1;
-  culled->is_dense = true;
+  finalizeCloud(culled);
   return culled;
 }
 
@@ -66,54 +70,62 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr cullFloorPoints(
 void DualLidarPipeline::setConfig(const DualLidarPipelineConfig & config)
 {
   config_ = config;
-  voxel_sor_filter_.setConfig(config_.voxel_sor);
+  sor_filter_.setConfig(config_.sor);
   floor_filter_.setConfig(config_.floor);
   region_filter_.setConfig(config_.region);
 }
 
-bool DualLidarPipeline::passesPointFilters(
-  const Eigen::Vector3f & point,
-  RobotSelfFilter & self_filter) const
-{
-  if (hasStage(stages_, PipelineStage::Region) && !region_filter_.passes(point, stages_)) {
-    return false;
-  }
-  if (hasStage(stages_, PipelineStage::SelfRobot) &&
-    self_filter.isWithinSelfFilterGate(point) &&
-    self_filter.isSelfFiltered(point))
-  {
-    return false;
-  }
-  return true;
-}
-
-pcl::PointCloud<pcl::PointXYZ>::Ptr DualLidarPipeline::filterAndCompactXyz(
+pcl::PointCloud<pcl::PointXYZ>::Ptr DualLidarPipeline::transformAndApplyRegionFilter(
   const sensor_msgs::msg::PointCloud2::ConstSharedPtr & msg,
-  const Eigen::Matrix4f & tf_matrix,
-  RobotSelfFilter & self_filter) const
+  const Eigen::Matrix4f & tf_matrix) const
 {
   pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>());
+  const size_t input_count = static_cast<size_t>(msg->width) * static_cast<size_t>(msg->height);
+  cloud->points.reserve(input_count);
+  const Eigen::Matrix3f rotation = tf_matrix.block<3, 3>(0, 0);
+  const Eigen::Vector3f translation = tf_matrix.block<3, 1>(0, 3);
 
   sensor_msgs::PointCloud2ConstIterator<float> iter_x(*msg, "x");
   sensor_msgs::PointCloud2ConstIterator<float> iter_y(*msg, "y");
   sensor_msgs::PointCloud2ConstIterator<float> iter_z(*msg, "z");
 
   for (; iter_x != iter_x.end(); ++iter_x, ++iter_y, ++iter_z) {
-    const Eigen::Vector4f pt(*iter_x, *iter_y, *iter_z, 1.0f);
-    const Eigen::Vector4f pt_tf = tf_matrix * pt;
-    const Eigen::Vector3f p3(pt_tf.x(), pt_tf.y(), pt_tf.z());
+    if (!std::isfinite(*iter_x) || !std::isfinite(*iter_y) || !std::isfinite(*iter_z)) {
+      continue;
+    }
+    const Eigen::Vector3f p3 = rotation * Eigen::Vector3f(*iter_x, *iter_y, *iter_z) + translation;
 
-    if (!passesPointFilters(p3, self_filter)) {
+    if (hasStage(stages_, PipelineStage::Region) && !region_filter_.passes(p3, stages_)) {
       continue;
     }
 
     cloud->points.emplace_back(p3.x(), p3.y(), p3.z());
   }
 
-  cloud->width = static_cast<uint32_t>(cloud->points.size());
-  cloud->height = 1;
-  cloud->is_dense = true;
+  finalizeCloud(cloud);
   return cloud;
+}
+
+pcl::PointCloud<pcl::PointXYZ>::Ptr DualLidarPipeline::applySelfFilter(
+  const pcl::PointCloud<pcl::PointXYZ>::Ptr & cloud,
+  RobotSelfFilter & self_filter) const
+{
+  if (!cloud) {
+    return cloud;
+  }
+
+  pcl::PointCloud<pcl::PointXYZ>::Ptr filtered(new pcl::PointCloud<pcl::PointXYZ>());
+  filtered->points.reserve(cloud->points.size());
+  for (const auto & pt : cloud->points) {
+    const Eigen::Vector3f point(pt.x, pt.y, pt.z);
+    if (self_filter.isWithinSelfFilterGate(point) && self_filter.isSelfFiltered(point)) {
+      continue;
+    }
+    filtered->points.push_back(pt);
+  }
+
+  finalizeCloud(filtered);
+  return filtered;
 }
 
 void DualLidarPipeline::projectPointsFused(
@@ -217,7 +229,6 @@ PipelineOutput DualLidarPipeline::process(
   PipelineOutput output;
   output.ranges.assign(static_cast<size_t>(scan_cfg.num_ranges), scan_cfg.range_max);
   output.hit_counts.assign(static_cast<size_t>(scan_cfg.num_ranges), 0);
-
   pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_1;
   pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_2;
 
@@ -225,24 +236,54 @@ PipelineOutput DualLidarPipeline::process(
   {
 #pragma omp section
     {
-      cloud_1 = filterAndCompactXyz(msg1, tf_lidar1, self_filter);
+      cloud_1 = transformAndApplyRegionFilter(msg1, tf_lidar1);
     }
 #pragma omp section
     {
-      cloud_2 = filterAndCompactXyz(msg2, tf_lidar2, self_filter);
+      cloud_2 = transformAndApplyRegionFilter(msg2, tf_lidar2);
     }
   }
 
-  if (hasStage(stages_, PipelineStage::VoxelSor)) {
+  const bool run_internal_voxel =
+    hasStage(stages_, PipelineStage::SelfRobot) || hasStage(stages_, PipelineStage::Sor);
+  if (run_internal_voxel) {
 #pragma omp parallel sections
     {
 #pragma omp section
       {
-        cloud_1 = voxel_sor_filter_.filter(cloud_1);
+        cloud_1 = sor_filter_.voxelDownsampleNearRobot(cloud_1);
       }
 #pragma omp section
       {
-        cloud_2 = voxel_sor_filter_.filter(cloud_2);
+        cloud_2 = sor_filter_.voxelDownsampleNearRobot(cloud_2);
+      }
+    }
+  }
+
+  if (hasStage(stages_, PipelineStage::SelfRobot)) {
+#pragma omp parallel sections
+    {
+#pragma omp section
+      {
+        cloud_1 = applySelfFilter(cloud_1, self_filter);
+      }
+#pragma omp section
+      {
+        cloud_2 = applySelfFilter(cloud_2, self_filter);
+      }
+    }
+  }
+
+  if (hasStage(stages_, PipelineStage::Sor)) {
+#pragma omp parallel sections
+    {
+#pragma omp section
+      {
+        cloud_1 = sor_filter_.removeStatisticalOutliersNearRobot(cloud_1);
+      }
+#pragma omp section
+      {
+        cloud_2 = sor_filter_.removeStatisticalOutliersNearRobot(cloud_2);
       }
     }
   }
@@ -252,16 +293,14 @@ PipelineOutput DualLidarPipeline::process(
   }
 
   pcl::PointCloud<pcl::PointXYZ>::Ptr merged(new pcl::PointCloud<pcl::PointXYZ>());
-  *merged = *cloud_1 + *cloud_2;
-
-  std::vector<int> indices;
-  pcl::removeNaNFromPointCloud(*merged, *merged, indices);
-
+  merged->points.reserve(cloud_1->points.size() + cloud_2->points.size());
+  merged->points.insert(merged->points.end(), cloud_1->points.begin(), cloud_1->points.end());
+  merged->points.insert(merged->points.end(), cloud_2->points.begin(), cloud_2->points.end());
+  finalizeCloud(merged);
   pcl::PointCloud<pcl::PointXYZ>::Ptr scan_cloud = merged;
 
-  std::optional<std::array<float, 4>> floor_coeffs;
   if (hasStage(stages_, PipelineStage::FloorRansac)) {
-    floor_coeffs = floor_filter_.getFloorCoefficients(merged, logger);
+    const auto floor_coeffs = floor_filter_.getFloorCoefficients(merged, logger);
     if (floor_coeffs.has_value()) {
       scan_cloud = cullFloorPoints(
         merged, *floor_coeffs,

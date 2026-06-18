@@ -1,6 +1,6 @@
 /**:
   ros__parameters:
-    # Pipeline preset: region | sor | sor_ransac | self_voxel | none | custom
+    # Pipeline preset: region | sor | sor_ransac | self | none | custom
     filter_type: region
     # Debug only: publish filtered merged xyz cloud 
     pub_pointcloud: false
@@ -8,7 +8,7 @@
     # Used when filter_type is custom
     enable_self_robot_filter: true
     enable_region_filter: true
-    enable_voxel_sor_filter: false
+    enable_sor_filter: false
     enable_floor_ransac_filter: false
     # TF frame for filtered cloud, scan projection, and self-filter markers
     frame_id: base_footprint
@@ -42,13 +42,13 @@
     # Publish RViz markers for base/arm/wrist filter volumes on /self_filter_markers
     pub_self_filter_markers: false
 
-    # VoxelSor: distance form robot a square half-width around robot for near-field denoising (m); far points pass through
+    # SOR: square half-width around the robot half-width around robot for near-field denoising (m); far points pass through
     dist_rob: 2.5
-    # VoxelSor: voxel grid leaf size (m)
+    # SOR: voxel grid leaf size (m)
     leaf_size: 0.05
-    # VoxelSor: statistical outlier removal neighbor count
+    # SOR: statistical outlier removal neighbor count
     sor_mean_k: 50
-    # VoxelSor: statistical outlier removal std-dev multiplier
+    # SOR: statistical outlier removal std-dev multiplier
     sor_stddev: 0.3
 
     # FloorRansac: max distance from fitted plane to count as floor (m)

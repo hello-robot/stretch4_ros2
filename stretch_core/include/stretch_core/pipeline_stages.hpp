@@ -12,7 +12,7 @@ enum class PipelineStage : uint8_t
 {
   SelfRobot = 1 << 0,
   Region = 1 << 1,
-  VoxelSor = 1 << 2,
+  Sor = 1 << 2,
   FloorRansac = 1 << 3,
 };
 
@@ -36,7 +36,7 @@ inline bool hasStage(PipelineStages stages, PipelineStage stage)
 inline PipelineStages stagesFromEnables(
   bool self_robot,
   bool region,
-  bool voxel_sor,
+  bool sor,
   bool floor_ransac)
 {
   PipelineStages stages = 0;
@@ -46,8 +46,8 @@ inline PipelineStages stagesFromEnables(
   if (region) {
     stages = stages | PipelineStage::Region;
   }
-  if (voxel_sor) {
-    stages = stages | PipelineStage::VoxelSor;
+  if (sor) {
+    stages = stages | PipelineStage::Sor;
   }
   if (floor_ransac) {
     stages = stages | PipelineStage::FloorRansac;
@@ -61,14 +61,14 @@ inline PipelineStages stagesFromFilterType(const std::string & filter_type)
     return PipelineStage::SelfRobot | PipelineStage::Region;
   }
   if (filter_type == "sor") {
-    return PipelineStage::SelfRobot | PipelineStage::Region | PipelineStage::VoxelSor;
+    return PipelineStage::SelfRobot | PipelineStage::Region | PipelineStage::Sor;
   }
   if (filter_type == "sor_ransac") {
-    return PipelineStage::SelfRobot | PipelineStage::Region | PipelineStage::VoxelSor |
+    return PipelineStage::SelfRobot | PipelineStage::Region | PipelineStage::Sor |
            PipelineStage::FloorRansac;
   }
-  if (filter_type == "self_voxel") {
-    return PipelineStage::SelfRobot | PipelineStage::VoxelSor;
+  if (filter_type == "self") {
+    return static_cast<PipelineStages>(PipelineStage::SelfRobot);
   }
   if (filter_type == "none") {
     return 0;
@@ -88,8 +88,8 @@ inline std::vector<std::string> stageNames(PipelineStages stages)
   if (hasStage(stages, PipelineStage::Region)) {
     names.emplace_back("Region");
   }
-  if (hasStage(stages, PipelineStage::VoxelSor)) {
-    names.emplace_back("VoxelSor");
+  if (hasStage(stages, PipelineStage::Sor)) {
+    names.emplace_back("SOR");
   }
   if (hasStage(stages, PipelineStage::FloorRansac)) {
     names.emplace_back("FloorRansac");

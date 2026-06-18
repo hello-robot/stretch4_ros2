@@ -7,6 +7,7 @@
 #include <tf2_ros/transform_listener.h>
 #include <tf2_eigen/tf2_eigen.hpp>
 
+#include <chrono>
 #include <cmath>
 #include <sstream>
 #include <string>
@@ -136,7 +137,7 @@ private:
 
     declare_parameter<bool>("enable_self_robot_filter", true);
     declare_parameter<bool>("enable_region_filter", true);
-    declare_parameter<bool>("enable_voxel_sor_filter", false);
+    declare_parameter<bool>("enable_sor_filter", false);
     declare_parameter<bool>("enable_floor_ransac_filter", false);
 
     declare_parameter("z_min", 0.135);
@@ -178,7 +179,7 @@ private:
 
     enable_self_robot_filter_ = get_parameter("enable_self_robot_filter").as_bool();
     enable_region_filter_ = get_parameter("enable_region_filter").as_bool();
-    enable_voxel_sor_filter_ = get_parameter("enable_voxel_sor_filter").as_bool();
+    enable_sor_filter_ = get_parameter("enable_sor_filter").as_bool();
     enable_floor_ransac_filter_ = get_parameter("enable_floor_ransac_filter").as_bool();
 
     pub_self_filter_markers_ = get_parameter("pub_self_filter_markers").as_bool();
@@ -188,10 +189,10 @@ private:
     pipeline_config_.region.z_max = static_cast<float>(get_parameter("z_max").as_double());
     pipeline_config_.region.range_max = static_cast<float>(get_parameter("range_max").as_double());
 
-    pipeline_config_.voxel_sor.dist_rob = get_parameter("dist_rob").as_double();
-    pipeline_config_.voxel_sor.leaf_size = get_parameter("leaf_size").as_double();
-    pipeline_config_.voxel_sor.sor_mean_k = get_parameter("sor_mean_k").as_int();
-    pipeline_config_.voxel_sor.sor_stddev = get_parameter("sor_stddev").as_double();
+    pipeline_config_.sor.dist_rob = get_parameter("dist_rob").as_double();
+    pipeline_config_.sor.leaf_size = get_parameter("leaf_size").as_double();
+    pipeline_config_.sor.sor_mean_k = get_parameter("sor_mean_k").as_int();
+    pipeline_config_.sor.sor_stddev = get_parameter("sor_stddev").as_double();
 
     pipeline_config_.floor.plane_fitting_threshold =
       get_parameter("plane_fitting_threshold").as_double();
@@ -260,7 +261,7 @@ private:
       stages_ = stretch_core::stagesFromEnables(
         enable_self_robot_filter_,
         enable_region_filter_,
-        enable_voxel_sor_filter_,
+        enable_sor_filter_,
         enable_floor_ransac_filter_);
     } else {
       stages_ = stretch_core::stagesFromFilterType(filter_type_);
@@ -310,6 +311,7 @@ private:
     msg2_ = msg;
   }
 
+
   void timerCallback()
   {
     if (!msg1_ || !msg2_) {
@@ -328,7 +330,6 @@ private:
 
     const auto output = pipeline_.process(
       msg1_, msg2_, tf_lidar1_, tf_lidar2_, self_filter_, scan_cfg_, pub_pointcloud_, output_header, get_logger());
-
     if (!hasAnyScanHits(output)) {
       RCLCPP_WARN_THROTTLE(
         get_logger(), *get_clock(), 2000,
@@ -380,8 +381,8 @@ private:
       } else if (name == "enable_region_filter") {
         enable_region_filter_ = param.as_bool();
         configurePipeline();
-      } else if (name == "enable_voxel_sor_filter") {
-        enable_voxel_sor_filter_ = param.as_bool();
+      } else if (name == "enable_sor_filter") {
+        enable_sor_filter_ = param.as_bool();
         configurePipeline();
       } else if (name == "enable_floor_ransac_filter") {
         enable_floor_ransac_filter_ = param.as_bool();
@@ -497,7 +498,7 @@ private:
   bool pub_pointcloud_{false};
   bool enable_self_robot_filter_{true};
   bool enable_region_filter_{true};
-  bool enable_voxel_sor_filter_{false};
+  bool enable_sor_filter_{false};
   bool enable_floor_ransac_filter_{false};
   bool pub_self_filter_markers_{false};
 };

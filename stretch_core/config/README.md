@@ -2,7 +2,7 @@
 
 Shared YAML under this directory configures the dual-lidar pipeline, robot self-filter geometry, and Nav2 footprint publisher.
 
-## Point filter order (single pass per lidar point)
+## Point filter order
 
 In `dual_lidar_pipeline.cpp` each point is transformed to `base_footprint`, then (only if the stage is enabled):
 
@@ -10,7 +10,7 @@ In `dual_lidar_pipeline.cpp` each point is transformed to `base_footprint`, then
 2. **Self-filter spatial gate** — cheap XY cylinder (+ optional Z band).
 3. **Robot self-filter geometry** — TF-driven volumes (base, arm, shoulder, wrist, attachment) inside the gate.
 
-Optional **VoxelSor** runs once on the compacted cloud per lidar. **FloorRansac** applies during LaserScan projection when enabled.
+Internal voxel downsampling runs before self-filter or SOR when needed. Optional **SOR** then removes near-field outliers. **FloorRansac** applies during LaserScan projection when enabled.
 
 The node always publishes `LaserScan` on `output_topic` (default `/scan_filtered`). Set `pub_pointcloud: true` to also publish a debug xyz `PointCloud2` on `pointcloud_topic`.
 
@@ -20,7 +20,7 @@ The node always publishes `LaserScan` on `output_topic` (default `/scan_filtered
 |-----------|---------|-------|---------|
 | `self_filter_gate_radius_m` | 1.5 m | Cylinder in XY | Near-field ROI for robot geometry checks |
 | `base_radius` | 0.25 m | Cylinder in XY | Actual base robot volume removed as self-hit |
-| `dist_rob` | 2.5 m | Square in XY | VoxelSor denoise ROI when `filter_type:=sor` (navigation) |
+| `dist_rob` | 2.5 m | Square in XY | SOR denoise ROI when `filter_type:=sor` (navigation) |
 
 Tune `self_filter_gate_radius_m` to at least max arm+tool XY reach (~1.0–1.2 m). Increase (e.g. 1.7 m) if extended-arm returns leak into `/scan_filtered`.
 

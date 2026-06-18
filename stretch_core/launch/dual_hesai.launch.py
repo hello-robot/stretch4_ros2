@@ -91,7 +91,7 @@ def generate_launch_description():
     filter_type_arg = DeclareLaunchArgument(
         'filter_type',
         default_value='region',
-        description='Pipeline preset: region | sor | sor_ransac | self_voxel | none | custom',
+        description='Pipeline preset: region | sor | sor_ransac | self | none | custom',
     )
 
     filter_type = LaunchConfiguration('filter_type')
@@ -102,9 +102,9 @@ def generate_launch_description():
 
     error_log = LogInfo(
         condition=UnlessCondition(PythonExpression([
-            "'", filter_type, "' in ['region', 'sor', 'sor_ransac', 'self_voxel', 'none', 'custom']"
+            "'", filter_type, "' in ['region', 'sor', 'sor_ransac', 'self', 'none', 'custom']"
         ])),
-        msg="Invalid filter_type! Must be region, sor, sor_ransac, self_voxel, none, or custom.",
+        msg="Invalid filter_type! Must be region, sor, sor_ransac, self, none, or custom.",
     )
 
     use_rviz_arg = DeclareLaunchArgument(

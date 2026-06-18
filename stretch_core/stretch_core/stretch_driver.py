@@ -501,6 +501,23 @@ class StretchDriver(Node):
                 braking_distance_msg.values.append(KeyValue(key=cg.name, value=f"{gripper_status['braking_distance']}"))
                 continue # gripper expands into finger links; do not add joint_gripper itself
 
+            if cg.name == "parallel_gripper_joint":
+                # pos is the total gap width (e.g., 0.08 for fully open, 0.0 for fully closed).
+                # The URDF meshes were exported in the fully CLOSED state, so 0 is closed.
+                # Since the URDF limits are [-0.04, 0], we must map an opening gap to a negative joint value.
+                finger_pos = -pos / 2.0
+                for link in ['finger_left_joint', 'finger_right_joint']:
+                    joint_state.name.append(link)
+                    joint_state.position.append(finger_pos)
+                    joint_state.velocity.append(vel)
+                    joint_state.effort.append(eff)
+                # diagnostics for parallel gripper
+                gripper_status = robot_status['end_of_arm']['parallel_gripper']
+                at_limit_msg.values.append(KeyValue(key=cg.name, value=f"{gripper_status.get('at_limit', False)}"))
+                soft_limits_msg.values.append(KeyValue(key=cg.name, value=f"{gripper_status.get('soft_motion_limits', False)}"))
+                braking_distance_msg.values.append(KeyValue(key=cg.name, value=f"{gripper_status.get('braking_distance', False)}"))
+                continue # parallel gripper expands into finger links; do not add parallel_gripper_joint itself
+
             # add wheel joints to joint state
             if cg.name == "translate_mobile_base":
                 for w in ['wheel_0_joint', 'wheel_1_joint', 'wheel_2_joint']:

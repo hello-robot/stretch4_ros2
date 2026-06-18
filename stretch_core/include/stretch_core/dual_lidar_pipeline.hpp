@@ -18,7 +18,7 @@
 #include "stretch_core/pipeline_stages.hpp"
 #include "stretch_core/region_filter.hpp"
 #include "stretch_core/robot_self_filter.hpp"
-#include "stretch_core/voxel_sor_filter.hpp"
+#include "stretch_core/sor_filter.hpp"
 
 namespace stretch_core
 {
@@ -35,7 +35,7 @@ struct ScanProjectionConfig
 struct DualLidarPipelineConfig
 {
   RegionFilterConfig region;
-  VoxelSorFilterConfig voxel_sor;
+  SorFilterConfig sor;
   FloorPlaneFilterConfig floor;
   bool speckle_filter_enabled{true};
   int speckle_min_points{2};
@@ -69,11 +69,12 @@ public:
     rclcpp::Logger logger) const;
 
 private:
-  bool passesPointFilters(const Eigen::Vector3f & point, RobotSelfFilter & self_filter) const;
-
-  pcl::PointCloud<pcl::PointXYZ>::Ptr filterAndCompactXyz(
+  pcl::PointCloud<pcl::PointXYZ>::Ptr transformAndApplyRegionFilter(
     const sensor_msgs::msg::PointCloud2::ConstSharedPtr & msg,
-    const Eigen::Matrix4f & tf_matrix,
+    const Eigen::Matrix4f & tf_matrix) const;
+
+  pcl::PointCloud<pcl::PointXYZ>::Ptr applySelfFilter(
+    const pcl::PointCloud<pcl::PointXYZ>::Ptr & cloud,
     RobotSelfFilter & self_filter) const;
 
   void projectPointsFused(
@@ -87,7 +88,7 @@ private:
 
   DualLidarPipelineConfig config_;
   PipelineStages stages_{0};
-  VoxelSorFilter voxel_sor_filter_;
+  SorFilter sor_filter_;
   FloorPlaneFilter floor_filter_;
   RegionFilter region_filter_;
 };

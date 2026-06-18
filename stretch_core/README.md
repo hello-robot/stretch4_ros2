@@ -15,15 +15,15 @@ Processing is handled by `DualLidarPipeline`. Each stage runs only when enabled.
 | `filter_type` | Stages |
 |---------------|--------|
 | `region` | SelfRobot, Region |
-| `sor` | SelfRobot, Region, VoxelSor |
-| `sor_ransac` | SelfRobot, Region, VoxelSor, FloorRansac |
-| `self_voxel` | SelfRobot, VoxelSor (no region) |
+| `sor` | SelfRobot, Region, SOR |
+| `sor_ransac` | SelfRobot, Region, SOR, FloorRansac |
+| `self` | SelfRobot |
 | `none` | No filters |
-| `custom` | Use `enable_self_robot_filter`, `enable_region_filter`, `enable_voxel_sor_filter`, `enable_floor_ransac_filter` |
+| `custom` | Use `enable_self_robot_filter`, `enable_region_filter`, `enable_sor_filter`, `enable_floor_ransac_filter` |
 
-For each lidar point (in `base_footprint`): optionally apply region crop, then a cheap spatial gate, then TF-driven robot geometry checks only inside that gate. Optional voxel/SOR denoises near-field points, then points are projected to LaserScan with optional speckle filtering.
+For each lidar point (in `base_footprint`): optionally apply region crop, then a cheap spatial gate, then TF-driven robot geometry checks only inside that gate. Optional SOR denoises near-field points, then points are projected to LaserScan with optional speckle filtering.
 
-Use `region` for mapping. Use `sor` for navigation. Use `self_voxel` with `pub_pointcloud:=true` to visualize a filtered merged cloud without region crop.
+Use `region` for mapping. Use `sor` for navigation. Use `self` with `pub_pointcloud:=true` to visualize a filtered merged cloud without region crop.
 
 ### Launch
 
@@ -31,7 +31,7 @@ Use `region` for mapping. Use `sor` for navigation. Use `self_voxel` with `pub_p
 # Mapping-style filtering (region + self-filter)
 ros2 launch stretch_core dual_hesai.launch.py filter_type:=region tool_preset:=sg4
 
-# Navigation-style filtering (adds voxel/SOR near the robot)
+# Navigation-style filtering (adds SOR near the robot)
 ros2 launch stretch_core dual_hesai.launch.py filter_type:=sor tool_preset:=sg4
 
 # With RViz
@@ -54,7 +54,7 @@ RViz markers are published on `/self_filter_markers` when `pub_self_filter_marke
 
 | File | Purpose |
 |------|---------|
-| `config/dual_lidar_filter.yaml` | `filter_type`, region limits, voxel/SOR, speckle, floor RANSAC |
+| `config/dual_lidar_filter.yaml` | `filter_type`, region limits, SOR, speckle, floor RANSAC |
 | `config/robot_self_filter.yaml` | Base/arm/wrist geometry, spatial gate |
 | `config/self_filter_<tool>.yaml` | Tool-specific attachment box |
 | `config/robot_footprint.yaml` | Dynamic footprint publisher (topics, base polygon) |
