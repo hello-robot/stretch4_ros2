@@ -542,7 +542,7 @@ class StretchDriver(Node):
         battery_state.temperature = float(robot_status['power_periph']['temp'])
         battery_state.percentage = float(robot_status['power_periph']['battery_soc']) / 100.0
 
-        if robot_status['power_periph']['adapter_connected']:
+        if robot_status['power_periph']['adapter_voltage_present']:
             if robot_status['power_periph']['charger_is_charging']:
                 battery_state.power_supply_status = BatteryState.POWER_SUPPLY_STATUS_CHARGING
             else:
