@@ -488,6 +488,13 @@ class StretchDriver(Node):
                     joint_state.position.append(pos)
                     joint_state.velocity.append(vel)
                     joint_state.effort.append(eff)
+            elif cg.name == "parallel_gripper_joint":
+                finger_pos = -pos / 2.0
+                for link in ['finger_left_joint', 'finger_right_joint']:
+                    joint_state.name.append(link)
+                    joint_state.position.append(finger_pos)
+                    joint_state.velocity.append(vel)
+                    joint_state.effort.append(eff)
             elif cg.name == "translate_mobile_base":
                 for w in ['wheel_0_joint', 'wheel_1_joint', 'wheel_2_joint']:
                     joint_state.name.append(w)
