@@ -46,6 +46,7 @@ def launch_setup(context, *args, **kwargs):
     )
 
     filter_type = LaunchConfiguration('filter_type')
+    scan_angle_increment_deg = LaunchConfiguration('scan_angle_increment_deg')
     launch_filter_node = LaunchConfiguration('launch_filter_node')
 
     dual_lidar_filter_node = Node(
@@ -57,6 +58,7 @@ def launch_setup(context, *args, **kwargs):
             *self_filter_params,
             {
                 'filter_type': filter_type,
+                'scan_angle_increment_deg': scan_angle_increment_deg,
                 'lidar1_frame': 'lidar_right_link',
                 'lidar2_frame': 'lidar_left_link',
                 'pub_pointcloud': pub_pointcloud,
@@ -90,7 +92,7 @@ def launch_setup(context, *args, **kwargs):
 def generate_launch_description():
     filter_type_arg = DeclareLaunchArgument(
         'filter_type',
-        default_value='region',
+        default_value='sor',
         description='Pipeline preset: region | sor | sor_ransac | self | none | custom',
     )
 
@@ -121,8 +123,14 @@ def generate_launch_description():
 
     tool_preset_arg = DeclareLaunchArgument(
         'tool_preset',
-        default_value='sg4',
-        description='Self-filter attachment preset: sg4, pg4, tablet, or nil.',
+        default_value='auto',
+        description='Self-filter attachment preset: auto, sg4, pg4, tablet, or nil.',
+    )
+
+    scan_angle_increment_arg = DeclareLaunchArgument(
+        'scan_angle_increment_deg',
+        default_value='0.1',
+        description='LaserScan angular bin width in degrees. Try 0.1 or 0.2 for Nav2.',
     )
 
     pub_pointcloud_arg = DeclareLaunchArgument('pub_pointcloud', default_value='false', description='Publish a pointcloud from the filter node.')
@@ -132,6 +140,7 @@ def generate_launch_description():
         tool_preset_arg,
         print_filter_cmd,
         error_log,
+        scan_angle_increment_arg,
         pub_pointcloud_arg,
         use_rviz_arg,
         launch_filter_node_arg,

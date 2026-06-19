@@ -21,7 +21,11 @@ def generate_launch_description():
         IncludeLaunchDescription(
             PathJoinSubstitution(
                 [FindPackageShare('stretch_nav2'), 'launch', 'include', 'slam_toolbox.launch.py']
-            ),
+            ),eclareLaunchArgument(
+            'tool_preset',
+            default_value='auto',
+            description='Mounted tool preset for lidar self-filter: auto, sg4, pg4, tablet, or nil',
+        ),
             launch_arguments={'use_rviz': 'true'}.items(),
         ),
     ])

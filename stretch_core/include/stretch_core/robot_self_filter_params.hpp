@@ -3,27 +3,46 @@
 #include "stretch_core/robot_self_filter.hpp"
 
 #include <rclcpp/rclcpp.hpp>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
 namespace stretch_core
 {
 
-inline std::vector<float> loadFloatArrayParameter(
+inline void requireArraySize(const std::string & name, size_t actual, size_t expected)
+{
+  if (actual != expected) {
+    throw std::runtime_error(
+      name + " must contain exactly " + std::to_string(expected) +
+      " entries for the generated URDF self-filter boxes, got " +
+      std::to_string(actual));
+  }
+}
+
+inline std::vector<float> loadRequiredFloatArrayParameter(
   rclcpp::Node & node,
   const std::string & name,
-  size_t count,
-  float default_value)
+  size_t count)
 {
-  std::vector<float> values(count, default_value);
-  if (!node.has_parameter(name)) {
-    return values;
-  }
   const auto raw = node.get_parameter(name).as_double_array();
-  for (size_t i = 0; i < count && i < raw.size(); ++i) {
-    values[i] = static_cast<float>(raw[i]);
+  requireArraySize(name, raw.size(), count);
+  std::vector<float> values;
+  values.reserve(raw.size());
+  for (double v : raw) {
+    values.push_back(static_cast<float>(v));
   }
   return values;
+}
+
+inline std::vector<std::string> loadRequiredStringArrayParameter(
+  rclcpp::Node & node,
+  const std::string & name,
+  size_t count)
+{
+  const auto raw = node.get_parameter(name).as_string_array();
+  requireArraySize(name, raw.size(), count);
+  return raw;
 }
 
 inline std::vector<float> loadOptionalFloatArrayParameter(
@@ -45,98 +64,67 @@ inline std::vector<float> loadOptionalFloatArrayParameter(
   return values;
 }
 
-inline void normalizeWristChainArrays(RobotSelfFilterConfig & config)
+inline void validateSelfFilterBoxArrays(const RobotSelfFilterConfig & config)
 {
-  const size_t n = config.wrist_chain_frames.size();
+  const size_t n = config.self_filter_box_frames.size();
   if (n == 0) {
-    config.wrist_chain_box_origin_x.clear();
-    config.wrist_chain_box_origin_y.clear();
-    config.wrist_chain_box_origin_z.clear();
-    config.wrist_chain_half_extents_x.clear();
-    config.wrist_chain_half_extents_y.clear();
-    config.wrist_chain_half_extents_z.clear();
-    config.wrist_chain_buffers.clear();
-    return;
+    throw std::runtime_error(
+      "URDF self-filter boxes are required. Launch through self_filter_config.py "
+      "so self_filter_box_* geometry is generated from the URDF.");
   }
 
-  auto resize = [n](std::vector<float> & values, float default_value) {
-      if (values.size() < n) {
-        values.resize(n, default_value);
-      } else if (values.size() > n) {
-        values.resize(n);
-      }
-    };
-
-  resize(config.wrist_chain_box_origin_x, 0.0f);
-  resize(config.wrist_chain_box_origin_y, 0.0f);
-  resize(config.wrist_chain_box_origin_z, 0.0f);
-  resize(config.wrist_chain_half_extents_x, 0.06f);
-  resize(config.wrist_chain_half_extents_y, 0.06f);
-  resize(config.wrist_chain_half_extents_z, 0.06f);
-  if (!config.wrist_chain_buffers.empty()) {
-    resize(config.wrist_chain_buffers, config.wrist_chain_buffer);
+  requireArraySize("self_filter_box_names", config.self_filter_box_names.size(), n);
+  requireArraySize("self_filter_box_groups", config.self_filter_box_groups.size(), n);
+  requireArraySize("self_filter_box_origin_x", config.self_filter_box_origin_x.size(), n);
+  requireArraySize("self_filter_box_origin_y", config.self_filter_box_origin_y.size(), n);
+  requireArraySize("self_filter_box_origin_z", config.self_filter_box_origin_z.size(), n);
+  requireArraySize("self_filter_box_rpy_roll", config.self_filter_box_rpy_roll.size(), n);
+  requireArraySize("self_filter_box_rpy_pitch", config.self_filter_box_rpy_pitch.size(), n);
+  requireArraySize("self_filter_box_rpy_yaw", config.self_filter_box_rpy_yaw.size(), n);
+  requireArraySize("self_filter_box_half_extents_x", config.self_filter_box_half_extents_x.size(), n);
+  requireArraySize("self_filter_box_half_extents_y", config.self_filter_box_half_extents_y.size(), n);
+  requireArraySize("self_filter_box_half_extents_z", config.self_filter_box_half_extents_z.size(), n);
+  if (!config.self_filter_box_buffers.empty()) {
+    requireArraySize("self_filter_box_buffers", config.self_filter_box_buffers.size(), n);
   }
-
-  for (size_t i = 1; i < n; ++i) {
-    config.wrist_chain_box_origin_z[i] = 0.0f;
+  if (!config.self_filter_box_footprint_buffers.empty()) {
+    requireArraySize(
+      "self_filter_box_footprint_buffers", config.self_filter_box_footprint_buffers.size(), n);
   }
 }
 
 inline void declareRobotSelfFilterParameters(rclcpp::Node & node)
 {
-  node.declare_parameter("filter_base", true);
   node.declare_parameter("base_radius", 0.25);
-  node.declare_parameter("filter_arm", false);
   node.declare_parameter<std::string>("arm_line_start_frame", "arm_l0_link");
   node.declare_parameter<std::string>("arm_line_start_height_frame", "lift_link");
   node.declare_parameter("arm_line_height_offset_z", 0.0);
   node.declare_parameter<std::string>("arm_line_end_frame", "wrist_link");
   node.declare_parameter("arm_filter_radius", 0.07);
   node.declare_parameter("arm_filter_radius_buffer", 0.02);
-  node.declare_parameter("filter_arm_shoulder", false);
-  node.declare_parameter<std::string>("arm_shoulder_box_frame", "arm_l0_link");
-  node.declare_parameter("arm_shoulder_box_origin_x", -0.06);
-  node.declare_parameter("arm_shoulder_box_origin_y", 0.0);
-  node.declare_parameter("arm_shoulder_box_origin_z", 0.0);
-  node.declare_parameter("arm_shoulder_half_extents_x", 0.08);
-  node.declare_parameter("arm_shoulder_half_extents_y", 0.10);
-  node.declare_parameter("arm_shoulder_half_extents_z", 0.10);
-  node.declare_parameter("arm_shoulder_buffer", 0.02);
-  node.declare_parameter("filter_wrist", false);
-  node.declare_parameter(
-    "wrist_chain_frames",
-    std::vector<std::string>{
-    "wrist_link", "wrist_yaw_link", "wrist_pitch_link", "wrist_roll_link",
-    "gripper_camera_link"});
-  node.declare_parameter(
-    "wrist_chain_box_origin_x",
-    std::vector<double>{0.0, 0.0, 0.0, 0.0, 0.02});
-  node.declare_parameter(
-    "wrist_chain_box_origin_y",
-    std::vector<double>{0.0, 0.0, 0.0, 0.0, 0.0});
-  node.declare_parameter(
-    "wrist_chain_box_origin_z",
-    std::vector<double>{0.0, 0.0, 0.0, 0.0, 0.0});
-  node.declare_parameter(
-    "wrist_chain_half_extents_x",
-    std::vector<double>{0.07, 0.04, 0.04, 0.04, 0.05});
-  node.declare_parameter(
-    "wrist_chain_half_extents_y",
-    std::vector<double>{0.07, 0.04, 0.05, 0.05, 0.04});
-  node.declare_parameter(
-    "wrist_chain_half_extents_z",
-    std::vector<double>{0.05, 0.11, 0.05, 0.05, 0.05});
-  node.declare_parameter("wrist_chain_buffer", 0.02);
-  node.declare_parameter("wrist_chain_buffers", std::vector<double>{});
-  node.declare_parameter("filter_attachment", false);
-  node.declare_parameter<std::string>("attachment_frame", "quick_connect_interface_link");
-  node.declare_parameter("attachment_box_origin_x", 0.0);
-  node.declare_parameter("attachment_box_origin_y", 0.0);
-  node.declare_parameter("attachment_box_origin_z", 0.0);
-  node.declare_parameter("attachment_half_extents_x", 0.10);
-  node.declare_parameter("attachment_half_extents_y", 0.08);
-  node.declare_parameter("attachment_half_extents_z", 0.08);
-  node.declare_parameter("attachment_buffer", 0.02);
+
+  node.declare_parameter("self_filter_box_frames", std::vector<std::string>{});
+  node.declare_parameter("self_filter_box_names", std::vector<std::string>{});
+  node.declare_parameter("self_filter_box_groups", std::vector<std::string>{});
+  node.declare_parameter("self_filter_box_origin_x", std::vector<double>{});
+  node.declare_parameter("self_filter_box_origin_y", std::vector<double>{});
+  node.declare_parameter("self_filter_box_origin_z", std::vector<double>{});
+  node.declare_parameter("self_filter_box_rpy_roll", std::vector<double>{});
+  node.declare_parameter("self_filter_box_rpy_pitch", std::vector<double>{});
+  node.declare_parameter("self_filter_box_rpy_yaw", std::vector<double>{});
+  node.declare_parameter("self_filter_box_half_extents_x", std::vector<double>{});
+  node.declare_parameter("self_filter_box_half_extents_y", std::vector<double>{});
+  node.declare_parameter("self_filter_box_half_extents_z", std::vector<double>{});
+  node.declare_parameter("self_filter_arm_buffer", 0.04);
+  node.declare_parameter("self_filter_wrist_buffer", 0.025);
+  node.declare_parameter("self_filter_gripper_cam_buffer", 0.025);
+  node.declare_parameter("self_filter_tool_buffer", 0.025);
+  node.declare_parameter("self_filter_box_buffers", std::vector<double>{});
+  node.declare_parameter("self_filter_box_footprint_buffers", std::vector<double>{});
+
+  node.declare_parameter("publish_raw_urdf_self_filter_markers", false);
+  node.declare_parameter("publish_buffered_self_filter_markers", true);
+  node.declare_parameter<std::string>("resolved_tool_preset", "unknown");
   node.declare_parameter("self_filter_tf_timeout_sec", 0.05);
   node.declare_parameter("self_filter_spatial_gate_enabled", true);
   node.declare_parameter("self_filter_gate_radius_m", 1.5);
@@ -147,9 +135,7 @@ inline void declareRobotSelfFilterParameters(rclcpp::Node & node)
 inline RobotSelfFilterConfig loadRobotSelfFilterConfig(rclcpp::Node & node)
 {
   RobotSelfFilterConfig config;
-  config.filter_base = node.get_parameter("filter_base").as_bool();
   config.base_radius = static_cast<float>(node.get_parameter("base_radius").as_double());
-  config.filter_arm = node.get_parameter("filter_arm").as_bool();
   config.arm_line_start_frame = node.get_parameter("arm_line_start_frame").as_string();
   config.arm_line_start_height_frame =
     node.get_parameter("arm_line_start_height_frame").as_string();
@@ -160,58 +146,54 @@ inline RobotSelfFilterConfig loadRobotSelfFilterConfig(rclcpp::Node & node)
     static_cast<float>(node.get_parameter("arm_filter_radius").as_double());
   config.arm_filter_radius_buffer =
     static_cast<float>(node.get_parameter("arm_filter_radius_buffer").as_double());
-  config.filter_arm_shoulder = node.get_parameter("filter_arm_shoulder").as_bool();
-  config.arm_shoulder_box_frame = node.get_parameter("arm_shoulder_box_frame").as_string();
-  config.arm_shoulder_box_origin_x =
-    static_cast<float>(node.get_parameter("arm_shoulder_box_origin_x").as_double());
-  config.arm_shoulder_box_origin_y =
-    static_cast<float>(node.get_parameter("arm_shoulder_box_origin_y").as_double());
-  config.arm_shoulder_box_origin_z =
-    static_cast<float>(node.get_parameter("arm_shoulder_box_origin_z").as_double());
-  config.arm_shoulder_half_extents_x =
-    static_cast<float>(node.get_parameter("arm_shoulder_half_extents_x").as_double());
-  config.arm_shoulder_half_extents_y =
-    static_cast<float>(node.get_parameter("arm_shoulder_half_extents_y").as_double());
-  config.arm_shoulder_half_extents_z =
-    static_cast<float>(node.get_parameter("arm_shoulder_half_extents_z").as_double());
-  config.arm_shoulder_buffer =
-    static_cast<float>(node.get_parameter("arm_shoulder_buffer").as_double());
-  config.filter_wrist = node.get_parameter("filter_wrist").as_bool();
-  config.wrist_chain_frames = node.get_parameter("wrist_chain_frames").as_string_array();
 
-  const size_t wrist_count = config.wrist_chain_frames.size();
-  config.wrist_chain_box_origin_x =
-    loadFloatArrayParameter(node, "wrist_chain_box_origin_x", wrist_count, 0.0f);
-  config.wrist_chain_box_origin_y =
-    loadFloatArrayParameter(node, "wrist_chain_box_origin_y", wrist_count, 0.0f);
-  config.wrist_chain_box_origin_z =
-    loadFloatArrayParameter(node, "wrist_chain_box_origin_z", wrist_count, 0.0f);
-  config.wrist_chain_half_extents_x =
-    loadFloatArrayParameter(node, "wrist_chain_half_extents_x", wrist_count, 0.06f);
-  config.wrist_chain_half_extents_y =
-    loadFloatArrayParameter(node, "wrist_chain_half_extents_y", wrist_count, 0.06f);
-  config.wrist_chain_half_extents_z =
-    loadFloatArrayParameter(node, "wrist_chain_half_extents_z", wrist_count, 0.06f);
-  config.wrist_chain_buffer =
-    static_cast<float>(node.get_parameter("wrist_chain_buffer").as_double());
-  config.wrist_chain_buffers = loadOptionalFloatArrayParameter(node, "wrist_chain_buffers");
-  normalizeWristChainArrays(config);
-  config.filter_attachment = node.get_parameter("filter_attachment").as_bool();
-  config.attachment_frame = node.get_parameter("attachment_frame").as_string();
-  config.attachment_box_origin_x =
-    static_cast<float>(node.get_parameter("attachment_box_origin_x").as_double());
-  config.attachment_box_origin_y =
-    static_cast<float>(node.get_parameter("attachment_box_origin_y").as_double());
-  config.attachment_box_origin_z =
-    static_cast<float>(node.get_parameter("attachment_box_origin_z").as_double());
-  config.attachment_half_extents_x =
-    static_cast<float>(node.get_parameter("attachment_half_extents_x").as_double());
-  config.attachment_half_extents_y =
-    static_cast<float>(node.get_parameter("attachment_half_extents_y").as_double());
-  config.attachment_half_extents_z =
-    static_cast<float>(node.get_parameter("attachment_half_extents_z").as_double());
-  config.attachment_buffer =
-    static_cast<float>(node.get_parameter("attachment_buffer").as_double());
+  config.self_filter_box_frames = node.get_parameter("self_filter_box_frames").as_string_array();
+  const size_t box_count = config.self_filter_box_frames.size();
+  if (box_count == 0) {
+    throw std::runtime_error(
+      "URDF self-filter boxes are required. Launch through self_filter_config.py "
+      "so self_filter_box_* geometry is generated from the URDF.");
+  }
+  config.self_filter_box_names =
+    loadRequiredStringArrayParameter(node, "self_filter_box_names", box_count);
+  config.self_filter_box_groups =
+    loadRequiredStringArrayParameter(node, "self_filter_box_groups", box_count);
+  config.self_filter_box_origin_x =
+    loadRequiredFloatArrayParameter(node, "self_filter_box_origin_x", box_count);
+  config.self_filter_box_origin_y =
+    loadRequiredFloatArrayParameter(node, "self_filter_box_origin_y", box_count);
+  config.self_filter_box_origin_z =
+    loadRequiredFloatArrayParameter(node, "self_filter_box_origin_z", box_count);
+  config.self_filter_box_rpy_roll =
+    loadRequiredFloatArrayParameter(node, "self_filter_box_rpy_roll", box_count);
+  config.self_filter_box_rpy_pitch =
+    loadRequiredFloatArrayParameter(node, "self_filter_box_rpy_pitch", box_count);
+  config.self_filter_box_rpy_yaw =
+    loadRequiredFloatArrayParameter(node, "self_filter_box_rpy_yaw", box_count);
+  config.self_filter_box_half_extents_x =
+    loadRequiredFloatArrayParameter(node, "self_filter_box_half_extents_x", box_count);
+  config.self_filter_box_half_extents_y =
+    loadRequiredFloatArrayParameter(node, "self_filter_box_half_extents_y", box_count);
+  config.self_filter_box_half_extents_z =
+    loadRequiredFloatArrayParameter(node, "self_filter_box_half_extents_z", box_count);
+  config.self_filter_arm_buffer =
+    static_cast<float>(node.get_parameter("self_filter_arm_buffer").as_double());
+  config.self_filter_wrist_buffer =
+    static_cast<float>(node.get_parameter("self_filter_wrist_buffer").as_double());
+  config.self_filter_gripper_cam_buffer =
+    static_cast<float>(node.get_parameter("self_filter_gripper_cam_buffer").as_double());
+  config.self_filter_tool_buffer =
+    static_cast<float>(node.get_parameter("self_filter_tool_buffer").as_double());
+  config.self_filter_box_buffers = loadOptionalFloatArrayParameter(node, "self_filter_box_buffers");
+  config.self_filter_box_footprint_buffers =
+    loadOptionalFloatArrayParameter(node, "self_filter_box_footprint_buffers");
+  validateSelfFilterBoxArrays(config);
+
+  config.publish_raw_urdf_self_filter_markers =
+    node.get_parameter("publish_raw_urdf_self_filter_markers").as_bool();
+  config.publish_buffered_self_filter_markers =
+    node.get_parameter("publish_buffered_self_filter_markers").as_bool();
+  config.resolved_tool_preset = node.get_parameter("resolved_tool_preset").as_string();
   config.tf_timeout_sec = node.get_parameter("self_filter_tf_timeout_sec").as_double();
   config.self_filter_spatial_gate_enabled =
     node.get_parameter("self_filter_spatial_gate_enabled").as_bool();
@@ -226,27 +208,29 @@ inline RobotSelfFilterConfig loadRobotSelfFilterConfig(rclcpp::Node & node)
 
 inline bool isRobotSelfFilterParameter(const std::string & name)
 {
-  return name == "filter_base" || name == "base_radius" || name == "filter_arm" ||
+  return name == "base_radius" ||
          name == "arm_line_start_frame" || name == "arm_line_start_height_frame" ||
          name == "arm_line_height_offset_z" ||
          name == "arm_line_end_frame" ||
          name == "arm_filter_radius" ||
-         name == "arm_filter_radius_buffer" || name == "filter_arm_shoulder" ||
-         name == "arm_shoulder_box_frame" || name == "arm_shoulder_box_origin_x" ||
-         name == "arm_shoulder_box_origin_y" || name == "arm_shoulder_box_origin_z" ||
-         name == "arm_shoulder_half_extents_x" || name == "arm_shoulder_half_extents_y" ||
-         name == "arm_shoulder_half_extents_z" || name == "arm_shoulder_buffer" ||
-         name == "filter_wrist" || name == "wrist_chain_frames" ||
-         name == "wrist_chain_box_origin_x" || name == "wrist_chain_box_origin_y" ||
-         name == "wrist_chain_box_origin_z" ||
-         name == "wrist_chain_half_extents_x" || name == "wrist_chain_half_extents_y" ||
-         name == "wrist_chain_half_extents_z" ||
-         name == "wrist_chain_buffer" || name == "wrist_chain_buffers" ||
-         name == "filter_attachment" || name == "attachment_frame" ||
-         name == "attachment_box_origin_x" || name == "attachment_box_origin_y" ||
-         name == "attachment_box_origin_z" ||
-         name == "attachment_half_extents_x" || name == "attachment_half_extents_y" ||
-         name == "attachment_half_extents_z" || name == "attachment_buffer" ||
+         name == "arm_filter_radius_buffer" ||
+         name == "self_filter_box_frames" ||
+         name == "self_filter_box_names" || name == "self_filter_box_groups" ||
+         name == "self_filter_box_origin_x" || name == "self_filter_box_origin_y" ||
+         name == "self_filter_box_origin_z" ||
+         name == "self_filter_box_rpy_roll" || name == "self_filter_box_rpy_pitch" ||
+         name == "self_filter_box_rpy_yaw" ||
+         name == "self_filter_box_half_extents_x" || name == "self_filter_box_half_extents_y" ||
+         name == "self_filter_box_half_extents_z" ||
+         name == "self_filter_arm_buffer" ||
+         name == "self_filter_wrist_buffer" ||
+         name == "self_filter_gripper_cam_buffer" ||
+         name == "self_filter_tool_buffer" ||
+         name == "self_filter_box_buffers" ||
+         name == "self_filter_box_footprint_buffers" ||
+         name == "publish_raw_urdf_self_filter_markers" ||
+         name == "publish_buffered_self_filter_markers" ||
+         name == "resolved_tool_preset" ||
          name == "self_filter_tf_timeout_sec" ||
          name == "self_filter_spatial_gate_enabled" ||
          name == "self_filter_gate_radius_m" ||

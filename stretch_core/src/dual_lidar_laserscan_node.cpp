@@ -7,6 +7,7 @@
 #include <tf2_ros/transform_listener.h>
 #include <tf2_eigen/tf2_eigen.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <sstream>
@@ -66,14 +67,8 @@ public:
     declareParameters();
     loadParameters();
     configurePipeline();
+    configureScanProjection(scan_angle_increment_deg_);
     setupPublishers();
-
-    scan_cfg_.angle_min = -static_cast<float>(M_PI);
-    scan_cfg_.angle_max = static_cast<float>(M_PI);
-    scan_cfg_.angle_increment = 0.05f * static_cast<float>(M_PI) / 180.0f;
-    scan_cfg_.range_max = pipeline_config_.region.range_max;
-    scan_cfg_.num_ranges = static_cast<int>(
-      (scan_cfg_.angle_max - scan_cfg_.angle_min) / scan_cfg_.angle_increment);
 
     if (pub_self_filter_markers_) {
       pub_markers_ = create_publisher<visualization_msgs::msg::MarkerArray>(
@@ -143,6 +138,7 @@ private:
     declare_parameter("z_min", 0.135);
     declare_parameter("z_max", 1.5);
     declare_parameter("range_max", 30.0);
+    declare_parameter("scan_angle_increment_deg", 0.05);
 
     stretch_core::declareRobotSelfFilterParameters(*this);
     declare_parameter("pub_self_filter_markers", false);
@@ -188,6 +184,7 @@ private:
     pipeline_config_.region.z_min = static_cast<float>(get_parameter("z_min").as_double());
     pipeline_config_.region.z_max = static_cast<float>(get_parameter("z_max").as_double());
     pipeline_config_.region.range_max = static_cast<float>(get_parameter("range_max").as_double());
+    scan_angle_increment_deg_ = get_parameter("scan_angle_increment_deg").as_double();
 
     pipeline_config_.sor.dist_rob = get_parameter("dist_rob").as_double();
     pipeline_config_.sor.leaf_size = get_parameter("leaf_size").as_double();
@@ -228,31 +225,39 @@ private:
     }
   }
 
+  bool configureScanProjection(double angle_increment_deg)
+  {
+    if (!std::isfinite(angle_increment_deg) || angle_increment_deg <= 0.0 ||
+      angle_increment_deg > 5.0)
+    {
+      return false;
+    }
+
+    scan_angle_increment_deg_ = angle_increment_deg;
+    scan_cfg_.angle_min = -static_cast<float>(M_PI);
+    scan_cfg_.angle_max = static_cast<float>(M_PI);
+    scan_cfg_.angle_increment = static_cast<float>(
+      angle_increment_deg * static_cast<double>(M_PI) / 180.0);
+    scan_cfg_.range_max = pipeline_config_.region.range_max;
+
+    const float scan_span = scan_cfg_.angle_max - scan_cfg_.angle_min;
+    scan_cfg_.num_ranges = std::max(
+      1, static_cast<int>(std::round(scan_span / scan_cfg_.angle_increment)));
+    return true;
+  }
+
   void loadSelfFilterParams()
   {
     self_filter_config_ = stretch_core::loadRobotSelfFilterConfig(*this);
     self_filter_.setConfig(self_filter_config_);
   }
 
-  void updateSelfFilterTransforms(const tf2::TimePoint & tf_time, bool force_markers)
+  void updateSelfFilterTransforms(const tf2::TimePoint & tf_time)
   {
-    if (self_filter_config_.filter_arm || force_markers) {
-      self_filter_.updateArmSegment(
-        tf_buffer_, target_frame_, tf_time, get_logger(), *get_clock(), force_markers);
-    }
-    if (self_filter_config_.filter_arm_shoulder || force_markers) {
-      self_filter_.updateArmShoulderBox(
-        tf_buffer_, target_frame_, tf_time, get_logger(), *get_clock(), force_markers);
-    }
-    if (self_filter_config_.filter_wrist || force_markers) {
-      self_filter_.updateWristChain(
-        tf_buffer_, target_frame_, tf_time, get_logger(), *get_clock(), force_markers);
-    }
-    if (self_filter_config_.filter_attachment || force_markers) {
-      self_filter_.updateAttachmentBox(
-        tf_buffer_, target_frame_, tf_time, get_logger(), *get_clock(),
-        self_filter_config_.filter_attachment && force_markers);
-    }
+    self_filter_.updateArmSegment(
+      tf_buffer_, target_frame_, tf_time, get_logger(), *get_clock());
+    self_filter_.updateSelfFilterBoxes(
+      tf_buffer_, target_frame_, tf_time, get_logger(), *get_clock());
   }
 
   void configurePipeline()
@@ -314,6 +319,11 @@ private:
 
   void timerCallback()
   {
+    if (self_filter_reload_pending_) {
+      loadSelfFilterParams();
+      self_filter_reload_pending_ = false;
+    }
+
     if (!msg1_ || !msg2_) {
       RCLCPP_WARN(get_logger(), "One or both LIDAR messages not yet received.");
       return;
@@ -321,8 +331,7 @@ private:
 
     // const tf2::TimePoint tf_time = lidarTfTime();
     const tf2::TimePoint tf_time = tf2::TimePointZero;
-    const bool force_markers = pub_self_filter_markers_;
-    updateSelfFilterTransforms(tf_time, force_markers);
+    updateSelfFilterTransforms(tf_time);
 
     std_msgs::msg::Header output_header;
     output_header.frame_id = target_frame_;
@@ -342,7 +351,7 @@ private:
 
     if (pub_self_filter_markers_ && pub_markers_) {
       visualization_msgs::msg::MarkerArray marker_array;
-      self_filter_.appendSelfFilterMarkers(marker_array, target_frame_, now(), force_markers);
+      self_filter_.appendSelfFilterMarkers(marker_array, target_frame_, now());
       pub_markers_->publish(marker_array);
     }
 
@@ -397,15 +406,28 @@ private:
         pipeline_config_.region.range_max = static_cast<float>(param.as_double());
         scan_cfg_.range_max = pipeline_config_.region.range_max;
         pipeline_.setConfig(pipeline_config_);
+      } else if (name == "scan_angle_increment_deg") {
+        if (!configureScanProjection(param.as_double())) {
+          result.successful = false;
+          result.reason = "scan_angle_increment_deg must be > 0 and <= 5 degrees";
+        }
+      } else if (name == "frame_id" || name == "arm_line_start_frame" ||
+        name == "arm_line_start_height_frame" || name == "arm_line_end_frame" ||
+        name == "self_filter_box_frames" || name == "self_filter_box_names" ||
+        name == "self_filter_box_groups" || name == "self_filter_box_origin_x" ||
+        name == "self_filter_box_origin_y" || name == "self_filter_box_origin_z" ||
+        name == "self_filter_box_rpy_roll" || name == "self_filter_box_rpy_pitch" ||
+        name == "self_filter_box_rpy_yaw" || name == "self_filter_box_half_extents_x" ||
+        name == "self_filter_box_half_extents_y" || name == "self_filter_box_half_extents_z")
+      {
+        result.successful = false;
+        result.reason = "URDF self-filter geometry cannot be changed at runtime.";
       } else if (name == "base_radius") {
         self_filter_config_.base_radius = static_cast<float>(param.as_double());
         self_filter_.setConfig(self_filter_config_);
-      } else if (name == "filter_base") {
-        self_filter_config_.filter_base = param.as_bool();
-        self_filter_.setConfig(self_filter_config_);
       } else if (stretch_core::isRobotSelfFilterParameter(name))
       {
-        loadSelfFilterParams();
+        self_filter_reload_pending_ = true;
       } else if (name == "pub_self_filter_markers") {
         pub_self_filter_markers_ = param.as_bool();
         if (pub_self_filter_markers_) {
@@ -447,13 +469,6 @@ private:
       } else if (name == "output_topic") {
         scan_topic_ = param.as_string();
         pub_ = create_publisher<sensor_msgs::msg::LaserScan>(scan_topic_, rclcpp::SensorDataQoS());
-      } else if (name == "frame_id" || name == "arm_line_start_frame" ||
-        name == "arm_line_start_height_frame" || name == "arm_line_end_frame" ||
-        name == "arm_shoulder_box_frame" || name == "wrist_chain_frames" ||
-        name == "attachment_frame")
-      {
-        result.successful = false;
-        result.reason = "Parameter cannot be changed at runtime.";
       } else {
         result.successful = false;
         result.reason = "Unknown parameter";
@@ -491,6 +506,7 @@ private:
   std::string pointcloud_topic_;
   std::string target_frame_;
   std::string self_filter_markers_topic_;
+  double scan_angle_increment_deg_{0.05};
 
   Eigen::Matrix4f tf_lidar1_;
   Eigen::Matrix4f tf_lidar2_;
@@ -501,6 +517,7 @@ private:
   bool enable_sor_filter_{false};
   bool enable_floor_ransac_filter_{false};
   bool pub_self_filter_markers_{false};
+  bool self_filter_reload_pending_{false};
 };
 
 int main(int argc, char ** argv)

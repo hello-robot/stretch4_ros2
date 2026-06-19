@@ -64,13 +64,6 @@ target_include_directories(dual_lidar_pointcloud_merger PUBLIC
   ${EIGEN3_INCLUDE_DIRS}
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
 
-add_executable(self_filter_viz_node
-  src/self_filter_viz_node.cpp
-  src/robot_self_filter.cpp)
-ament_target_dependencies(self_filter_viz_node ${lidar_filter_dependencies})
-target_include_directories(self_filter_viz_node PUBLIC
-  ${EIGEN3_INCLUDE_DIRS}
-  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
 
 add_executable(robot_footprint_publisher
   src/robot_footprint_publisher_node.cpp
@@ -90,7 +83,6 @@ target_include_directories(robot_footprint_publisher PUBLIC
 install(TARGETS
   dual_lidar_laserscan
   dual_lidar_pointcloud_merger
-  self_filter_viz_node
   robot_footprint_publisher
   DESTINATION lib/${PROJECT_NAME}
 )

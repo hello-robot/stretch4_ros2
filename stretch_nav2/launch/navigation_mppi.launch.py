@@ -43,8 +43,8 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument(
             'tool_preset',
-            default_value='sg4',
-            description='Mounted tool preset for lidar self-filter: sg4, pg4, tablet, or nil',
+            default_value='auto',
+            description='Mounted tool preset for lidar self-filter: auto, sg4, pg4, tablet, or nil',
         ),
         DeclareLaunchArgument(
             'use_rviz',
