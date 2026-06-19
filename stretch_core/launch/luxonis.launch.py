@@ -302,7 +302,7 @@ def launch_setup(context, *args, **kwargs):
                         "0",
                         "0",
                         "0",
-                        f"link_camera_{camera_name}_optical",
+                        f"camera_{camera_name}_optical_link",
                         f"{VisionTopics.cameras_namespace()}_{swapped_position}_camera_optical_frame",  # This is the name published by the driver
                     ],
                 )
