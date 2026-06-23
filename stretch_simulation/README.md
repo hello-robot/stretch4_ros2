@@ -7,8 +7,7 @@ Use this package to use ROS2 with Stretch in Mujoco.
 Stretch Simulation supports the following environments:
 
 1. Native Ubuntu 24.04 workstation with an Nvidia GPU
-2. Windows WSL2 environment running Ubuntu 24.04 with GPU acceleration
-3. Docker environment with GPU support 
+2. Docker environment with GPU support 
 
 Minimum: 16GB RAM. Recommended: 32GB RAM.
 
