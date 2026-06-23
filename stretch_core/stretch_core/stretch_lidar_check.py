@@ -2,7 +2,8 @@
 """
 stretch_lidar_check — Read-only JT128 head lidar PTP and config verification.
 
-Checks return mode, PTP lock offset, locked status, and 30s jitter per lidar.
+Checks return mode, point-cloud filter, PTP lock offset, locked status,
+and 30s jitter per lidar.
 """
 
 import argparse
@@ -12,14 +13,19 @@ import statistics
 import sys
 import time
 
-from stretch_core.hesai_ptc_client import (
+from pyhesai_wrapper.ptc_client import (
+    FILTER_NAMES,
+    FILTER_STRONG,
     LEFT_LIDAR_IP,
     PTP_LOCK_OFFSET_US,
     PTP_STATUS_LOCKED,
     RETURN_MODE_LAST_AND_STRONGEST,
     RETURN_MODE_NAMES,
     RIGHT_LIDAR_IP,
+    ULTRA_PRECISE_NAMES,
     HesaiPtcError,
+    get_lidar_ptp_status,
+    get_point_cloud_config,
     get_ptp_lock_offset_us,
     get_return_mode,
     ptc_reachable,
@@ -139,6 +145,28 @@ def check_lidar(side, ip, duration_s, verbose=False):
         result['checks']['return_mode'] = {'passed': False, 'error': str(exc)}
         result['passed'] = False
 
+    # Point-cloud filter
+    try:
+        ultra_precise, filt = get_point_cloud_config(ip)
+        filter_ok = filt == FILTER_STRONG
+        result['checks']['point_cloud_filter'] = {
+            'passed': filter_ok,
+            'value': filt,
+            'expected': FILTER_STRONG,
+            'name': FILTER_NAMES.get(filt, 'unknown'),
+            'ultra_precise': ultra_precise,
+            'ultra_precise_name': ULTRA_PRECISE_NAMES.get(
+                ultra_precise, 'unknown',
+            ),
+        }
+        if not filter_ok:
+            result['passed'] = False
+    except HesaiPtcError as exc:
+        result['checks']['point_cloud_filter'] = {
+            'passed': False, 'error': str(exc),
+        }
+        result['passed'] = False
+
     # Lock offset
     try:
         offset_us = get_ptp_lock_offset_us(ip)
@@ -156,18 +184,17 @@ def check_lidar(side, ip, duration_s, verbose=False):
         }
         result['passed'] = False
 
-    # PTP status (strict: locked only)
+    # PTP status (strict: locked only, single read)
     try:
-        _offset_us, diag = sample_ptp_offset_us(ip)
-        status = diag['ptp_status']
-        status_name = diag['ptp_status_name']
+        ptp = get_lidar_ptp_status(ip)
+        status = ptp['ptp_status']
+        status_name = ptp['ptp_status_name']
         status_ok = status == PTP_STATUS_LOCKED
         result['checks']['ptp_status'] = {
             'passed': status_ok,
             'value': status_name,
             'status_code': status,
             'expected': 'locked',
-            'current_offset_us': _offset_us,
         }
         if not status_ok:
             result['passed'] = False
@@ -225,6 +252,15 @@ def print_lidar_report(result, duration_s):
             'Return mode (Last+Strongest)', rm.get('passed'), detail,
         ))
 
+    pf = checks.get('point_cloud_filter', {})
+    if 'error' in pf:
+        print(_status_line('Point-cloud filter (Strong)', False, pf['error']))
+    else:
+        detail = '{} ({})'.format(pf.get('value'), pf.get('name', ''))
+        print(_status_line(
+            'Point-cloud filter (Strong)', pf.get('passed'), detail,
+        ))
+
     lo = checks.get('lock_offset_us', {})
     if 'error' in lo:
         print(_status_line('Lock offset', False, lo['error']))
@@ -261,7 +297,7 @@ def parse_args(argv=None):
     parser = argparse.ArgumentParser(
         description=(
             'Read-only check of JT128 head lidar return mode, '
-            'PTP lock offset, locked status, and jitter.'
+            'point-cloud filter, PTP lock offset, locked status, and jitter.'
         ),
         epilog=PTP_GM_HINT,
     )

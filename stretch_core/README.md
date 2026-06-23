@@ -58,7 +58,7 @@ Tuning notes (filter order, gate radius, marker colors): see [config/README.md](
 
 ### Head lidar PTP check
 
-Read-only verification of JT128 return mode, PTP lock offset, locked status, and jitter (direct PTC TCP, no ROS topics):
+Read-only verification of JT128 return mode (Last + Strongest), point-cloud filter (Strong), PTP lock offset (350 µs), locked PTP status (single read), and jitter p95 ≤ 350 µs over 30 s (direct PTC TCP, no ROS topics):
 
 ```bash
 ros2 run stretch_core stretch_lidar_check
@@ -91,6 +91,11 @@ Test suites:
   - test_services
   - test_parameters
 ```
+
+## Head lidar PTC check
+
+`stretch_lidar_check` verifies JT128 return mode (Last + Strongest), point-cloud filter (Strong), PTP lock offset (350 µs), locked PTP status, and jitter p95 over PTC TCP (port 9347):
+
 
 ## License
 
