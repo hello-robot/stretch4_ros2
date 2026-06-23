@@ -514,7 +514,7 @@ class StretchDriver(Node):
             if joint_status_key == "gripper":
                 joint_status_key = "stretch_gripper"
 
-            if joint_status_key in ["wrist_roll", "wrist_pitch", "wrist_yaw", "stretch_gripper"]:
+            if joint_status_key in ["wrist_roll", "wrist_pitch", "wrist_yaw", "stretch_gripper", "parallel_gripper"]:
                 status_dict = robot_status["end_of_arm"][joint_status_key]
                 is_homed = bool(status_dict.get('pos_calibrated', False))
                 is_homing = bool(status_dict.get('is_homing', False))
