@@ -488,6 +488,13 @@ class StretchDriver(Node):
                     joint_state.position.append(pos)
                     joint_state.velocity.append(vel)
                     joint_state.effort.append(eff)
+            elif cg.name == "parallel_gripper_joint":
+                finger_pos = -pos / 2.0
+                for link in ['finger_left_joint', 'finger_right_joint']:
+                    joint_state.name.append(link)
+                    joint_state.position.append(finger_pos)
+                    joint_state.velocity.append(vel)
+                    joint_state.effort.append(eff)
             elif cg.name == "translate_mobile_base":
                 for w in ['wheel_0_joint', 'wheel_1_joint', 'wheel_2_joint']:
                     joint_state.name.append(w)
@@ -507,7 +514,7 @@ class StretchDriver(Node):
             if joint_status_key == "gripper":
                 joint_status_key = "stretch_gripper"
 
-            if joint_status_key in ["wrist_roll", "wrist_pitch", "wrist_yaw", "stretch_gripper"]:
+            if joint_status_key in ["wrist_roll", "wrist_pitch", "wrist_yaw", "stretch_gripper", "parallel_gripper"]:
                 status_dict = robot_status["end_of_arm"][joint_status_key]
                 is_homed = bool(status_dict.get('pos_calibrated', False))
                 is_homing = bool(status_dict.get('is_homing', False))
