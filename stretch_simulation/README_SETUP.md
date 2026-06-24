@@ -1,5 +1,6 @@
 # Setting up Stretch Simulation
 
+
 You should go through all the sections in this setup guide to run this package correctly.
 
 > NOTE: If you are running on a Stretch robot, you can skip to [Setting up Mujoco](#setting-up-mujoco-15-minutes)
@@ -7,6 +8,12 @@ You should go through all the sections in this setup guide to run this package c
 > NOTE: If you are on Linux or Windows, you can use the [Docker setup](README_DOCKER.md) to get started using Docker with hardware acceleration.
 
 Estimated install time: `~1-2hrs`.
+
+## Prerequisites
+
+- Ubuntu 24.04 host system
+- Nvidia GPU with CUDA >=12.6 drivers installed
+- Minimum 16GB RAM (32GB recommended)
 
 
 ## Install ROS2 Jazzy (10 minutes)
@@ -26,7 +33,7 @@ echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-a
 
 sudo apt update
 
-sudo apt install ros-jazzy-desktop ros-jazzy-rmw-zenoh-cpp ros-dev-tools rviz python3-pip
+sudo apt install ros-jazzy-desktop ros-jazzy-rmw-zenoh-cpp ros-dev-tools python3-pip
 
 source /opt/ros/jazzy/setup.bash
 ```
@@ -49,7 +56,7 @@ sudo apt install -y nodejs
 
 curl -sL https://raw.githubusercontent.com/hello-robot/stretch4_ros2/refs/heads/jazzy/stretch_simulation/stretch_ros2_jazzy.repos > /tmp/stretch_ros2_jazzy.repos
 curl -sL https://raw.githubusercontent.com/hello-robot/stretch4_ros2/refs/heads/jazzy/stretch_simulation/stretch_create_ament_workspace.sh > /tmp/stretch_create_ament_workspace.sh
-sudo bash /tmp/stretch_create_ament_workspace.sh
+bash /tmp/stretch_create_ament_workspace.sh
 
 
 # Optional: add source install/setup.bash to .bashrc:

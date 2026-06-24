@@ -489,8 +489,6 @@ class StretchDriver(Node):
                     joint_state.velocity.append(vel)
                     joint_state.effort.append(eff)
             elif cg.name == "parallel_gripper_joint":
-                # pos is the total gap width (e.g., 0.08 for fully open, 0.0 for fully closed).
-                # The URDF limits are [-0.04, 0].
                 finger_pos = -pos / 2.0
                 for link in ['finger_left_joint', 'finger_right_joint']:
                     joint_state.name.append(link)
@@ -516,7 +514,7 @@ class StretchDriver(Node):
             if joint_status_key == "gripper":
                 joint_status_key = "stretch_gripper"
 
-            if joint_status_key in ["wrist_roll", "wrist_pitch", "wrist_yaw", "stretch_gripper"]:
+            if joint_status_key in ["wrist_roll", "wrist_pitch", "wrist_yaw", "stretch_gripper", "parallel_gripper"]:
                 status_dict = robot_status["end_of_arm"][joint_status_key]
                 is_homed = bool(status_dict.get('pos_calibrated', False))
                 is_homing = bool(status_dict.get('is_homing', False))

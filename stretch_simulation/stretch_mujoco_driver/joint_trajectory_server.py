@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from stretch_mujoco_driver.stretch_mujoco_driver import StretchMujocoDriver
 
-from stretch_mujoco.enums.actuators import Actuators
+from stretch4_mujoco.enums.actuators import Actuators
 
 
 class JointTrajectoryAction:
