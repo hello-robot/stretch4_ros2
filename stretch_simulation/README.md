@@ -4,15 +4,18 @@ Use this package to use ROS2 with Stretch in Mujoco.
 
 ## System Requirements
 
-It is recommended to run this package on an Ubuntu 22.04 workstation with an Nvidia graphics card or a WSL2 environment with GPU acceleration.
+Stretch Simulation supports the following environments:
 
-Minimum: 16GB of RAM. Recommended: 32GB of RAM.
+1. Native Ubuntu 24.04 workstation with an Nvidia GPU
+2. Docker environment with GPU support 
 
-This package is not supported on Metal (MacOS) at this time due to the lack of GPU acceleration and OpenGL 1.5+ support in Docker, and slow performance in UTM with a virtual machine.
+Minimum: 16GB RAM. Recommended: 32GB RAM.
+
+> Note: This package is not supported on Metal (MacOS) at this time due to the lack of GPU acceleration and OpenGL 1.5+ support in Docker, and slow performance in UTM with a virtual machine.
 
 ## Launching
 
-The main launch file is `stretch_mujoco_driver.launch.py` which you can invoke by running
+The main launch file is `stretch_mujoco_driver.launch.py` which you can invoke by running:
 
 ```shell
 ros2 launch stretch_simulation stretch_mujoco_driver.launch.py
@@ -113,7 +116,7 @@ ros2 param set /global_costmap/global_costmap inflation_layer.inflation_radius 0
 ros2 param set /local_costmap/local_costmap  inflation_layer.inflation_radius 0.20
 ```
 
-### Web Teleop
+## Web Teleop
 
 You can use Stretch Web Teleop with the Stretch Simulation environment!
 
@@ -206,13 +209,13 @@ You could display all the launch options available to the Stretch Mujoco Driver 
 
 ```
 
-You can also set the node's argument`arguments=["--ros-args", "--log-level", "debug"]` in the launch file to display Sim-to-Real time and other useful debug information.
+You can also set the node's argument `arguments=["--ros-args", "--log-level", "debug"]` in the launch file to display Sim-to-Real time and other useful debug information.
 
 ## Getting Started
 
 You should go through all the sections in Getting Started to run this package correctly.
 
-> NOTE: If you are running on a Stretch robot, you may not need to run Stretch Simulation, unless you are trying to test out the simulation environment.
+> Note: If you are running on a Stretch robot, you may not need to run Stretch Simulation, unless you are trying to test out the simulation environment.
 
 Estimated install time: `~1-2hrs`.
 

@@ -9,22 +9,15 @@ set -e
 cd "$ABS_PATH"/..
 pip install -e "."
 
-if [ ! -d "$ABS_PATH/dependencies" ]; then
-    mkdir -p "$ABS_PATH"/dependencies
-else
-    echo "dependencies directory already exists"
-fi
-
-cd "$ABS_PATH"/dependencies
-
-# Install stretch_mujoco:
-if [ ! -d "stretch4_mujoco" ]; then
-    git clone https://github.com/hello-robot/stretch4_mujoco.git
-else
+if [ -d "$HOME/repos/stretch4_mujoco" ]; then
     echo "stretch4_mujoco already cloned"
+else
+    mkdir -p "$HOME/repos"
+    cd "$HOME/repos"
+    git clone https://github.com/hello-robot/stretch4_mujoco.git
 fi
 
-cd stretch4_mujoco
+cd ~/repos/stretch4_mujoco
 git submodule update --init
 
 read -p "Install robocasa and robosuite dependencies (Not recommended if using python >= 3.12)? (yN)" response
@@ -32,13 +25,14 @@ read -p "Install robocasa and robosuite dependencies (Not recommended if using p
 if [ "$response" = "y" ] || [ "$response" = "Y" ]; then
     # Install robocasa:
     pip install -e ".[robocasa]"
-    pip install -e "third_party/robocasa"
-    python3 third_party/robocasa/robocasa/scripts/setup_macros.py
-    python3 third_party/robocasa/robocasa/scripts/download_kitchen_assets.py
-
     # Install robosuite:
     pip install "third_party/robosuite"
     python3 third_party/robosuite/robosuite/scripts/setup_macros.py
+
+    pip install -e "third_party/robocasa"
+    python3 third_party/robocasa/robocasa/scripts/setup_macros.py
+    yes y | python3 third_party/robocasa/robocasa/scripts/download_kitchen_assets.py
+
 else
     echo "Skipped robocasa an robotsuite installs"
 fi

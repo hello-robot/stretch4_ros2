@@ -1,9 +1,7 @@
-version: '3.8'
-
 services:
-  stretch-simulation:
-    image: stretch4-simulation:latest
-    container_name: stretch4-sim
+  stretch-simulation: 
+    image: stretch-simulation:latest
+    container_name: stretch4-sim-container
     build:
       context: .
       dockerfile: Dockerfile
@@ -12,25 +10,28 @@ services:
     stdin_open: true
     tty: true
     shm_size: '2gb'
-    environment:
+    environment: 
       - DISPLAY=${DISPLAY}
       - QT_X11_NO_MITSHM=1
-      - MUJOCO_GL=egl
-      - HELLO_FLEET_PATH=/root/stretch_user
-      - HELLO_FLEET_ID=stretch
     volumes:
       # X11 socket for GUI
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
       - ${HOME}/.Xauthority:/root/.Xauthority:rw
-      # Persistent data storage
-      - ${HOME}/stretch_data:/root/stretch_user:rw
       # Mount local source code for development
-      - ./:/root/ament_ws/src/stretch_ros2/stretch_simulation:rw
+      # - ./:/root/ament_ws/src/stretch4_ros2/stretch_simulation:rw
+      #- ~/Projects/stretch_4/stretch4_ros2/:/root/ament_ws/src/stretch4_ros2:rw
+      #- ~/Projects/stretch_4/stretch4_mujoco:/root/repos/stretch4_mujoco/:rw
     deploy:
       resources:
         reservations:
           devices:
             - driver: nvidia
               count: all
-              capabilities: [gpu, compute, utility]
+              capabilities: [gpu]
+    command:
+      - bash
+      - -c
+      - |  
+        terminator -u --title="Stretch 4 MuJoCo"
 
+        

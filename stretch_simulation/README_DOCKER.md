@@ -4,9 +4,9 @@ This guide provides instructions for setting up and running the Stretch Simulati
 
 ## Prerequisites
 
-- Ubuntu 22.04 (or compatible Linux distribution)
+- Ubuntu host system (22.04 or newer recommended)
 - Nvidia GPU with CUDA >=12.6 drivers installed
-- Docker installed on your system
+- Docker
 - Minimum 16GB RAM (32GB recommended)
 
 ## Quick Setup
@@ -235,7 +235,7 @@ ros2 launch stretch_simulation stretch_mujoco_driver.launch.py \
 
 # Terminal 2: Launch navigation
 ros2 launch stretch_nav2 navigation_mppi.launch.py \
-    map:=~/ament_ws/src/stretch4_ros2/stretch_simulation/maps/gshaped_modern1_robocasa.yaml \
+    map:=/root/ament_ws/src/stretch4_ros2/stretch_simulation/maps/gshaped_modern1_robocasa.yaml \
     use_sim_time:=true \
     use_rviz:=true \
     teleop_type:=none
