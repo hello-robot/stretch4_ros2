@@ -16,7 +16,7 @@ def generate_launch_description():
     hlidar_launch = IncludeLaunchDescription(
         PathJoinSubstitution([stretch_core_path, 'launch', 'dual_hesai.launch.py']),
         launch_arguments={
-            'filter_type': 'sor',
+            'filter_type': 'sor_ransac',
             'tool_preset': LaunchConfiguration('tool_preset'),
         }.items(),
     )

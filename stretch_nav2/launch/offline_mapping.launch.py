@@ -24,7 +24,7 @@ def generate_launch_description():
     lidar_launch = IncludeLaunchDescription(
         PathJoinSubstitution([stretch_core_path, 'launch', 'dual_hesai.launch.py']),
         launch_arguments={
-            'filter_type': 'sor',
+            'filter_type': 'region',
             'tool_preset': LaunchConfiguration('tool_preset'),
         }.items(),
     )
