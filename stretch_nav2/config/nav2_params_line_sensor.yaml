@@ -1,0 +1,35 @@
+# Overlay for navigation with Stretch base line sensor obstacle points in costmaps.
+# Merged after nav2_params_core.yaml so /scan_filtered remains the primary lidar source.
+#
+# Subscribes to /line_sensor/obstacle_points (PointCloud2 in base_link). Points are
+# pre-filtered cliff/bump detections from stretch4_line_sensor — marking only, no clearing.
+
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      voxel_layer:
+        observation_sources: scan line_sensor_obstacles
+        line_sensor_obstacles:
+          topic: /line_sensor/obstacle_points
+          data_type: "PointCloud2"
+          marking: True
+          clearing: False
+          min_obstacle_height: -0.05
+          max_obstacle_height: 0.50
+          obstacle_max_range: 4.0
+          obstacle_min_range: 0.0
+
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      obstacle_layer:
+        observation_sources: scan line_sensor_obstacles
+        line_sensor_obstacles:
+          topic: /line_sensor/obstacle_points
+          data_type: "PointCloud2"
+          marking: True
+          clearing: False
+          min_obstacle_height: -0.05
+          max_obstacle_height: 0.50
+          obstacle_max_range: 4.0
+          obstacle_min_range: 0.0
