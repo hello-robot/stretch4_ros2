@@ -312,6 +312,8 @@ class StretchMujocoDriver(Node):
                     "Received qpos does not match the number of joints in the robot"
                 )
                 return
+
+                
             self.sim.move_to(Actuators.arm, qpos[Idx.ARM])
             self.sim.move_to(Actuators.lift, qpos[Idx.LIFT])
             self.sim.move_to(Actuators.wrist_yaw, qpos[Idx.WRIST_YAW])
@@ -446,13 +448,8 @@ class StretchMujocoDriver(Node):
         else:
             arm_backlash_correction = 0.0
 
-        pos_out = arm_status.pos + arm_backlash_correction
-        vel_out = arm_status.vel
-        # eff_out = arm_status.motor.effort_pct
-        eff_out = 0.0
-
         lift_status = robot_status.lift
-        pos_up = lift_status.pos
+        pos_up = 
         vel_up = lift_status.vel
         # eff_up = lift_status.motor.effort_pct
         eff_up = 0.0
@@ -498,81 +495,45 @@ class StretchMujocoDriver(Node):
         joint_state = JointState()
         joint_state.header = Header()
         joint_state.header.stamp = current_time
-        # arm_l1_joint is the most proximal and arm_l4_joint is the
-        # most distal joint of the telescoping arm model. The joints
-        # are connected in series such that moving the most proximal
-        # joint moves all the other joints in the global frame.
-        joint_state.name = [
-            # "wrist_extension",
-            "lift_joint",
-            "arm_l1_joint",
-            "arm_l2_joint",
-            "arm_l3_joint",
-            "arm_l4_joint",
-        ]
 
-        # set positions of the telescoping joints
-        positions = [pos_out / 5.0 for i in range(5)]
-        # set lift position
-        positions.insert(0, pos_up)
+        joint_state.name.append("lift_joint")
+        joint_state.position.append(lift_status.pos)
+        joint_state.velocity.append(lift_status.vel)
+        joint_state.effort.append(lift_status.effort)
+
+        for link in ['arm_l4_joint', 'arm_l3_joint', 'arm_l2_joint', 'arm_l1_joint']:
+            joint_state.name.append(link)
+            joint_state.position.append(arm_status.pos + arm_backlash_correction/5.0)
+            joint_state.velocity.append(arm_status.vel/5.0)
+            joint_state.effort.append(arm_status.effort/5.0)
+
+        joint_state.name.append('wrist_yaw_joint')
+        joint_state.position.append(wrist_yaw_rad)
+        joint_state.velocity.append(wrist_yaw_vel)
+        joint_state.effort.append(wrist_yaw_effort)
+
+        joint_state.name.append('wrist_pitch_joint')
+        joint_state.position.append(wrist_pitch_rad)
+        joint_state.velocity.append(wrist_pitch_vel)
+        joint_state.effort.append(wrist_pitch_effort)
+
+        joint_state.name.append('wrist_roll_joint')
+        joint_state.position.append(wrist_roll_rad)
+        joint_state.velocity.append(wrist_roll_vel)
+        joint_state.effort.append(wrist_roll_effort)
+        
+        for link in ['gripper_finger_left_joint', 'gripper_finger_right_joint']:
+            joint_state.name.append(link)
+            joint_state.position.append(robot_status.gripper.pos)
+            joint_state.velocity.append(robot_status.gripper.vel)
+            joint_state.effort.append(robot_status.gripper.effort)
+        for w in ['wheel_0_joint', 'wheel_1_joint', 'wheel_2_joint']:
+            joint_state.name.append(w)
+            joint_state.position.append(0.0)
+            joint_state.velocity.append(0.0)
+            joint_state.effort.append(0.0)
 
 
-        # set velocities of the telescoping joints
-        velocities = [vel_out / 5.0 for i in range(5)]
-        # set lift velocity
-        velocities.insert(0, vel_up)
-
-
-        # set efforts of the telescoping joints
-        efforts = [eff_out for i in range(5)]
-        # set lift effort
-        efforts.insert(0, eff_up)
-
-
-        dex_wrist_attached = True
-
-        end_of_arm_joint_names = [
-            "wrist_yaw_joint",
-            "wrist_pitch_joint",
-            "wrist_roll_joint",
-        ] if dex_wrist_attached else [
-            "wrist_yaw_joint"
-        ]
-
-        # if 'stretch_gripper' in self.sim.end_of_arm.joints:
-        end_of_arm_joint_names = end_of_arm_joint_names + [
-            "gripper_finger_right_joint",
-            "gripper_finger_left_joint",
-        ]
-
-        joint_state.name.extend(end_of_arm_joint_names)
-
-        positions.append(wrist_yaw_rad)
-        velocities.append(wrist_yaw_vel)
-        efforts.append(wrist_yaw_effort)
-
-        if dex_wrist_attached:
-            positions.append(wrist_pitch_rad)
-            velocities.append(wrist_pitch_vel)
-            efforts.append(wrist_pitch_effort)
-
-            positions.append(wrist_roll_rad)
-            velocities.append(wrist_roll_vel)
-            efforts.append(wrist_roll_effort)
-
-        # Left Finger
-        positions.append(robot_status.gripper.pos)
-        velocities.append(robot_status.gripper.vel)
-        efforts.append(0.0)
-        # Right Finger
-        positions.append(robot_status.gripper.pos)
-        velocities.append(robot_status.gripper.vel)
-        efforts.append(0.0)
-
-        # set joint_state
-        joint_state.position = positions
-        joint_state.velocity = velocities
-        joint_state.effort = efforts
         self.joint_state_pub.publish(joint_state)
 
         ##################################################
