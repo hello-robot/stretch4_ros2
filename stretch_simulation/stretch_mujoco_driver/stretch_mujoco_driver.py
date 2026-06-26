@@ -441,37 +441,6 @@ class StretchMujocoDriver(Node):
             t.transform.rotation.w = q[3]
             self.tf_broadcaster.sendTransform(t)
 
-        # assign relevant arm status to variables
-        arm_status = robot_status.arm
-        if self.backlash_state["wrist_extension_retracted"]:
-            arm_backlash_correction = self.wrist_extension_calibrated_retracted_offset_m
-        else:
-            arm_backlash_correction = 0.0
-
-        lift_status = robot_status.lift
-        pos_up = 
-        vel_up = lift_status.vel
-        # eff_up = lift_status.motor.effort_pct
-        eff_up = 0.0
-
-        # assign relevant wrist status to variables
-        wrist_yaw_status = robot_status.wrist_yaw
-        wrist_yaw_rad = wrist_yaw_status.pos
-        wrist_yaw_vel = wrist_yaw_status.vel
-        # wrist_yaw_effort = wrist_yaw_status.effort
-        wrist_yaw_effort = 0.0
-
-        wrist_pitch_status = robot_status.wrist_pitch
-        wrist_pitch_rad = wrist_pitch_status.pos
-        wrist_pitch_vel = wrist_pitch_status.vel
-        # wrist_pitch_effort = wrist_pitch_status.effort
-        wrist_pitch_effort = 0.0
-
-        wrist_roll_status = robot_status.wrist_roll
-        wrist_roll_rad = wrist_roll_status.pos
-        wrist_roll_vel = wrist_roll_status.vel
-        # wrist_roll_effort = wrist_roll_status.effort
-        wrist_roll_effort = 0.0
 
         # publish homed status
         self.update_latched_value(self.homed_pub, True)
@@ -497,30 +466,30 @@ class StretchMujocoDriver(Node):
         joint_state.header.stamp = current_time
 
         joint_state.name.append("lift_joint")
-        joint_state.position.append(lift_status.pos)
-        joint_state.velocity.append(lift_status.vel)
-        joint_state.effort.append(lift_status.effort)
+        joint_state.position.append(robot_status.lift.pos)
+        joint_state.velocity.append(robot_status.lift.vel)
+        joint_state.effort.append(robot_status.lift.effort)
 
         for link in ['arm_l4_joint', 'arm_l3_joint', 'arm_l2_joint', 'arm_l1_joint']:
             joint_state.name.append(link)
-            joint_state.position.append(arm_status.pos + arm_backlash_correction/5.0)
-            joint_state.velocity.append(arm_status.vel/5.0)
-            joint_state.effort.append(arm_status.effort/5.0)
+            joint_state.position.append(robot_status.arm.pos)
+            joint_state.velocity.append(robot_status.arm.vel)
+            joint_state.effort.append(robot_status.arm.effort)
 
         joint_state.name.append('wrist_yaw_joint')
-        joint_state.position.append(wrist_yaw_rad)
-        joint_state.velocity.append(wrist_yaw_vel)
-        joint_state.effort.append(wrist_yaw_effort)
+        joint_state.position.append(robot_status.wrist_yaw.pos)
+        joint_state.velocity.append(robot_status.wrist_yaw.vel)
+        joint_state.effort.append(robot_status.wrist_yaw.effort)
 
         joint_state.name.append('wrist_pitch_joint')
-        joint_state.position.append(wrist_pitch_rad)
-        joint_state.velocity.append(wrist_pitch_vel)
-        joint_state.effort.append(wrist_pitch_effort)
+        joint_state.position.append(robot_status.wrist_pitch.pos)
+        joint_state.velocity.append(robot_status.wrist_pitch.vel)
+        joint_state.effort.append(robot_status.wrist_pitch.effort)
 
         joint_state.name.append('wrist_roll_joint')
-        joint_state.position.append(wrist_roll_rad)
-        joint_state.velocity.append(wrist_roll_vel)
-        joint_state.effort.append(wrist_roll_effort)
+        joint_state.position.append(robot_status.wrist_roll.pos)
+        joint_state.velocity.append(robot_status.wrist_roll.vel)
+        joint_state.effort.append(robot_status.wrist_roll.effort)
         
         for link in ['gripper_finger_left_joint', 'gripper_finger_right_joint']:
             joint_state.name.append(link)
