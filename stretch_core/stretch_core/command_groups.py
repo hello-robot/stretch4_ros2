@@ -183,7 +183,8 @@ class ParallelGripperCommandGroup(BaseCommandGroup):
     @override
     @check_active()
     def queue_execution(self, robot: Any, **kwargs: Any) -> None:
-        robot.end_of_arm.move_to(RobotJoints.gripper.value, self.goal['position'], self.goal['velocity'], self.goal['acceleration'])
+        goal_m = self.goal['position']
+        robot.end_of_arm.move_to('parallel_gripper', goal_m, self.goal['velocity'], self.goal['acceleration'])
 
     @override
     @check_active()
@@ -198,7 +199,7 @@ class ParallelGripperCommandGroup(BaseCommandGroup):
     @override
     @check_active()
     def cancel_execution(self, robot: Any, **kwargs: Any) -> None:
-        robot.end_of_arm.move_by(RobotJoints.gripper.value, 0.0)
+        robot.end_of_arm.move_by('parallel_gripper', 0.0)
 
     @override
     @check_active()

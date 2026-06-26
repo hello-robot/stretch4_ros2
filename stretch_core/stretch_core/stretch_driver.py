@@ -17,10 +17,8 @@ from control_msgs.msg import JointJog
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 from geometry_msgs.msg import TransformStamped, Twist
 from nav_msgs.msg import Odometry
-from rcl_interfaces.msg import (ParameterDescriptor, ParameterType,
-                                SetParametersResult)
-from rclpy.callback_groups import (MutuallyExclusiveCallbackGroup,
-                                   ReentrantCallbackGroup)
+from rcl_interfaces.msg import ParameterDescriptor, ParameterType, SetParametersResult
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
 from rclpy.duration import Duration
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
