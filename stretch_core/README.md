@@ -108,6 +108,16 @@ RViz markers are published on `/self_filter_markers`. Raw URDF boxes show the co
 
 Tuning notes for filter order, gate radius, URDF box buffers, and markers: see [config/README.md](config/README.md).
 
+### Head lidar PTP check
+
+Read-only verification of JT128 return mode (Last + Strongest), point-cloud filter (Strong), PTP lock offset (350 µs), locked PTP status (single read), and jitter p95 ≤ 350 µs over 30 s (direct PTC TCP, no ROS topics):
+
+```bash
+ros2 run stretch_core stretch_lidar_check
+```
+
+Options: `--left`, `--right`, `--duration 30`, `--json`, `--verbose`.
+
 ## API
 
 For comprehensive API documentation, please refer to [Coming soon](#TODO).
@@ -133,6 +143,11 @@ Test suites:
   - test_services
   - test_parameters
 ```
+
+## Head lidar PTC check
+
+`stretch_lidar_check` verifies JT128 return mode (Last + Strongest), point-cloud filter (Strong), PTP lock offset (350 µs), locked PTP status, and jitter p95 over PTC TCP (port 9347):
+
 
 ## License
 
