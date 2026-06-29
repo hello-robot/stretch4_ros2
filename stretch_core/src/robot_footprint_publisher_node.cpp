@@ -216,13 +216,8 @@ private:
     }
 
     const auto time = tf2::TimePointZero;
-    self_filter_.updateArmSegment(tf_buffer_, frame_id_, time, get_logger(), *get_clock(), true);
-    self_filter_.updateWristChain(tf_buffer_, frame_id_, time, get_logger(), *get_clock(), true);
-    if (self_filter_config_.filter_attachment) {
-      self_filter_.updateAttachmentBox(
-        tf_buffer_, frame_id_, time, get_logger(), *get_clock(), true);
-    }
-
+    self_filter_.updateArmSegment(tf_buffer_, frame_id_, time, get_logger(), *get_clock());
+    self_filter_.updateSelfFilterBoxes(tf_buffer_, frame_id_, time, get_logger(), *get_clock());
     const auto hull = self_filter_.computeFootprintPolygon2d(base_polygon_);
     if (hull.size() < 3) {
       return false;

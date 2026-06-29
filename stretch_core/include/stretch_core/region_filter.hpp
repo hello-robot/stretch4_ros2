@@ -23,6 +23,9 @@ public:
 
   bool passes(const Eigen::Vector3f & point, PipelineStages stages) const
   {
+    if (!hasStage(stages, PipelineStage::Region)) {
+      return true;
+    }
     const float z = point.z();
     if (!hasStage(stages, PipelineStage::FloorRansac) && z < config_.z_min) {
       return false;

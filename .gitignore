@@ -14,6 +14,8 @@ __pycache__/
 *.swn
 *.swo
 
+*.zip
+
 # Colcon generated folders and files that we shouldn't check in
 build/
 install/

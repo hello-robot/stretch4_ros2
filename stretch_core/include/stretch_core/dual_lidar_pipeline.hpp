@@ -5,6 +5,7 @@
 
 #include <rclcpp/logger.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
+#include <std_msgs/msg/header.hpp>
 #include <sensor_msgs/point_cloud2_iterator.hpp>
 
 #include <cmath>
@@ -17,7 +18,7 @@
 #include "stretch_core/pipeline_stages.hpp"
 #include "stretch_core/region_filter.hpp"
 #include "stretch_core/robot_self_filter.hpp"
-#include "stretch_core/voxel_sor_filter.hpp"
+#include "stretch_core/sor_filter.hpp"
 
 namespace stretch_core
 {
@@ -34,7 +35,7 @@ struct ScanProjectionConfig
 struct DualLidarPipelineConfig
 {
   RegionFilterConfig region;
-  VoxelSorFilterConfig voxel_sor;
+  SorFilterConfig sor;
   FloorPlaneFilterConfig floor;
   bool speckle_filter_enabled{true};
   int speckle_min_points{2};
@@ -47,7 +48,7 @@ struct PipelineOutput
 {
   std::vector<float> ranges;
   std::vector<int> hit_counts;
-  pcl::PointCloud<pcl::PointXYZ>::Ptr debug_cloud;
+  std::optional<sensor_msgs::msg::PointCloud2> merged_cloud;
 };
 
 class DualLidarPipeline
@@ -63,20 +64,22 @@ public:
     const Eigen::Matrix4f & tf_lidar2,
     RobotSelfFilter & self_filter,
     const ScanProjectionConfig & scan_cfg,
-    bool build_debug_cloud,
+    bool pub_pointcloud,
+    const std_msgs::msg::Header & output_header,
     rclcpp::Logger logger) const;
 
 private:
-  pcl::PointCloud<pcl::PointXYZ>::Ptr extractAndPreFilter(
+  pcl::PointCloud<pcl::PointXYZ>::Ptr transformAndApplyRegionFilter(
     const sensor_msgs::msg::PointCloud2::ConstSharedPtr & msg,
-    const Eigen::Matrix4f & tf_matrix,
+    const Eigen::Matrix4f & tf_matrix) const;
+
+  pcl::PointCloud<pcl::PointXYZ>::Ptr applySelfFilter(
+    const pcl::PointCloud<pcl::PointXYZ>::Ptr & cloud,
     RobotSelfFilter & self_filter) const;
 
   void projectPointsFused(
     const pcl::PointCloud<pcl::PointXYZ>::Ptr & cloud,
-    const std::optional<std::array<float, 4>> & floor_coeffs,
     const ScanProjectionConfig & scan_cfg,
-    bool build_debug_cloud,
     PipelineOutput & output) const;
 
   void applySpeckleFilter(
@@ -85,7 +88,7 @@ private:
 
   DualLidarPipelineConfig config_;
   PipelineStages stages_{0};
-  VoxelSorFilter voxel_sor_filter_;
+  SorFilter sor_filter_;
   FloorPlaneFilter floor_filter_;
   RegionFilter region_filter_;
 };
