@@ -491,11 +491,15 @@ class StretchMujocoDriver(Node):
         joint_state.velocity.append(robot_status.wrist_roll.vel)
         joint_state.effort.append(robot_status.wrist_roll.effort)
         
-        for link in ['gripper_finger_left_joint', 'gripper_finger_right_joint']:
-            joint_state.name.append(link)
-            joint_state.position.append(robot_status.gripper.pos)
-            joint_state.velocity.append(robot_status.gripper.vel)
-            joint_state.effort.append(robot_status.gripper.effort)
+        # for link in ['gripper_finger_left_joint', 'gripper_finger_right_joint']:
+        joint_state.name.append("gripper_finger_left_joint")
+        joint_state.position.append(robot_status.gripper_left_finger.pos)
+        joint_state.velocity.append(robot_status.gripper_left_finger.vel)
+        joint_state.effort.append(robot_status.gripper_left_finger.effort)
+        joint_state.name.append("gripper_finger_right_joint")
+        joint_state.position.append(robot_status.gripper_right_finger.pos)
+        joint_state.velocity.append(robot_status.gripper_right_finger.vel)
+        joint_state.effort.append(robot_status.gripper_right_finger.effort)
         for w in ['wheel_0_joint', 'wheel_1_joint', 'wheel_2_joint']:
             joint_state.name.append(w)
             joint_state.position.append(0.0)
