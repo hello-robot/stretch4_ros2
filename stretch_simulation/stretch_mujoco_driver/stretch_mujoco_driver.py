@@ -472,9 +472,9 @@ class StretchMujocoDriver(Node):
 
         for link in ['arm_l4_joint', 'arm_l3_joint', 'arm_l2_joint', 'arm_l1_joint']:
             joint_state.name.append(link)
-            joint_state.position.append(robot_status.arm.pos)
-            joint_state.velocity.append(robot_status.arm.vel)
-            joint_state.effort.append(robot_status.arm.effort)
+            joint_state.position.append(robot_status.arm.pos/4)
+            joint_state.velocity.append(robot_status.arm.vel/4)
+            joint_state.effort.append(robot_status.arm.effort/4)
 
         joint_state.name.append('wrist_yaw_joint')
         joint_state.position.append(robot_status.wrist_yaw.pos)
