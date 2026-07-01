@@ -46,7 +46,7 @@
   <exec_depend>hesai_ros_driver</exec_depend>
   <exec_depend>joy</exec_depend>
   <exec_depend>python3-numpy</exec_depend>
-  <exec_depend>python3-trimesh</exec_depend>
+  <exec_depend>python-trimesh-pip</exec_depend>
   <exec_depend>python3-yaml</exec_depend>
   <exec_depend>rclcpp_components</exec_depend>
   <exec_depend>realsense2_camera</exec_depend>
