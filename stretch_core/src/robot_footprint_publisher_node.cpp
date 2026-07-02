@@ -116,27 +116,34 @@ public:
       RCLCPP_ERROR(get_logger(), "base_footprint_polygon must have at least 3 vertices (6 values).");
     }
 
-    rclcpp::QoS qos_profile(1);
-    qos_profile.reliable();      
-    qos_profile.durability_volatile();
+    rclcpp::QoS footprint_qos(rclcpp::KeepLast(1));
+    footprint_qos.transient_local();
+    footprint_qos.reliable();
 
     footprint_pub_ = create_publisher<geometry_msgs::msg::Polygon>(
-        footprint_topic_, qos_profile);
+        footprint_topic_, footprint_qos);
 
     if (publish_costmap_topics_) {
         local_footprint_pub_ = create_publisher<geometry_msgs::msg::Polygon>(
-            local_costmap_footprint_topic_, qos_profile);
+            local_costmap_footprint_topic_, footprint_qos);
         global_footprint_pub_ = create_publisher<geometry_msgs::msg::Polygon>(
-            global_costmap_footprint_topic_, qos_profile);
+            global_costmap_footprint_topic_, footprint_qos);
+
+        local_published_footprint_sub_ = create_subscription<geometry_msgs::msg::Polygon>(
+          local_costmap_published_footprint_topic_, footprint_qos,
+          std::bind(
+            &RobotFootprintPublisherNode::localPublishedFootprintCallback, this,
+            std::placeholders::_1));
+        global_published_footprint_sub_ = create_subscription<geometry_msgs::msg::Polygon>(
+          global_costmap_published_footprint_topic_, footprint_qos,
+          std::bind(
+            &RobotFootprintPublisherNode::globalPublishedFootprintCallback, this,
+            std::placeholders::_1));
     }
 
     joint_states_sub_ = create_subscription<sensor_msgs::msg::JointState>(
       joint_states_topic_, rclcpp::QoS(10),
       std::bind(&RobotFootprintPublisherNode::jointStatesCallback, this, std::placeholders::_1));
-
-    startup_timer_ = create_wall_timer(
-      std::chrono::milliseconds(200),
-      std::bind(&RobotFootprintPublisherNode::startupTimerCallback, this));
   }
 
 private:
@@ -149,6 +156,10 @@ private:
       "local_costmap_footprint_topic", "/local_costmap/local_costmap/footprint");
     declare_parameter<std::string>(
       "global_costmap_footprint_topic", "/global_costmap/global_costmap/footprint");
+    declare_parameter<std::string>(
+      "local_costmap_published_footprint_topic", "/local_costmap/published_footprint");
+    declare_parameter<std::string>(
+      "global_costmap_published_footprint_topic", "/global_costmap/published_footprint");
     declare_parameter<std::string>("joint_states_topic", "/joint_states");
     declare_parameter("joint_change_threshold_m", 0.01);
     declare_parameter("joint_change_threshold_rad", 0.01);
@@ -163,6 +174,10 @@ private:
     publish_costmap_topics_ = get_parameter("publish_costmap_footprint_topics").as_bool();
     local_costmap_footprint_topic_ = get_parameter("local_costmap_footprint_topic").as_string();
     global_costmap_footprint_topic_ = get_parameter("global_costmap_footprint_topic").as_string();
+    local_costmap_published_footprint_topic_ =
+      get_parameter("local_costmap_published_footprint_topic").as_string();
+    global_costmap_published_footprint_topic_ =
+      get_parameter("global_costmap_published_footprint_topic").as_string();
     joint_states_topic_ = get_parameter("joint_states_topic").as_string();
     joint_change_threshold_m_ = get_parameter("joint_change_threshold_m").as_double();
     joint_change_threshold_rad_ = get_parameter("joint_change_threshold_rad").as_double();
@@ -171,6 +186,60 @@ private:
 
     self_filter_config_ = stretch_core::loadRobotSelfFilterConfig(*this);
     self_filter_.setConfig(self_filter_config_);
+  }
+
+  void publishFootprint(const std::vector<Eigen::Vector2f> & hull)
+  {
+    const auto msg = toPolygonMsg(hull);
+    footprint_pub_->publish(msg);
+    if (published_local_costmap_footprint_ && local_footprint_pub_) {
+      local_footprint_pub_->publish(msg);
+    }
+    if (published_global_costmap_footprint_ && global_footprint_pub_) {
+      global_footprint_pub_->publish(msg);
+    }
+  }
+
+  void publishLocalCostmapFootprintOnce()
+  {
+    if (published_local_costmap_footprint_ || !local_footprint_pub_ || last_published_hull_.empty()) {
+      return;
+    }
+
+    local_footprint_pub_->publish(toPolygonMsg(last_published_hull_));
+    published_local_costmap_footprint_ = true;
+    local_published_footprint_sub_.reset();
+    RCLCPP_INFO(
+      get_logger(),
+      "Local costmap is up; published footprint on %s",
+      local_costmap_footprint_topic_.c_str());
+  }
+
+  void publishGlobalCostmapFootprintOnce()
+  {
+    if (published_global_costmap_footprint_ || !global_footprint_pub_ || last_published_hull_.empty()) {
+      return;
+    }
+
+    global_footprint_pub_->publish(toPolygonMsg(last_published_hull_));
+    published_global_costmap_footprint_ = true;
+    global_published_footprint_sub_.reset();
+    RCLCPP_INFO(
+      get_logger(),
+      "Global costmap is up; published footprint on %s",
+      global_costmap_footprint_topic_.c_str());
+  }
+
+  void localPublishedFootprintCallback(const geometry_msgs::msg::Polygon::SharedPtr /*msg*/)
+  {
+    local_costmap_ready_ = true;
+    publishLocalCostmapFootprintOnce();
+  }
+
+  void globalPublishedFootprintCallback(const geometry_msgs::msg::Polygon::SharedPtr /*msg*/)
+  {
+    global_costmap_ready_ = true;
+    publishGlobalCostmapFootprintOnce();
   }
 
   bool jointsMovedEnough(const sensor_msgs::msg::JointState & msg)
@@ -228,51 +297,46 @@ private:
       return false;
     }
 
-    const auto msg = toPolygonMsg(hull);
-    footprint_pub_->publish(msg);
-    if (local_footprint_pub_) {
-      local_footprint_pub_->publish(msg);
+    last_published_hull_ = hull;
+    publishFootprint(hull);
+
+    if (local_costmap_ready_) {
+      publishLocalCostmapFootprintOnce();
     }
-    if (global_footprint_pub_) {
-      global_footprint_pub_->publish(msg);
+    if (global_costmap_ready_) {
+      publishGlobalCostmapFootprintOnce();
     }
 
-    last_published_hull_ = hull;
-    has_published_ = true;
     return true;
   }
 
   void jointStatesCallback(const sensor_msgs::msg::JointState::SharedPtr msg)
   {
-    if (!jointsMovedEnough(*msg)) {
+    const bool first_joint_state = !received_first_joint_state_;
+    received_first_joint_state_ = true;
+    if (!first_joint_state && !jointsMovedEnough(*msg)) {
       return;
     }
     storeJointPositions(*msg);
-    updateFootprintIfChanged(false);
-  }
-
-  void startupTimerCallback()
-  {
-    if (has_published_) {
-      startup_timer_->cancel();
-      return;
-    }
-    if (updateFootprintIfChanged(true)) {
-      startup_timer_->cancel();
-      RCLCPP_INFO(get_logger(), "Published initial footprint on %s", footprint_topic_.c_str());
-    }
+    updateFootprintIfChanged(first_joint_state);
   }
 
   std::string frame_id_;
   std::string footprint_topic_;
   std::string local_costmap_footprint_topic_;
   std::string global_costmap_footprint_topic_;
+  std::string local_costmap_published_footprint_topic_;
+  std::string global_costmap_published_footprint_topic_;
   std::string joint_states_topic_;
   double joint_change_threshold_m_{0.01};
   double joint_change_threshold_rad_{0.01};
   double footprint_change_epsilon_m_{0.01};
   bool publish_costmap_topics_{true};
-  bool has_published_{false};
+  bool local_costmap_ready_{false};
+  bool global_costmap_ready_{false};
+  bool published_local_costmap_footprint_{false};
+  bool published_global_costmap_footprint_{false};
+  bool received_first_joint_state_{false};
 
   std::vector<Eigen::Vector2f> base_polygon_;
   std::vector<Eigen::Vector2f> last_published_hull_;
@@ -286,8 +350,9 @@ private:
   rclcpp::Publisher<geometry_msgs::msg::Polygon>::SharedPtr footprint_pub_;
   rclcpp::Publisher<geometry_msgs::msg::Polygon>::SharedPtr local_footprint_pub_;
   rclcpp::Publisher<geometry_msgs::msg::Polygon>::SharedPtr global_footprint_pub_;
+  rclcpp::Subscription<geometry_msgs::msg::Polygon>::SharedPtr local_published_footprint_sub_;
+  rclcpp::Subscription<geometry_msgs::msg::Polygon>::SharedPtr global_published_footprint_sub_;
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr joint_states_sub_;
-  rclcpp::TimerBase::SharedPtr startup_timer_;
 };
 
 int main(int argc, char ** argv)
