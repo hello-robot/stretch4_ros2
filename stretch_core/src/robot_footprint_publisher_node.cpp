@@ -1,5 +1,6 @@
 #include <rclcpp/rclcpp.hpp>
 #include <geometry_msgs/msg/polygon.hpp>
+#include <geometry_msgs/msg/polygon_stamped.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
@@ -120,6 +121,9 @@ public:
     footprint_qos.transient_local();
     footprint_qos.reliable();
 
+    // Nav2 costmaps subscribe to ~/footprint with reliable + volatile QoS.
+    const auto costmap_footprint_qos = rclcpp::SystemDefaultsQoS();
+
     footprint_pub_ = create_publisher<geometry_msgs::msg::Polygon>(
         footprint_topic_, footprint_qos);
 
@@ -129,16 +133,18 @@ public:
         global_footprint_pub_ = create_publisher<geometry_msgs::msg::Polygon>(
             global_costmap_footprint_topic_, footprint_qos);
 
-        local_published_footprint_sub_ = create_subscription<geometry_msgs::msg::Polygon>(
-          local_costmap_published_footprint_topic_, footprint_qos,
-          std::bind(
-            &RobotFootprintPublisherNode::localPublishedFootprintCallback, this,
-            std::placeholders::_1));
-        global_published_footprint_sub_ = create_subscription<geometry_msgs::msg::Polygon>(
-          global_costmap_published_footprint_topic_, footprint_qos,
-          std::bind(
-            &RobotFootprintPublisherNode::globalPublishedFootprintCallback, this,
-            std::placeholders::_1));
+        local_published_footprint_sub_ =
+          create_subscription<geometry_msgs::msg::PolygonStamped>(
+            local_costmap_published_footprint_topic_, costmap_footprint_qos,
+            std::bind(
+              &RobotFootprintPublisherNode::localPublishedFootprintCallback, this,
+              std::placeholders::_1));
+        global_published_footprint_sub_ =
+          create_subscription<geometry_msgs::msg::PolygonStamped>(
+            global_costmap_published_footprint_topic_, costmap_footprint_qos,
+            std::bind(
+              &RobotFootprintPublisherNode::globalPublishedFootprintCallback, this,
+              std::placeholders::_1));
     }
 
     joint_states_sub_ = create_subscription<sensor_msgs::msg::JointState>(
@@ -230,13 +236,15 @@ private:
       global_costmap_footprint_topic_.c_str());
   }
 
-  void localPublishedFootprintCallback(const geometry_msgs::msg::Polygon::SharedPtr /*msg*/)
+  void localPublishedFootprintCallback(
+    const geometry_msgs::msg::PolygonStamped::SharedPtr /*msg*/)
   {
     local_costmap_ready_ = true;
     publishLocalCostmapFootprintOnce();
   }
 
-  void globalPublishedFootprintCallback(const geometry_msgs::msg::Polygon::SharedPtr /*msg*/)
+  void globalPublishedFootprintCallback(
+    const geometry_msgs::msg::PolygonStamped::SharedPtr /*msg*/)
   {
     global_costmap_ready_ = true;
     publishGlobalCostmapFootprintOnce();
@@ -350,8 +358,8 @@ private:
   rclcpp::Publisher<geometry_msgs::msg::Polygon>::SharedPtr footprint_pub_;
   rclcpp::Publisher<geometry_msgs::msg::Polygon>::SharedPtr local_footprint_pub_;
   rclcpp::Publisher<geometry_msgs::msg::Polygon>::SharedPtr global_footprint_pub_;
-  rclcpp::Subscription<geometry_msgs::msg::Polygon>::SharedPtr local_published_footprint_sub_;
-  rclcpp::Subscription<geometry_msgs::msg::Polygon>::SharedPtr global_published_footprint_sub_;
+  rclcpp::Subscription<geometry_msgs::msg::PolygonStamped>::SharedPtr local_published_footprint_sub_;
+  rclcpp::Subscription<geometry_msgs::msg::PolygonStamped>::SharedPtr global_published_footprint_sub_;
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr joint_states_sub_;
 };
 
