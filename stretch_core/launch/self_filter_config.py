@@ -138,10 +138,31 @@ def _resolve_urdf_identity(tool_preset: str) -> tuple[str, str, str]:
     resolved = resolve_tool_preset(tool_preset)
     try:
         model_name, batch_name, robot_tool = get_robot_params()
-        tool_name = robot_tool if tool_preset == 'auto' else _tool_name_for_preset(resolved)
-        return model_name, batch_name, tool_name
-    except Exception:
-        return 'SE4', 'francis', _tool_name_for_preset(resolved)
+    except Exception as ex:
+        raise RuntimeError(
+            'Failed to read robot model/batch/tool from stretch4_body RobotParams: '
+            f'{ex}. URDF self-filter generation requires on-robot robot params.'
+        ) from ex
+
+    if not model_name or not batch_name:
+        raise RuntimeError(
+            'stretch4_body RobotParams did not provide model_name and batch_name '
+            f'(got model_name={model_name!r}, batch_name={batch_name!r}). '
+            'URDF self-filter generation requires on-robot robot params.'
+        )
+
+    if tool_preset == 'auto':
+        tool_name = robot_tool or _tool_name_for_preset(resolved)
+    else:
+        tool_name = _tool_name_for_preset(resolved)
+
+    if not tool_name:
+        raise RuntimeError(
+            f"Could not determine URDF tool name for tool_preset '{tool_preset}' "
+            f"(resolved preset: {resolved!r})."
+        )
+
+    return model_name, batch_name, tool_name
 
 
 def _resolve_mesh_path(filename: str) -> Path:
@@ -243,14 +264,16 @@ def _read_link_boxes(urdf_content: str, requested: dict[str, str]) -> list[dict[
     return boxes
 
 
-def _tool_from_robot_params() -> str | None:
+def _tool_from_robot_params() -> tuple[str | None, str | None]:
     try:
         from stretch4_body.core.robot_params import RobotParams
         _, params = RobotParams.get_params()
-        return params.get('robot', {}).get('tool')
+        tool = params.get('robot', {}).get('tool')
+        if not tool:
+            return None, 'RobotParams has no robot.tool field'
+        return tool, None
     except Exception as ex:
-        print(f'Warning: could not read Stretch RobotParams for tool auto-detect: {ex}')
-        return None
+        return None, f'could not read Stretch RobotParams: {ex}'
 
 
 def _find_tool_in_mapping(value: Any) -> str | None:
@@ -279,7 +302,7 @@ def _find_tool_in_mapping(value: Any) -> str | None:
     return None
 
 
-def _tool_from_fleet_yaml() -> str | None:
+def _tool_from_fleet_yaml() -> tuple[str | None, list[str]]:
     paths: list[Path] = []
     fleet_path = os.environ.get('HELLO_FLEET_PATH')
     fleet_id = os.environ.get('HELLO_FLEET_ID')
@@ -295,7 +318,9 @@ def _tool_from_fleet_yaml() -> str | None:
         Path.home() / 'stretch_configuration_params.yaml',
     ])
 
+    checked: list[str] = []
     for path in paths:
+        checked.append(str(path))
         if not path.is_file():
             continue
         if path.suffix in ('.urdf', '.xml'):
@@ -307,8 +332,8 @@ def _tool_from_fleet_yaml() -> str | None:
             except Exception:
                 found = None
         if found:
-            return found
-    return None
+            return found, checked
+    return None, checked
 
 
 def resolve_tool_preset(tool_preset: str) -> str:
@@ -316,19 +341,35 @@ def resolve_tool_preset(tool_preset: str) -> str:
     if tool_preset != 'auto':
         return tool_preset
 
-    robot_tool = _tool_from_robot_params()
-    found = _find_tool_in_mapping(robot_tool)
-    if found:
-        print(f"Resolved tool_preset=auto from RobotParams tool '{robot_tool}' -> {found}")
-        return found
+    failures: list[str] = []
 
-    found = _tool_from_fleet_yaml()
+    robot_tool, robot_params_error = _tool_from_robot_params()
+    if robot_tool is not None:
+        found = _find_tool_in_mapping(robot_tool)
+        if found:
+            print(f"Resolved tool_preset=auto from RobotParams tool '{robot_tool}' -> {found}")
+            return found
+        failures.append(
+            f"RobotParams tool '{robot_tool}' is not a recognized SG4/PG4/tablet/nil preset"
+        )
+    elif robot_params_error:
+        failures.append(robot_params_error)
+
+    found, checked_paths = _tool_from_fleet_yaml()
     if found:
         print(f"Resolved tool_preset=auto from fleet params -> {found}")
         return found
+    failures.append(
+        'fleet/user YAML did not contain a recognized tool preset '
+        f'(checked: {", ".join(checked_paths)})'
+    )
 
-    print('Warning: could not auto-detect Stretch tool; falling back to sg4.')
-    return 'sg4'
+    explicit_presets = ', '.join(preset for preset in TOOL_PRESETS if preset != 'auto')
+    raise RuntimeError(
+        'tool_preset=auto could not detect the mounted tool. '
+        + '; '.join(failures)
+        + f'. Pass tool_preset explicitly ({explicit_presets}).'
+    )
 
 
 def _generate_urdf_box_params(tool_preset: str) -> dict[str, Any]:
