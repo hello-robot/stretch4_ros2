@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from stretch4_urdf import get_robot_params, get_urdf
 
 TOOL_PRESETS = ('auto', 'sg4', 'pg4', 'tablet', 'nil')
 
@@ -127,50 +128,24 @@ def _mat_vec_mul(mat: list[list[float]], vec: tuple[float, float, float]) -> tup
     return tuple(sum(mat[r][c] * vec[c] for c in range(3)) for r in range(3))
 
 
-def _find_urdf_root() -> Path:
-    candidates: list[Path] = []
+def _tool_name_for_preset(resolved: str) -> str:
+    if resolved == 'nil':
+        return 'eoa_wrist_dw4_tool_nil'
+    return PRESET_TO_TOOL_DIR[resolved]
+
+
+def _resolve_urdf_identity(tool_preset: str) -> tuple[str, str, str]:
+    resolved = resolve_tool_preset(tool_preset)
     try:
-        from ament_index_python.packages import get_package_share_directory
-        candidates.append(Path(get_package_share_directory('stretch4_urdf')))
+        model_name, batch_name, robot_tool = get_robot_params()
+        tool_name = robot_tool if tool_preset == 'auto' else _tool_name_for_preset(resolved)
+        return model_name, batch_name, tool_name
     except Exception:
-        pass
-
-    candidates.extend([
-        Path(os.environ.get('STRETCH4_URDF_PATH', '')),
-        Path.home() / 'repos/stretch4_urdf/stretch4_urdf',
-        Path('/home/hello-robot/repos/stretch4_urdf/stretch4_urdf'),
-    ])
-
-    for candidate in candidates:
-        if candidate and (candidate / 'SE4_tools').is_dir():
-            return candidate
-    raise RuntimeError('Could not locate stretch4_urdf package data.')
+        return 'SE4', 'francis', _tool_name_for_preset(resolved)
 
 
-def _robot_model_dir(urdf_root: Path) -> Path:
-    preferred = urdf_root / 'SE4_francis'
-    if (preferred / 'xacro/stretch_main.xacro').is_file():
-        return preferred
-    matches = sorted(urdf_root.glob('SE4_*/xacro/stretch_main.xacro'))
-    if not matches:
-        raise RuntimeError(f'Could not find Stretch main xacro under {urdf_root}')
-    return matches[0].parents[1]
-
-
-def _resolve_mesh_path(filename: str, mesh_vars: dict[str, Path]) -> Path:
-    path = filename
-    for key, value in mesh_vars.items():
-        path = path.replace(f'$(arg {key})', str(value))
-    path = path.replace('file://', '')
-    mesh_path = Path(path)
-    if not mesh_path.is_absolute():
-        # URDF files in this package use arg substitutions, but keep this fallback
-        # for generated URDFs that may contain relative mesh paths.
-        for value in mesh_vars.values():
-            candidate = value / mesh_path
-            if candidate.is_file():
-                return candidate
-    return mesh_path
+def _resolve_mesh_path(filename: str) -> Path:
+    return Path(filename.removeprefix('file://'))
 
 
 def _mesh_bounds(mesh_path: Path, scale: tuple[float, float, float]) -> tuple[tuple[float, float, float], tuple[float, float, float]] | None:
@@ -197,7 +172,7 @@ def _mesh_bounds(mesh_path: Path, scale: tuple[float, float, float]) -> tuple[tu
         return None
 
 
-def _collision_box(link: ET.Element, mesh_vars: dict[str, Path]) -> list[dict[str, Any]]:
+def _collision_box(link: ET.Element) -> list[dict[str, Any]]:
     boxes: list[dict[str, Any]] = []
     link_name = link.attrib.get('name', '')
     for collision in _children(link, 'collision'):
@@ -220,7 +195,7 @@ def _collision_box(link: ET.Element, mesh_vars: dict[str, Path]) -> list[dict[st
             if not filename:
                 continue
             scale = _parse_vector(mesh.attrib.get('scale'), (1.0, 1.0, 1.0))
-            bounds = _mesh_bounds(_resolve_mesh_path(filename, mesh_vars), scale)
+            bounds = _mesh_bounds(_resolve_mesh_path(filename), scale)
             if bounds is None:
                 continue
             center, half = bounds
@@ -252,17 +227,17 @@ def _collision_box(link: ET.Element, mesh_vars: dict[str, Path]) -> list[dict[st
     return boxes
 
 
-def _read_link_boxes(xml_path: Path, mesh_vars: dict[str, Path], requested: dict[str, str]) -> list[dict[str, Any]]:
-    root = ET.parse(xml_path).getroot()
+def _read_link_boxes(urdf_content: str, requested: dict[str, str]) -> list[dict[str, Any]]:
+    root = ET.fromstring(urdf_content)
     links = {link.attrib.get('name'): link for link in root.iter() if _strip_ns(link.tag) == 'link'}
     boxes: list[dict[str, Any]] = []
     for link_name, group in requested.items():
         link = links.get(link_name)
         if link is None:
-            print(f'Warning: URDF link {link_name} not found in {xml_path}')
+            print(f'Warning: URDF link {link_name} not found in generated URDF')
             continue
         link_group = 'gripper_camera' if link_name == 'gripper_camera_link' else group
-        for box in _collision_box(link, mesh_vars):
+        for box in _collision_box(link):
             box['group'] = link_group
             boxes.append(box)
     return boxes
@@ -358,39 +333,19 @@ def resolve_tool_preset(tool_preset: str) -> str:
 
 def _generate_urdf_box_params(tool_preset: str) -> dict[str, Any]:
     resolved = resolve_tool_preset(tool_preset)
-    urdf_root = _find_urdf_root()
-    model_dir = _robot_model_dir(urdf_root)
-    model_mesh_dir = model_dir / 'meshes'
+    model_name, batch_name, tool_name = _resolve_urdf_identity(tool_preset)
+    urdf_content = get_urdf(model_name, batch_name, tool_name)
 
     requested: dict[str, str] = {}
     for group, links in MAIN_LINK_GROUPS:
         for link in links:
             requested[link] = group
 
-    boxes = _read_link_boxes(
-        model_dir / 'xacro/stretch_main.xacro',
-        {'model_mesh_dir': model_mesh_dir},
-        requested,
-    )
-
     if resolved != 'nil':
-        tool_dir_name = PRESET_TO_TOOL_DIR.get(resolved)
-        if not tool_dir_name:
-            print(f"Warning: no URDF tool directory mapping for preset '{resolved}'.")
-        else:
-            tool_dir = urdf_root / 'SE4_tools' / tool_dir_name
-            tool_urdf = tool_dir / f'{tool_dir_name}.urdf'
-            if tool_urdf.is_file():
-                root = ET.parse(tool_urdf).getroot()
-                physical_tool_links = TOOL_LINK_GROUPS_BY_PRESET.get(resolved, ())
-                tool_links = {link_name: 'tool' for link_name in physical_tool_links}
-                boxes.extend(_read_link_boxes(
-                    tool_urdf,
-                    {'tool_mesh_dir': tool_dir / 'meshes'},
-                    tool_links,
-                ))
-            else:
-                print(f'Warning: missing tool URDF for preset {resolved}: {tool_urdf}')
+        for link in TOOL_LINK_GROUPS_BY_PRESET.get(resolved, ()):
+            requested[link] = 'tool'
+
+    boxes = _read_link_boxes(urdf_content, requested)
 
     # Avoid sending degenerate boxes to the C++ hot path.
     boxes = [box for box in boxes if min(box['half']) > 1e-5]
