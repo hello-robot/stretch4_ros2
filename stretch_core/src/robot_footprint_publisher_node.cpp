@@ -117,21 +117,22 @@ public:
       RCLCPP_ERROR(get_logger(), "base_footprint_polygon must have at least 3 vertices (6 values).");
     }
 
-    rclcpp::QoS footprint_qos(rclcpp::KeepLast(1));
-    footprint_qos.transient_local();
-    footprint_qos.reliable();
+    rclcpp::QoS costmap_footprint_qos(rclcpp::KeepLast(1));
+    costmap_footprint_qos.transient_local();
+    costmap_footprint_qos.reliable();
 
-    // Nav2 costmaps subscribe to ~/footprint with reliable + volatile QoS.
-    const auto costmap_footprint_qos = rclcpp::SystemDefaultsQoS();
+    rclcpp::QoS qos_profile(1);
+    qos_profile.reliable();
+    qos_profile.durability_volatile();
 
     footprint_pub_ = create_publisher<geometry_msgs::msg::Polygon>(
-        footprint_topic_, footprint_qos);
+        footprint_topic_, qos_profile);
 
     if (publish_costmap_topics_) {
         local_footprint_pub_ = create_publisher<geometry_msgs::msg::Polygon>(
-            local_costmap_footprint_topic_, footprint_qos);
+            local_costmap_footprint_topic_, qos_profile);
         global_footprint_pub_ = create_publisher<geometry_msgs::msg::Polygon>(
-            global_costmap_footprint_topic_, footprint_qos);
+            global_costmap_footprint_topic_, qos_profile);
 
         local_published_footprint_sub_ =
           create_subscription<geometry_msgs::msg::PolygonStamped>(
@@ -198,10 +199,10 @@ private:
   {
     const auto msg = toPolygonMsg(hull);
     footprint_pub_->publish(msg);
-    if (published_local_costmap_footprint_ && local_footprint_pub_) {
+    if (local_footprint_pub_) {
       local_footprint_pub_->publish(msg);
     }
-    if (published_global_costmap_footprint_ && global_footprint_pub_) {
+    if (global_footprint_pub_) {
       global_footprint_pub_->publish(msg);
     }
   }
@@ -307,13 +308,6 @@ private:
 
     last_published_hull_ = hull;
     publishFootprint(hull);
-
-    if (local_costmap_ready_) {
-      publishLocalCostmapFootprintOnce();
-    }
-    if (global_costmap_ready_) {
-      publishGlobalCostmapFootprintOnce();
-    }
 
     return true;
   }
