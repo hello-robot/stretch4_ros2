@@ -2,6 +2,7 @@
 
 import sys
 import copy
+import math
 import time
 from typing import Any
 from threading import Lock
@@ -318,37 +319,112 @@ class StretchDriver(Node):
         tool_name = self.robot.params['tool']
         Idx = jc.get_Idx(tool_name)
 
-        # Standard Scaling
-        MAX_VEL = 0.2
-        DEADZONE = 0.05
+        DEADZONE = 0.1
+        TRIGGER_THRESHOLD = 0.9
+        MAX_VEL = 0.2       # lift (m/s), arm (m/s), wrist & gripper (rad/s)
+        BASE_LIN_VEL = 0.2  # m/s
+        BASE_ROT_VEL = 0.5  # rad/s
 
-        def get_val(axis_name, scale):
-            val = state.get(axis_name, 0.0)
-            return val * scale if abs(val) > DEADZONE else 0.0
+        rt_pulled = state.get('right_trigger_pulled', 0.0) > TRIGGER_THRESHOLD
+        precision = 0.5 if state.get('left_trigger_pulled', 0.0) > 0.5 else 1.0
 
-        self.robot.lift.set_velocity(get_val('left_stick_y', MAX_VEL))
+        def deadzoned(name):
+            val = state.get(name, 0.0)
+            return val if abs(val) > DEADZONE else 0.0
 
+        ls_x = deadzoned('left_stick_x')
+        ls_y = deadzoned('left_stick_y')
+        rs_x = deadzoned('right_stick_x')
+        rs_y = deadzoned('right_stick_y')
+
+        left_shoulder = state.get('left_shoulder_button_pressed', False)
+        right_shoulder = state.get('right_shoulder_button_pressed', False)
+        both_shoulders = left_shoulder and right_shoulder
+
+        # --- Base ---
+        if rt_pulled:
+            # Straight-line move: snap translation to the dominant stick axis.
+            if abs(ls_y) >= abs(ls_x) and abs(ls_y) > 0.0:
+                vx = math.copysign(BASE_LIN_VEL, ls_y) * precision
+                vy = 0.0
+            elif abs(ls_x) > 0.0:
+                vx = 0.0
+                vy = math.copysign(BASE_LIN_VEL, -ls_x) * precision
+            else:
+                vx = 0.0
+                vy = 0.0
+            w = 0.0
+        else:
+            vx = ls_y * BASE_LIN_VEL * precision
+            vy = -ls_x * BASE_LIN_VEL * precision
+            if both_shoulders:
+                w = -rs_x * BASE_ROT_VEL * precision
+            elif left_shoulder:
+                w = BASE_ROT_VEL * precision
+            elif right_shoulder:
+                w = -BASE_ROT_VEL * precision
+            else:
+                w = 0.0
+
+        if hasattr(self.robot, 'omnibase'):
+            linear_acc = self.get_parameter_or("joint_acceleration.omnibase.linear", None).value
+            angular_acc = self.get_parameter_or("joint_acceleration.omnibase.angular", None).value
+            self.robot.omnibase.set_velocity(vx_m=vx, vy_m=vy, w_r=w, a_m=linear_acc, a_r=angular_acc)
+
+        # --- Lift (D-pad up/down) ---
+        if hasattr(self.robot, 'lift'):
+            lift_vel = 0.0
+            if state.get('top_pad_pressed'):
+                lift_vel = MAX_VEL * precision
+            elif state.get('bottom_pad_pressed'):
+                lift_vel = -MAX_VEL * precision
+            self.robot.lift.set_velocity(lift_vel)
+
+        # --- Arm (D-pad left/right) ---
         if hasattr(self.robot, 'arm'):
-            self.robot.arm.set_velocity(get_val('left_stick_x', MAX_VEL))
+            arm_vel = 0.0
+            if state.get('right_pad_pressed'):
+                arm_vel = MAX_VEL * precision
+            elif state.get('left_pad_pressed'):
+                arm_vel = -MAX_VEL * precision
+            self.robot.arm.set_velocity(arm_vel)
+
+        # Right stick drives the wrist unless it is reserved for base rotation
+        # (both shoulders held) or roll (right trigger held).
+        wrist_from_stick = not both_shoulders and not rt_pulled
 
         if hasattr(Idx, 'WRIST_YAW'):
-            self.robot.end_of_arm.set_velocity('wrist_yaw', get_val('right_stick_x', MAX_VEL))        
+            yaw_vel = (-rs_x * MAX_VEL * precision) if wrist_from_stick else 0.0
+            self.robot.end_of_arm.set_velocity('wrist_yaw', yaw_vel)
         if hasattr(Idx, 'WRIST_PITCH'):
             # Dex Wrist or DW4 tools
-            self.robot.end_of_arm.set_velocity('wrist_pitch', get_val('right_stick_y', MAX_VEL))
+            pitch_vel = (rs_y * MAX_VEL * precision) if wrist_from_stick else 0.0
+            self.robot.end_of_arm.set_velocity('wrist_pitch', pitch_vel)
         if hasattr(Idx, 'WRIST_ROLL'):
             roll_vel = 0.0
-            if state['right_shoulder_button_pressed']: roll_vel = MAX_VEL
-            if state['left_shoulder_button_pressed']: roll_vel = -MAX_VEL
+            if rt_pulled:
+                if right_shoulder:
+                    roll_vel = MAX_VEL * precision
+                elif left_shoulder:
+                    roll_vel = -MAX_VEL * precision
             self.robot.end_of_arm.set_velocity('wrist_roll', roll_vel)
-        if hasattr(Idx, 'GRIPPER') and 'stretch_gripper' in self.robot.end_of_arm.joints:
-            grip_vel = 0.0
-            if state['top_button_pressed']: grip_vel = MAX_VEL   # Open
-            if state['bottom_button_pressed']: grip_vel = -MAX_VEL # Close
-            self.robot.end_of_arm.set_velocity('stretch_gripper', grip_vel)
 
-        # --- Base Control ---
-        # self.robot.base.set_velocity(drive, turn) # TODO
+        # --- Gripper (A = close, B = open) ---
+        # Works for both SG4 ('stretch_gripper') and PG4 ('parallel_gripper').
+        if hasattr(Idx, 'GRIPPER'):
+            gripper_joint = next(
+                (j for j in ('stretch_gripper', 'parallel_gripper')
+                 if j in self.robot.end_of_arm.joints),
+                None,
+            )
+            if gripper_joint is not None:
+                grip_vel = 0.0
+                if not rt_pulled:
+                    if state.get('right_button_pressed'):
+                        grip_vel = MAX_VEL   # Open
+                    elif state.get('bottom_button_pressed'):
+                        grip_vel = -MAX_VEL  # Close
+                self.robot.end_of_arm.set_velocity(gripper_joint, grip_vel)
 
     def twist_callback(self, twist: Twist):
         with self.driver_mode_lock:
