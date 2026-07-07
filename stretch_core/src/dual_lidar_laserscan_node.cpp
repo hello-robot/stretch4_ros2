@@ -356,7 +356,8 @@ private:
     }
 
     auto scan = std::make_shared<sensor_msgs::msg::LaserScan>();
-    scan->header.stamp = now();
+    // scan->header.stamp = now();
+    scan->header.stamp = output_header.stamp;
     scan->header.frame_id = "laser";
     scan->angle_min = scan_cfg_.angle_min;
     scan->angle_max = scan_cfg_.angle_max;
