@@ -321,9 +321,12 @@ class StretchDriver(Node):
 
         DEADZONE = 0.1
         TRIGGER_THRESHOLD = 0.9
-        MAX_VEL = 0.2       # lift (m/s), arm (m/s), wrist & gripper (rad/s)
+        MAX_VEL = 0.2       # lift (m/s), arm (m/s)
         BASE_LIN_VEL = 0.2  # m/s
         BASE_ROT_VEL = 0.5  # rad/s
+        WRIST_STEP_RAD = math.radians(15.0)  # per-message wrist increment
+        STRETCH_GRIPPER_STEP = 60.0          # percent per-message increment
+        PARALLEL_GRIPPER_STEP = 0.01         # meters per-message increment
 
         rt_pulled = state.get('right_trigger_pulled', 0.0) > TRIGGER_THRESHOLD
         precision = 0.5 if state.get('left_trigger_pulled', 0.0) > 0.5 else 1.0
@@ -393,24 +396,32 @@ class StretchDriver(Node):
         # (both shoulders held) or roll (right trigger held).
         wrist_from_stick = not both_shoulders and not rt_pulled
 
+        def jog_eoa(joint, step):
+            # End-of-arm servos move incrementally; stop when idle.
+            if abs(step) > 0.0:
+                self.robot.end_of_arm.move_by(joint, step)
+            else:
+                self.robot.end_of_arm.quick_stop(joint)
+
         if hasattr(Idx, 'WRIST_YAW'):
-            yaw_vel = (-rs_x * MAX_VEL * precision) if wrist_from_stick else 0.0
-            self.robot.end_of_arm.set_velocity('wrist_yaw', yaw_vel)
+            yaw_step = (-rs_x * WRIST_STEP_RAD * precision) if wrist_from_stick else 0.0
+            jog_eoa('wrist_yaw', yaw_step)
         if hasattr(Idx, 'WRIST_PITCH'):
             # Dex Wrist or DW4 tools
-            pitch_vel = (rs_y * MAX_VEL * precision) if wrist_from_stick else 0.0
-            self.robot.end_of_arm.set_velocity('wrist_pitch', pitch_vel)
+            pitch_step = (rs_y * WRIST_STEP_RAD * precision) if wrist_from_stick else 0.0
+            jog_eoa('wrist_pitch', pitch_step)
         if hasattr(Idx, 'WRIST_ROLL'):
-            roll_vel = 0.0
+            roll_step = 0.0
             if rt_pulled:
                 if right_shoulder:
-                    roll_vel = MAX_VEL * precision
+                    roll_step = WRIST_STEP_RAD * precision
                 elif left_shoulder:
-                    roll_vel = -MAX_VEL * precision
-            self.robot.end_of_arm.set_velocity('wrist_roll', roll_vel)
+                    roll_step = -WRIST_STEP_RAD * precision
+            jog_eoa('wrist_roll', roll_step)
 
         # --- Gripper (A = close, B = open) ---
         # Works for both SG4 ('stretch_gripper') and PG4 ('parallel_gripper').
+        # Note: stretch_gripper is percent, parallel_gripper is meters.
         if hasattr(Idx, 'GRIPPER'):
             gripper_joint = next(
                 (j for j in ('stretch_gripper', 'parallel_gripper')
@@ -418,13 +429,15 @@ class StretchDriver(Node):
                 None,
             )
             if gripper_joint is not None:
-                grip_vel = 0.0
+                grip_dir = 0.0
                 if not rt_pulled:
                     if state.get('right_button_pressed'):
-                        grip_vel = MAX_VEL   # Open
+                        grip_dir = 1.0    # Open
                     elif state.get('bottom_button_pressed'):
-                        grip_vel = -MAX_VEL  # Close
-                self.robot.end_of_arm.set_velocity(gripper_joint, grip_vel)
+                        grip_dir = -1.0   # Close
+                grip_step_size = (STRETCH_GRIPPER_STEP if gripper_joint == 'stretch_gripper'
+                                  else PARALLEL_GRIPPER_STEP)
+                jog_eoa(gripper_joint, grip_dir * grip_step_size)
 
     def twist_callback(self, twist: Twist):
         with self.driver_mode_lock:
