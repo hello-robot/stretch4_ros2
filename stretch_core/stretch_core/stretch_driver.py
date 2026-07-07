@@ -34,8 +34,7 @@ import tf2_ros
 from tf_transformations import quaternion_from_euler
 
 import hello_helpers.joy_conversion as jc
-from stretch4_body.core.robot_params import nominal_system_params
-from stretch4_body.utils.stretch_pose_models import RobotJoints
+
 
 class StretchDriver(Node):
 
@@ -285,8 +284,8 @@ class StretchDriver(Node):
         before the robot stops moving. It cannot exceed velocity_timeout parameter.
         """
         with self.driver_mode_lock:
-            if self.driver_mode not in ['velocity', 'navigation']:
-                self.robot.logger.warn(f'Must be in velocity or navigation mode to service JointJog msg. Current mode = {self.driver_mode}.')
+            if self.driver_mode != 'velocity':
+                self.robot.logger.warn(f'Must be in velocity mode to service JointJog msg. Current mode = {self.driver_mode}.')
                 return
 
         # Queue velocity commands
@@ -297,14 +296,10 @@ class StretchDriver(Node):
 
             acceleration_param = self.get_parameter_or(f"joint_acceleration.{joint.split("_joint")[0]}",None).value
 
-            velocity_val = jointjog_msg.velocities[i]
-            if "gripper" in joint:
-                joint_clean = joint.split('_joint')[0]
-                joint_enum = RobotJoints.get_joint_by_name(joint_clean)
-                if joint_enum:
-                    velocity_val = joint_enum.urdf_to_subsystem(velocity_val)
+            if "gripper" in joint: 
+                jointjog_msg.velocities[i] *= 300
 
-            self.set_vel_functions[joint](velocity_val, acceleration_param)
+            self.set_vel_functions[joint](jointjog_msg.velocities[i], acceleration_param)
 
         # Set timeout (TODO)
         self.robot.logger.debug(str(self.robot.cmd_dict))
