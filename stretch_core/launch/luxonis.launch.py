@@ -157,7 +157,7 @@ def launch_setup(context, *args, **kwargs):
             # "i_tf_base_frame": "camera_center_optical_link",
         },
         "left": {
-            "i_board_socket_id": 2,
+            "i_board_socket_id": 1,
             "i_calibration_file": f"file://{get_camera_calibration_file_path("left")}",
             "i_width": 1920,
             "i_height": 1200,
@@ -172,7 +172,7 @@ def launch_setup(context, *args, **kwargs):
             # "i_tf_base_frame": "camera_left_optical_link",
         },
         "right": {
-            "i_board_socket_id": 1,
+            "i_board_socket_id": 2,
             "i_calibration_file": f"file://{get_camera_calibration_file_path("right")}",
             "i_width": 1920,
             "i_height": 1200,
