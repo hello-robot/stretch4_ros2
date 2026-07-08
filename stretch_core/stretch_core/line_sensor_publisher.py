@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Publish line-sensor hazard evidence as ROS PointCloud2 topics."""
+"""Publish filtered line-sensor as ROS PointCloud2 topics."""
 
 from __future__ import annotations
 
@@ -53,13 +53,13 @@ def xy_to_xyz(xy: np.ndarray, z: float) -> np.ndarray:
     return np.column_stack([xy[:, 0], xy[:, 1], np.full(len(xy), z, dtype=np.float64)])
 
 
-class LineSensorHazardPublisher(Node):
+class LineSensorPublisher(Node):
     def __init__(self):
-        super().__init__('line_sensor_hazard_publisher')
+        super().__init__('line_sensor_publisher')
         self._declare_params()
         self._load_params()
 
-        self._robot = RobotClient(client_id='ros2_line_sensor_hazard_publisher')
+        self._robot = RobotClient(client_id='ros2_line_sensor_publisher')
         if not self._robot.startup():
             raise RuntimeError('RobotClient startup failed')
         if not hasattr(self._robot, 'line_sensor_loop'):
@@ -126,7 +126,7 @@ class LineSensorHazardPublisher(Node):
 
         self.create_timer(1.0 / max(self._publish_rate_hz, 0.1), self._timer_callback)
         self.get_logger().info(
-            'line_sensor_hazard_publisher started '
+            'line_sensor_publisher started '
             f'points={self._points_topic} obstacle={self._obstacle_topic} small_drop={self._small_drop_topic}',
         )
 
@@ -307,7 +307,7 @@ class LineSensorHazardPublisher(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    node = LineSensorHazardPublisher()
+    node = LineSensorPublisher()
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:

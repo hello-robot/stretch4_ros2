@@ -17,8 +17,8 @@ def generate_launch_description():
         DeclareLaunchArgument('small_drop_topic', default_value='/line_sensor/small_drop_points'),
         Node(
             package='stretch_core',
-            executable='line_sensor_hazard_publisher',
-            name='line_sensor_hazard_publisher',
+            executable='line_sensor_publisher',
+            name='line_sensor_publisher',
             output='screen',
             parameters=[{
                 'base_frame': LaunchConfiguration('base_frame'),
