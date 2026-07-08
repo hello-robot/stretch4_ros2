@@ -1,7 +1,9 @@
 #! /usr/bin/env python3
 
+
 import sys
 import copy
+import math
 import time
 from typing import Any
 from threading import Lock
@@ -9,6 +11,8 @@ from functools import partial
 
 from .joint_trajectory_server import JointTrajectoryAction
 import stretch4_body.robot.robot_client as rc
+from stretch4_body.core.gamepad_control_mappings import ControlMapping
+from stretch4_body.core.gamepad_teleop import GamePadTeleop
 
 import rclpy
 from rclpy.duration import Duration
@@ -179,6 +183,8 @@ class StretchDriver(Node):
 
         self.add_on_set_parameters_callback(self.parameter_callback)
 
+        self.gamepad_teleop = GamePadTeleop(self.robot)
+
         # Actions
         self.joint_trajectory_action = JointTrajectoryAction(self)
 
@@ -315,40 +321,20 @@ class StretchDriver(Node):
                 return
 
         state = jc.unpack_joy_to_gamepad_state(joy_msg)
-        tool_name = self.robot.params['tool']
-        Idx = jc.get_Idx(tool_name)
 
-        # Standard Scaling
-        MAX_VEL = 0.2
-        DEADZONE = 0.05
+        self.gamepad_teleop.controller_state = state
+            
 
-        def get_val(axis_name, scale):
-            val = state.get(axis_name, 0.0)
-            return val * scale if abs(val) > DEADZONE else 0.0
+        ControlMapping.JOINT_SPACE.do_motion(self.robot, self.gamepad_teleop)
 
-        self.robot.lift.set_velocity(get_val('left_stick_y', MAX_VEL))
 
-        if hasattr(self.robot, 'arm'):
-            self.robot.arm.set_velocity(get_val('left_stick_x', MAX_VEL))
 
-        if hasattr(Idx, 'WRIST_YAW'):
-            self.robot.end_of_arm.set_velocity('wrist_yaw', get_val('right_stick_x', MAX_VEL))        
-        if hasattr(Idx, 'WRIST_PITCH'):
-            # Dex Wrist or DW4 tools
-            self.robot.end_of_arm.set_velocity('wrist_pitch', get_val('right_stick_y', MAX_VEL))
-        if hasattr(Idx, 'WRIST_ROLL'):
-            roll_vel = 0.0
-            if state['right_shoulder_button_pressed']: roll_vel = MAX_VEL
-            if state['left_shoulder_button_pressed']: roll_vel = -MAX_VEL
-            self.robot.end_of_arm.set_velocity('wrist_roll', roll_vel)
-        if hasattr(Idx, 'GRIPPER') and 'stretch_gripper' in self.robot.end_of_arm.joints:
-            grip_vel = 0.0
-            if state['top_button_pressed']: grip_vel = MAX_VEL   # Open
-            if state['bottom_button_pressed']: grip_vel = -MAX_VEL # Close
-            self.robot.end_of_arm.set_velocity('stretch_gripper', grip_vel)
 
-        # --- Base Control ---
-        # self.robot.base.set_velocity(drive, turn) # TODO
+        # if hasattr(self.robot, 'omnibase'):
+        #     linear_acc = self.get_parameter_or("joint_acceleration.omnibase.linear", None).value
+        #     angular_acc = self.get_parameter_or("joint_acceleration.omnibase.angular", None).value
+        #     self.robot.omnibase.set_velocity(vx_m=vx, vy_m=vy, w_r=w, a_m=linear_acc, a_r=angular_acc)
+
 
     def twist_callback(self, twist: Twist):
         with self.driver_mode_lock:
