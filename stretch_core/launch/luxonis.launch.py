@@ -157,7 +157,8 @@ def launch_setup(context, *args, **kwargs):
             # "i_tf_base_frame": "camera_center_optical_link",
         },
         "left": {
-            "i_calibration_file": f"file://{get_camera_calibration_file_path("right")}",  # ribbons are swapped in the head
+            "i_board_socket_id": 2,
+            "i_calibration_file": f"file://{get_camera_calibration_file_path("left")}",
             "i_width": 1920,
             "i_height": 1200,
             "i_max_q_size": 2,
@@ -171,7 +172,8 @@ def launch_setup(context, *args, **kwargs):
             # "i_tf_base_frame": "camera_left_optical_link",
         },
         "right": {
-            "i_calibration_file": f"file://{get_camera_calibration_file_path("left")}",  # ribbons are swapped in the head
+            "i_board_socket_id": 1,
+            "i_calibration_file": f"file://{get_camera_calibration_file_path("right")}",
             "i_width": 1920,
             "i_height": 1200,
             "i_max_q_size": 2,
@@ -189,33 +191,34 @@ def launch_setup(context, *args, **kwargs):
     print(f"Luxonis Launch Params = {params}")
 
     camera_names=  ["left", "right", "center"]
-    opposite_mapping = {
-        "left": "right",
-        "right": "left",
-        "center": "rgb"
-    }
+    
+    def get_driver_name(camera_name):
+        return "rgb" if camera_name == "center" else camera_name
 
     def create_remappings(camera_name:str):
+        driver_name = get_driver_name(camera_name)
+        if driver_name == camera_name:
+            return []
+            
         return [
-
         (
-            VisionTopics.image_raw(opposite_mapping[camera_name]),
+            VisionTopics.image_raw(driver_name),
             VisionTopics.image_raw(camera_name),
         ),
         (
-            VisionTopics.compressed(opposite_mapping[camera_name]),
+            VisionTopics.compressed(driver_name),
             VisionTopics.compressed(camera_name),
         ),
         (
-            VisionTopics.compressed_depth(opposite_mapping[camera_name]),
+            VisionTopics.compressed_depth(driver_name),
             VisionTopics.compressed_depth(camera_name),
         ),
         (
-            VisionTopics.zstd(opposite_mapping[camera_name]),
+            VisionTopics.zstd(driver_name),
             VisionTopics.zstd(camera_name),
         ),
         (
-            VisionTopics.theora(opposite_mapping[camera_name]),
+            VisionTopics.theora(driver_name),
             VisionTopics.theora(camera_name),
         )
     ]
@@ -243,7 +246,7 @@ def launch_setup(context, *args, **kwargs):
             )
             luxonis_node_remappings.append(
                 (
-                    VisionTopics.camera_info(opposite_mapping[camera_name]),
+                    VisionTopics.camera_info(get_driver_name(camera_name)),
                     VisionTopics.camera_info_luxonis(camera_name),
                 ),
             )
@@ -251,7 +254,7 @@ def launch_setup(context, *args, **kwargs):
             print(f"{camera_name} does not have a calibration file at {calibration_file_path}. Publishing the Luxonis default camera_info topic.")
             luxonis_node_remappings.append(
                 (
-                    VisionTopics.camera_info(opposite_mapping[camera_name]),
+                    VisionTopics.camera_info(get_driver_name(camera_name)),
                     VisionTopics.camera_info(camera_name),
                 ),
             )
@@ -271,7 +274,6 @@ def launch_setup(context, *args, **kwargs):
                 parameters=[
                     params,
                 ],
-                # The ribbon cables are swapped in the head, so left is right and right is left.
                 # This is a remapping of the topics published by the node.
                 # This also remaps luxonis's rgb topic to our center topic.
                 # Lastly, these topic are published with the Luxonis config params in this file; changing these params may yield different topics that could break this remapping.
@@ -285,16 +287,12 @@ def launch_setup(context, *args, **kwargs):
     static_tf_nodes = []
     for camera_name in camera_names:
         if is_launch_config_true(context, f"use_{camera_name}"):
-            swapped_position = (
-                "center"
-                if camera_name == "center"
-                else "right" if camera_name == "left" else "left"
-            )
+            driver_name = get_driver_name(camera_name)
             static_tf_nodes.append(
                 Node(
                     package="tf2_ros",
                     executable="static_transform_publisher",
-                    name="static_tf_right_camera",
+                    name=f"static_tf_{camera_name}_camera",
                     arguments=[
                         "0",
                         "0",
@@ -303,7 +301,7 @@ def launch_setup(context, *args, **kwargs):
                         "0",
                         "0",
                         f"camera_{camera_name}_optical_link",
-                        f"{VisionTopics.cameras_namespace()}_{swapped_position}_camera_optical_frame",  # This is the name published by the driver
+                        f"{VisionTopics.cameras_namespace()}_{driver_name}_camera_optical_frame",  # This is the name published by the driver
                     ],
                 )
             )
