@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
+import argparse
 import functools
 import os
+import sys
 from typing import List
 
 import cv2
@@ -19,6 +21,7 @@ from sensor_msgs.msg import CameraInfo, Image, PointCloud2
 from tf2_ros.transform_broadcaster import TransformBroadcaster
 from tf_transformations import quaternion_from_matrix
 from visualization_msgs.msg import Marker, MarkerArray
+from vision_msgs.msg import Detection3D, Detection3DArray, ObjectHypothesisWithPose
 
 HEAD_CAMERA_FRAME = "cameras_head_center_camera_optical_frame"
 CAMERA_INFO_TOPIC = "/cameras_head/center/camera_info"
@@ -58,6 +61,8 @@ class ArucoMarker:
         length_mm: float,
         aruco_detector: aruco.ArucoDetector,
         show_debug_images=False,
+        frame_id: str = HEAD_CAMERA_FRAME,
+        camera_name: str = "center",
     ):
 
         self.aruco_id = aruco_id
@@ -65,6 +70,8 @@ class ArucoMarker:
         self.length_mm = length_mm
         self.aruco_detector = aruco_detector
         self.show_debug_images = show_debug_images
+        self.frame_id = frame_id
+        self.camera_name = camera_name
 
         self.frame_number = None
         self.timestamp = None
@@ -81,9 +88,6 @@ class ArucoMarker:
         bgr = id_color_image[0, 0]
         self.id_color = [bgr[2], bgr[1], bgr[0]]
 
-
-        self.frame_id = HEAD_CAMERA_FRAME
-
         self.marker_position = None
         self.marker_quaternion = None
 
@@ -92,10 +96,10 @@ class ArucoMarker:
         self.marker.type = self.marker.CUBE
         self.marker.action = self.marker.ADD
         self.marker.lifetime = duration.to_msg()
-        self.marker.text = self.label
+        self.marker.text = f"{self.camera_name}_{self.label}"
 
     @classmethod
-    def from_dict(cls, d: dict, aruco_detection_parameters: aruco.DetectorParameters, show_debug_images: bool = False):
+    def from_dict(cls, d: dict, aruco_detection_parameters: aruco.DetectorParameters, show_debug_images: bool = False, frame_id: str = HEAD_CAMERA_FRAME, camera_name: str = "center"):
 
         try:
             aruco_dictionary = aruco.getPredefinedDictionary(
@@ -112,7 +116,13 @@ class ArucoMarker:
             length_mm=d["length_mm"],
             aruco_detector=aruco.ArucoDetector(aruco_dictionary, aruco_detection_parameters),
             show_debug_images=show_debug_images,
+            frame_id=frame_id,
+            camera_name=camera_name,
         )
+
+    @property
+    def stamp(self):
+        return self.timestamp.to_msg() if hasattr(self.timestamp, 'to_msg') else self.timestamp
 
     def update(self, corners, timestamp, frame_number, camera_matrix, camera_dist_coeffs):
         self.ready = True
@@ -166,7 +176,7 @@ class ArucoMarker:
                 transform_stamped = TransformStamped()
                 transform_stamped.header.stamp = self.timestamp
                 transform_stamped.header.frame_id = self.frame_id
-                transform_stamped.child_frame_id = self.label
+                transform_stamped.child_frame_id = f"{self.camera_name}_{self.label}"
                 transform_stamped.transform.translation.x = self.marker_position[0]
                 transform_stamped.transform.translation.y = self.marker_position[1]
                 transform_stamped.transform.translation.z = self.marker_position[2]
@@ -185,6 +195,7 @@ class ArucoMarker:
         self.marker.header.frame_id = self.frame_id
         self.marker.header.stamp = self.timestamp
         self.marker.id = self.aruco_id
+        self.marker.ns = f"aruco_{self.camera_name}"
 
         # scale of 1,1,1 would result in a 1m x 1m x 1m cube
         self.marker.scale.x = self.length_mm / 1000.0
@@ -208,14 +219,50 @@ class ArucoMarker:
         self.marker.pose.orientation.z = q[2]
         self.marker.pose.orientation.w = q[3]
 
+        self.marker.text = f"{self.camera_name}_{self.label}"
+
         return self.marker
+
+    def to_ros_msg(self) -> Detection3D:
+        if not self.ready:
+            return None
+
+        detection = Detection3D()
+        detection.header.frame_id = self.frame_id
+        detection.header.stamp = self.stamp
+
+        hypothesis = ObjectHypothesisWithPose()
+        hypothesis.hypothesis.class_id = str(self.aruco_id)
+        hypothesis.hypothesis.score = 1.0  # Confidence score for ArUco is binary
+
+        hypothesis.pose.pose.position.x = self.marker_position[0]
+        hypothesis.pose.pose.position.y = self.marker_position[1]
+        hypothesis.pose.pose.position.z = self.marker_position[2]
+
+        q = self.marker_quaternion
+        hypothesis.pose.pose.orientation.x = q[0]
+        hypothesis.pose.pose.orientation.y = q[1]
+        hypothesis.pose.pose.orientation.z = q[2]
+        hypothesis.pose.pose.orientation.w = q[3]
+
+        detection.results.append(hypothesis)
+
+        # Bounding box matches marker size
+        detection.bbox.size.x = self.length_mm / 1000.0
+        detection.bbox.size.y = self.length_mm / 1000.0
+        detection.bbox.size.z = 0.005
+        detection.bbox.center = hypothesis.pose.pose
+
+        return detection
 
 
 class ArucoMarkerCollection:
-    def __init__(self, collection: List[ArucoMarker], aruco_detector: ArucoDetector, show_debug_images=False):
+    def __init__(self, collection: List[ArucoMarker], aruco_detector: ArucoDetector, show_debug_images=False, frame_id: str = HEAD_CAMERA_FRAME, camera_name: str = "center"):
 
         self.collection: List[ArucoMarker] = collection
         self.show_debug_images = show_debug_images
+        self.frame_id = frame_id
+        self.camera_name = camera_name
 
         self.aruco_detection_parameters = aruco.DetectorParameters()
         # Apparently available in OpenCV 3.4.1, but not OpenCV 3.2.0.
@@ -229,7 +276,7 @@ class ArucoMarkerCollection:
         self.frame_number = 0
 
     @classmethod
-    def from_dict(cls, marker_info: dict, show_debug_images=False):
+    def from_dict(cls, marker_info: dict, show_debug_images=False, frame_id: str = HEAD_CAMERA_FRAME, camera_name: str = "center"):
 
         cls.aruco_detection_parameters = aruco.DetectorParameters()
         # Apparently available in OpenCV 3.4.1, but not OpenCV 3.2.0.
@@ -244,7 +291,7 @@ class ArucoMarkerCollection:
             aruco_dictionary_ids.append(marker_info_dict["tag_dictionary"])
 
             marker_info_dict["id"] = int(marker_id)
-            marker = ArucoMarker.from_dict(marker_info_dict, cls.aruco_detection_parameters, show_debug_images)
+            marker = ArucoMarker.from_dict(marker_info_dict, cls.aruco_detection_parameters, show_debug_images, frame_id=frame_id, camera_name=camera_name)
             marker_collection.append(marker)
     
         # Consolidate dictionaries: if multiple sizes of the same grid are used, only use the largest.
@@ -266,7 +313,15 @@ class ArucoMarkerCollection:
 
         return cls(collection=marker_collection,
                    aruco_detector=aruco_detector,
-                   show_debug_images=show_debug_images)
+                   show_debug_images=show_debug_images,
+                   frame_id=frame_id,
+                   camera_name=camera_name)
+
+    @property
+    def stamp(self):
+        if self.timestamp:
+            return self.timestamp.to_msg() if hasattr(self.timestamp, 'to_msg') else self.timestamp
+        return None
 
     def __iter__(self):
         # iterates through currently visible ArUco markers
@@ -326,13 +381,25 @@ class ArucoMarkerCollection:
                 marker_array.markers.append(ros_marker)
         return marker_array
 
+    def to_ros_msg(self) -> Detection3DArray:
+        detection_array = Detection3DArray()
+        detection_array.header.stamp = self.stamp
+        detection_array.header.frame_id = self.frame_id
+        
+        for marker in self.collection:
+            if marker.frame_number == self.frame_number:
+                ros_detection = marker.to_ros_msg()
+                if ros_detection:
+                    detection_array.detections.append(ros_detection)
+        return detection_array
+
     def draw_markers(self, img: np.ndarray): 
 
         return aruco.drawDetectedMarkers(img, self.aruco_corners, np.array(self.aruco_ids))
 
 
 class DetectArucoNode(Node):
-    def __init__(self):
+    def __init__(self, cameras='center'):
         super().__init__('aruco_detection_node',
                         allow_undeclared_parameters=True,
                         automatically_declare_parameters_from_overrides=True)
@@ -340,39 +407,94 @@ class DetectArucoNode(Node):
         node_name = self.get_name()
         logger.info("{0} started".format(node_name))
 
+        if not self.has_parameter('cameras'):
+            self.declare_parameter('cameras', cameras)
+        param_val = self.get_parameter('cameras').value
+        
+        if isinstance(param_val, str):
+            val_lower = param_val.strip().lower()
+            if val_lower == 'all':
+                self.cameras = ['left', 'right', 'center']
+            else:
+                self.cameras = [c.strip() for c in val_lower.split(',') if c.strip()]
+        elif isinstance(param_val, list):
+            self.cameras = [str(c).strip().lower() for c in param_val]
+        else:
+            self.cameras = [cameras]
+
+        valid_cameras = ['left', 'right', 'center']
+        self.cameras = [c for c in self.cameras if c in valid_cameras]
+        if not self.cameras:
+            logger.warn("No valid cameras specified. Defaulting to 'center'.")
+            self.cameras = ['center']
+
+        logger.info(f"Using cameras: {self.cameras}")
+
         self.cv_bridge = CvBridge()
-        self.rgb_image = None
-        self.rgb_image_timestamp = None
-        self.depth_image = None
-        self.depth_image_timestamp = None        
-        self.camera_matrix = None
-        self.camera_dist_coeffs = None
         self.all_points = []
-        self.show_debug_images = False
+        self.show_debug_images = True
         self.publish_marker_point_clouds = False
+        
+        self.latest_images = {}
 
         self.marker_info = {}
         self.load_config_to_paramter_server()
 
-        # Gather the camera info. Assuming it does not change, we only need to wait for the first message, then we can remove the subscription.
-        self.center_cam_info_sub = self.create_subscription(CameraInfo, CAMERA_INFO_TOPIC, self.camera_info_callback, qos_profile=1)
-        while self.camera_matrix is None and self.camera_dist_coeffs is None:
-            logger.info(f"Waiting for camera info on topic: {CAMERA_INFO_TOPIC}")
+        # Gather the camera info for each enabled camera.
+        self.camera_infos = {}
+        self.info_subs = []
+        for cam in self.cameras:
+            topic = f"/cameras_head/{cam}/camera_info"
+            sub = self.create_subscription(
+                CameraInfo,
+                topic,
+                functools.partial(self.camera_info_callback, camera_name=cam),
+                qos_profile=1
+            )
+            self.info_subs.append(sub)
+
+        # Wait until we have info for all requested cameras
+        while len(self.camera_infos) < len(self.cameras):
+            missing = [c for c in self.cameras if c not in self.camera_infos]
+            logger.info(f"Waiting for camera info for: {missing}")
             rclpy.spin_once(self)
 
-        self.destroy_subscription(self.center_cam_info_sub)
+        for sub in self.info_subs:
+            self.destroy_subscription(sub)
 
-        logger.info(f"Camera matrix recieved:\n{self.camera_matrix}")
-        logger.info(f"Camera distortion coefficients receieved:\n{self.camera_dist_coeffs}")
+        for cam in self.cameras:
+            matrix, coeffs = self.camera_infos[cam]
+            logger.info(f"[{cam}] Camera matrix received:\n{matrix}")
+            logger.info(f"[{cam}] Camera distortion coefficients received:\n{coeffs}")
 
-        # Initialize the aruco marker collection from the gathered marker info
-        self.aruco_marker_collection = ArucoMarkerCollection.from_dict(self.marker_info, self.show_debug_images)
+        # Initialize the aruco marker collections for each camera
+        self.aruco_marker_collections = {}
+        for cam in self.cameras:
+            camera_frame = f"cameras_head_{cam}_camera_optical_frame"
+            self.aruco_marker_collections[cam] = ArucoMarkerCollection.from_dict(
+                self.marker_info,
+                self.show_debug_images,
+                frame_id=camera_frame,
+                camera_name=cam
+            )
 
-        self.center_rgb_sub = self.create_subscription(
-            Image, CENTER_CAMERA_TOPIC, self.img_callback, qos_profile=1
-        )
+        self.rgb_subs = []
+        for cam in self.cameras:
+            topic = f"/cameras_head/{cam}/image_raw"
+            sub = self.create_subscription(
+                Image,
+                topic,
+                functools.partial(self.img_callback, camera_name=cam),
+                qos_profile=1
+            )
+            self.rgb_subs.append(sub)
+
+        if not self.has_parameter('publish_markers'):
+            self.declare_parameter('publish_markers', False)
+        self.publish_markers = self.get_parameter('publish_markers').value
 
         self.visualize_markers_pub = self.create_publisher(MarkerArray, '/aruco/marker_array', 1)
+        self.visualize_detections_pub = self.create_publisher(Detection3DArray, '/aruco/detections', 1)
 
         self.tf_broadcaster = TransformBroadcaster(self)
 
@@ -415,37 +537,102 @@ class DetectArucoNode(Node):
         logger.info(f"{param_dict=}")
         logger.info(f"{self.marker_info}")
 
-    def img_callback(self, img_msg):
+    def img_callback(self, img_msg, camera_name):
         try:
-            self.rgb_image = self.cv_bridge.imgmsg_to_cv2(img_msg, 'bgr8')
-            self.rgb_image_timestamp = img_msg.header.stamp
+            rgb_image = self.cv_bridge.imgmsg_to_cv2(img_msg, 'bgr8')
+            rgb_image_timestamp = img_msg.header.stamp
         except CvBridgeError as error:
             logger.error(error)
-        
-        self.aruco_marker_collection.update(self.rgb_image, self.camera_matrix, self.camera_dist_coeffs, self.rgb_image_timestamp)
+            return
 
-        marker_array = self.aruco_marker_collection.get_ros_marker_array()
+        camera_matrix, camera_dist_coeffs = self.camera_infos[camera_name]
+        collection = self.aruco_marker_collections[camera_name]
+
+        collection.update(rgb_image, camera_matrix, camera_dist_coeffs, rgb_image_timestamp)
+
+        detection_array = collection.to_ros_msg()
+        self.visualize_detections_pub.publish(detection_array)
 
         # Create TF frames for each of the markers. Only broadcast
         # each marker a single time after it has been updated.
-        self.aruco_marker_collection.broadcast_tf(self.tf_broadcaster)
-        self.visualize_markers_pub.publish(marker_array)
+        collection.broadcast_tf(self.tf_broadcaster)
+        
+        if self.publish_markers:
+            marker_array = collection.get_ros_marker_array()
+            self.visualize_markers_pub.publish(marker_array)
 
         # save rotation for last
         if self.show_debug_images:
-            aruco_image = self.aruco_marker_collection.draw_markers(self.rgb_image)
-            display_aruco_image = cv2.rotate(aruco_image, cv2.ROTATE_90_COUNTERCLOCKWISE)
-            cv2.imshow('Detected ArUco Markers', display_aruco_image)
-            cv2.waitKey(1) #ms
+            aruco_image = collection.draw_markers(rgb_image)
+            # Overlay camera label on top-left
+            cv2.putText(aruco_image, camera_name.upper(), (20, 40),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
+            self.latest_images[camera_name] = aruco_image
+            self.display_combined_images()
 
-    def camera_info_callback(self, msg):
-        self.camera_matrix = np.array(msg.k).reshape((3, 3))
-        self.camera_dist_coeffs = np.array(msg.d)
+    def display_combined_images(self):
+        ordered_cams = [c for c in ['left', 'center', 'right'] if c in self.cameras]
+        
+        # Get dimensions from the first available image to format placeholders
+        target_height = None
+        for cam in ordered_cams:
+            if cam in self.latest_images:
+                target_height = self.latest_images[cam].shape[0]
+                break
+                
+        if target_height is None:
+            return
+
+        images_to_show = []
+        for cam in ordered_cams:
+            if cam in self.latest_images:
+                img = self.latest_images[cam]
+                h, w = img.shape[:2]
+                if h != target_height:
+                    scale = target_height / h
+                    new_w = int(w * scale)
+                    img = cv2.resize(img, (new_w, target_height))
+                images_to_show.append(img)
+            else:
+                placeholder_width = int(target_height * 1.33)
+                placeholder = np.zeros((target_height, placeholder_width, 3), dtype=np.uint8)
+                cv2.putText(placeholder, f"Waiting for {cam}...", (placeholder_width // 6, target_height // 2),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                images_to_show.append(placeholder)
+
+        # Concatenate horizontally
+        combined_image = np.hstack(images_to_show)
+        
+        # Resize if width exceeds 1920 pixels
+        max_display_width = 1920
+        h, w = combined_image.shape[:2]
+        if w > max_display_width:
+            scale = max_display_width / w
+            new_h = int(h * scale)
+            combined_image = cv2.resize(combined_image, (max_display_width, new_h))
+
+        cv2.imshow('Detected ArUco Markers - Combined', combined_image)
+        cv2.waitKey(1)
+
+    def camera_info_callback(self, msg, camera_name):
+        matrix = np.array(msg.k).reshape((3, 3))
+        dist_coeffs = np.array(msg.d)
+        self.camera_infos[camera_name] = (matrix, dist_coeffs)
 
 
 def main(args=None):
-    rclpy.init(args=args)
-    node = DetectArucoNode()
+    parser = argparse.ArgumentParser(description='ArUco marker detection node.')
+    parser.add_argument('--cameras', type=str, default='center',
+                        help='Camera(s) to use for detection (comma-separated list of: left, right, center, or "all").')
+    
+    # We should parse only the arguments we know, because ROS 2 passes its own arguments.
+    parsed_args, ros_args = parser.parse_known_args()
+
+    # Reconstruct argv for ROS 2 init (keeping the program name)
+    new_argv = [sys.argv[0]] + ros_args
+
+    rclpy.init(args=new_argv)
+    node = DetectArucoNode(cameras=parsed_args.cameras)
 
     try:
         rclpy.spin(node)
