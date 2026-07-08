@@ -14,7 +14,7 @@ def compile_robot_description(context, *args, **kwargs):
     and spawns the robot_state_publisher with the correct namespace.
     """
 
-    uncalibrated_urdf = LaunchConfiguration('uncalibrated_urdf').perform(context).lower() == 'false'
+    uncalibrated_urdf = LaunchConfiguration('uncalibrated_urdf').perform(context).lower() == 'true'
     robot_description_content = get_urdf_from_robot_params(apply_calibration=not uncalibrated_urdf)
 
     prefix = LaunchConfiguration('driver_namespace').perform(context)
