@@ -20,17 +20,26 @@ def launch_setup(context, *args, **kwargs):
                 package='stretch_tag_perception',
                 executable='aruco_detection.py',
                 output='screen',
-                parameters=[stretch_marker_dict, additional_marker_dict],
+                parameters=[
+                    stretch_marker_dict,
+                    additional_marker_dict,
+                    {'cameras': LaunchConfiguration("cameras")}
+                ],
             )
         ]
 
 
 def generate_launch_description():
     return LaunchDescription([
-            DeclareLaunchArgument(
-                "aruco_config_filepath",
-                default_value="",
-                description="Filepath to a yaml file with additional aruco configuration parameters (optional)."
-            ),
-            OpaqueFunction(function=launch_setup)
-        ])
+        DeclareLaunchArgument(
+            "aruco_config_filepath",
+            default_value="",
+            description="Filepath to a yaml file with additional aruco configuration parameters (optional)."
+        ),
+        DeclareLaunchArgument(
+            "cameras",
+            default_value="center",
+            description="Camera(s) to use for detection (comma-separated list of: left, right, center, or 'all')."
+        ),
+        OpaqueFunction(function=launch_setup)
+    ])
