@@ -14,7 +14,8 @@ def compile_robot_description(context, *args, **kwargs):
     and spawns the robot_state_publisher with the correct namespace.
     """
 
-    robot_description_content = get_urdf_from_robot_params()
+    uncalibrated_urdf = LaunchConfiguration('uncalibrated_urdf').perform(context).lower() == 'false'
+    robot_description_content = get_urdf_from_robot_params(apply_calibration=not uncalibrated_urdf)
 
     prefix = LaunchConfiguration('driver_namespace').perform(context)
     ns = prefix if prefix != 'UNSET' else ''
@@ -44,6 +45,13 @@ def generate_launch_description():
         description='The prefix to use as a namespace, defaults to no namespace'
     )
     ld.add_action(declare_driver_namespace_arg)
+
+    declare_uncalibrated_urdf_arg = DeclareLaunchArgument(
+        'uncalibrated_urdf',
+        default_value='False', choices=['True', 'False', 'true', 'false'],
+        description='Whether to apply calibrations to the URDF (default: apply calibrations)'
+    )
+    ld.add_action(declare_uncalibrated_urdf_arg)
 
     # Wheel odom TF
     declare_broadcast_odom_tf_arg = DeclareLaunchArgument(
