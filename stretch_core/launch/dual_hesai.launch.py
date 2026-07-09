@@ -36,6 +36,8 @@ def launch_setup(context, *args, **kwargs):
         yaml.dump(cfg, tmp_file, sort_keys=False)
         temp_yaml_path = tmp_file.name
 
+    z_min = float(LaunchConfiguration('z_min').perform(context))
+    z_max = float(LaunchConfiguration('z_max').perform(context))
     pub_pointcloud = LaunchConfiguration('pub_pointcloud').perform(context).lower() == 'true'
 
     hesai_node = Node(
@@ -61,6 +63,8 @@ def launch_setup(context, *args, **kwargs):
                 'scan_angle_increment_deg': scan_angle_increment_deg,
                 'lidar1_frame': 'lidar_right_link',
                 'lidar2_frame': 'lidar_left_link',
+                'z_min': z_min,
+                'z_max': z_max,
                 'pub_pointcloud': pub_pointcloud,
             },
         ],
@@ -133,6 +137,16 @@ def generate_launch_description():
         description='LaserScan angular bin width in degrees. Try 0.1 or 0.2 for Nav2.',
     )
 
+    z_min_arg = DeclareLaunchArgument(
+        'z_min',
+        default_value='0.135',
+        description='Point with z value less than z_min are pruned when using region without ransac',
+    )
+    z_max_arg = DeclareLaunchArgument(
+        'z_max',
+        default_value='1.5',
+        description='Point with z value less than z_min are pruned when using region without ransac',
+    )
     pub_pointcloud_arg = DeclareLaunchArgument('pub_pointcloud', default_value='false', description='Publish a pointcloud from the filter node.')
 
     return LaunchDescription([
@@ -141,6 +155,8 @@ def generate_launch_description():
         print_filter_cmd,
         error_log,
         scan_angle_increment_arg,
+        z_min_arg,
+        z_max_arg,
         pub_pointcloud_arg,
         use_rviz_arg,
         launch_filter_node_arg,

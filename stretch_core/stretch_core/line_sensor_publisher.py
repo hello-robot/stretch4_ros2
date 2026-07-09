@@ -19,7 +19,12 @@ from stretch4_body.subsystem.line_sensor.line_sensor_utils import (
     LineSensorGeometry,
 )
 
-from stretch_core.line_sensor_filter import LineSensorConfig, LineSensorHits, LineSensorSource
+from stretch_core.line_sensor_filter import (
+    DEFAULT_LINE_SENSOR_RADIUS_M,
+    LineSensorConfig,
+    LineSensorHits,
+    LineSensorSource,
+)
 
 
 def numpy_to_pointcloud2(points: np.ndarray, header: Header) -> PointCloud2:
@@ -154,7 +159,7 @@ class LineSensorPublisher(Node):
         self.declare_parameter('floor_band_m', 0.015)
         self.declare_parameter('cliff_min_drop_m', 0.02)
         self.declare_parameter('cliff_max_drop_m', 0.10)
-        self.declare_parameter('line_sensor_radius_m', 1.0)
+        self.declare_parameter('line_sensor_radius_m', DEFAULT_LINE_SENSOR_RADIUS_M)
         self.declare_parameter('line_min_run_bins', 3)
         self.declare_parameter('line_max_run_radial_span_m', 0.25)
         self.declare_parameter('line_point_noise_max_run_bins', 12)

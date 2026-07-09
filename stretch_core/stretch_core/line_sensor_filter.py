@@ -8,6 +8,8 @@ from enum import IntEnum
 
 import numpy as np
 
+DEFAULT_LINE_SENSOR_RADIUS_M = 0.4
+
 
 class BinClass(IntEnum):
     UNKNOWN = 0
@@ -24,7 +26,7 @@ class LineSensorConfig:
     floor_band_m: float = 0.015
     cliff_min_drop_m: float = 0.02
     cliff_max_drop_m: float = 0.10
-    line_sensor_radius_m: float = 1.0
+    line_sensor_radius_m: float = DEFAULT_LINE_SENSOR_RADIUS_M
     line_min_run_bins: int = 3
     line_max_run_radial_span_m: float = 0.25
     line_point_noise_max_run_bins: int = 12
