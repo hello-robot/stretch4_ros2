@@ -302,10 +302,17 @@ class StretchDriver(Node):
 
             acceleration_param = self.get_parameter_or(f"joint_acceleration.{joint.split("_joint")[0]}",None).value
 
-            if "gripper" in joint: 
-                jointjog_msg.velocities[i] *= 300
+            joint_velocity = jointjog_msg.velocities[i]
+            duration = jointjog_msg.duration
 
-            self.set_vel_functions[joint](jointjog_msg.velocities[i], acceleration_param)
+            if "gripper" in joint: 
+                joint_velocity *= 300
+
+            if "wrist" in joint:
+                # account for move_by (lack of velocity control)
+                joint_velocity *= duration
+
+            self.set_vel_functions[joint](joint_velocity, acceleration_param)
 
         # Set timeout (TODO)
         self.robot.logger.debug(str(self.robot.cmd_dict))
