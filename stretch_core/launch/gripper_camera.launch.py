@@ -13,6 +13,7 @@ from stretch4_body.subsystem.cameras.adapters.luxonis_camera_adapter import (
 from stretch_core.vision.vision_topics import (
     VisionTopics
 )
+from hello_helpers.launch_utils import get_rviz_node
 
 
 def is_launch_config_true(context, name):
@@ -95,13 +96,4 @@ def launch_setup(context, *args, **kwargs):
         get_package_share_directory("stretch_core"), "rviz", "cameras.rviz"
     )
 
-    rviz_node = Node(
-        package="rviz2",
-        executable="rviz2",
-        name="rviz2",
-        output="screen",
-        arguments=["-d", rviz_config_path],
-        condition=IfCondition(LaunchConfiguration("use_rviz")),
-    )
-
-    return [camera_node, rviz_node]
+    return [camera_node] + get_rviz_node(rviz_config_path)

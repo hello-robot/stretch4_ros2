@@ -13,7 +13,6 @@ from rclpy.clock import Clock
 from rclpy.node import Node
 import tf2_ros
 import numpy as np
-import cv2
 import ros2_numpy
 
 import pyquaternion
