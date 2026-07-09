@@ -91,7 +91,7 @@ def generate_launch_description():
     ld.add_action(activate_event)
 
 
-    for action in get_rviz_node(str(stretch_nav2 / 'rviz' / 'global.rviz')):
+    for action in get_rviz_node(rviz_config):
         ld.add_action(action)
-        
+
     return ld
