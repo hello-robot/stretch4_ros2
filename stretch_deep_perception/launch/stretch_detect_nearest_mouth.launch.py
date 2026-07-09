@@ -5,6 +5,7 @@ from launch_ros.actions import Node
 from launch.actions import IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 
+from hello_helpers.launch_utils import get_rviz_node
 
 def generate_launch_description():
     stretch_core_path = get_package_share_directory('stretch_core')
@@ -29,16 +30,8 @@ def generate_launch_description():
 
     rviz_config_path = os.path.join(stretch_deep_perception_path, 'rviz', 'nearest_mouth_detection.rviz')
 
-    rviz_node = Node(
-        package='rviz2',
-        executable='rviz2',
-        arguments=['-d', rviz_config_path],
-        output='screen',
-        )
-
     return LaunchDescription([
         stretch_driver,
         d435i_launch,
         detect_nearest_mouth,
-        rviz_node,
-        ])
+        ]+ get_rviz_node(rviz_config_path))

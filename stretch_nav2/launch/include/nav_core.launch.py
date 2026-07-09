@@ -8,6 +8,7 @@ from launch.launch_context import LaunchContext
 from launch_ros.substitutions import FindPackageShare
 import rclpy
 
+from hello_helpers.launch_utils import _remove_qt_plugin_env_vars
 
 def generate_launch_description():
     logger = rclpy.logging.get_logger('navigation_launch')
@@ -94,9 +95,7 @@ def generate_launch_description():
         params_file,
         use_composition_param,
         navigation_bringup_launch,
-        UnsetEnvironmentVariable('QT_QPA_PLATFORM_PLUGIN_PATH'),
-        UnsetEnvironmentVariable('QT_QPA_FONTDIR'),
-        UnsetEnvironmentVariable('QT_PLUGIN_PATH'),
+        *_remove_qt_plugin_env_vars(),
         rviz_launch,
         map_path_check_action,
     ])

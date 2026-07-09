@@ -12,6 +12,7 @@ from lifecycle_msgs.msg import Transition
 from launch.substitutions import PathJoinSubstitution
 from launch_ros.substitutions import FindPackageShare
 
+from hello_helpers.launch_utils import get_rviz_node
 
 def generate_launch_description():
     declare_use_sim_time_cmd = DeclareLaunchArgument(
@@ -30,16 +31,6 @@ def generate_launch_description():
         default_value='true',
         choices=['true', 'false'],
         description='Whether to launch RViz2'
-    )
-
-    # RViz node with condition
-    rviz2_launch = Node(
-        package='rviz2',
-        executable='rviz2',
-        name='rviz2',
-        output='screen',
-        arguments=['-d', rviz_config],
-        condition=IfCondition(LaunchConfiguration('use_rviz'))
     )
 
     autostart = LaunchConfiguration('autostart')
@@ -93,11 +84,14 @@ def generate_launch_description():
     ld.add_action(declare_use_sim_time_cmd)
     ld.add_action(use_sim_time_param)
     ld.add_action(use_rviz)
-    ld.add_action(rviz2_launch)
     ld.add_action(declare_autostart_cmd)
     ld.add_action(declare_use_lifecycle_manager)
     ld.add_action(start_sync_slam_toolbox_node)
     ld.add_action(configure_event)
     ld.add_action(activate_event)
 
+
+    for action in get_rviz_node(str(stretch_nav2 / 'rviz' / 'global.rviz')):
+        ld.add_action(action)
+        
     return ld
