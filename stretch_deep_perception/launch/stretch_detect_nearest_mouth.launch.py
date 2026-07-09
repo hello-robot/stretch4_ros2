@@ -34,4 +34,4 @@ def generate_launch_description():
         stretch_driver,
         d435i_launch,
         detect_nearest_mouth,
-        ]+ get_rviz_node(rviz_config_path))
+        ]+ get_rviz_node(rviz_config_path, launch_configration_key=None))

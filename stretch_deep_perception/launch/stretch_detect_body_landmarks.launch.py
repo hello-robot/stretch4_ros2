@@ -34,5 +34,5 @@ def generate_launch_description():
     return LaunchDescription([
         stretch_driver,
         d435i_launch,
-        detect_body_landmarks
-        ] + get_rviz_node(rviz_config_path))
+        detect_body_landmarks,
+        ] + get_rviz_node(rviz_config_path, launch_configration_key=None))

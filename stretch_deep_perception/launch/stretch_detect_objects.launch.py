@@ -29,9 +29,9 @@ def generate_launch_description():
         )
 
     rviz_config_path = os.path.join(stretch_deep_perception_path, 'rviz', 'object_detection.rviz')
-    
+
     return LaunchDescription([
         stretch_driver,
         d435i_launch,
         detect_objects,
-        ]+ get_rviz_node(rviz_config_path))
+        ]+ get_rviz_node(rviz_config_path, launch_configration_key=None))

@@ -20,11 +20,13 @@ def _remove_qt_plugin_env_vars() -> list:
     ]
 
 
-def get_rviz_node(rviz_file_path:str|None=None, *, rviz_args:list|None = None, rviz_params:dict|None = None, launch_configration_key:str = 'use_rviz') -> list:
+def get_rviz_node(rviz_file_path:str|None=None, *, rviz_args:list|None = None, rviz_params:dict|None = None, launch_configration_key:str|None = 'use_rviz') -> list:
     """
     Use this to get the rviz node in your launch file. This automatically adds _remove_qt_plugin_env_vars()
 
-    rviz_file_path is ignored if rviz_args is not None.
+    Only one of rviz_file_path or rviz_args is allowed to be not None.
+
+    If `launch_configration_key` is None, IfCondition will not be checked.
 
     Usage:
         return [
@@ -34,8 +36,6 @@ def get_rviz_node(rviz_file_path:str|None=None, *, rviz_args:list|None = None, r
     """
     if rviz_file_path is not None and rviz_args is not None:
         raise ValueError("Only one of rviz_file_path or rviz_args can be used. You may want to add ['-d', rviz_file_path] to your rviz_args instead.")
-    
-    use_rviz = LaunchConfiguration(launch_configration_key)
 
     arguments = rviz_args
     if rviz_file_path is not None:
@@ -48,6 +48,6 @@ def get_rviz_node(rviz_file_path:str|None=None, *, rviz_args:list|None = None, r
         output="screen",
         arguments= arguments,
         parameters=[rviz_params] if rviz_params is not None else [],
-        condition=IfCondition(use_rviz),
+        condition=IfCondition(LaunchConfiguration(launch_configration_key)) if launch_configration_key is not None else None,
     )
     return _remove_qt_plugin_env_vars() + [rviz_node]
