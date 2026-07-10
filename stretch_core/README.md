@@ -108,6 +108,36 @@ RViz markers are published on `/self_filter_markers`. Raw URDF boxes show the co
 
 Tuning notes for filter order, gate radius, URDF box buffers, and markers: see [config/README.md](config/README.md).
 
+
+## Line sensor
+
+The `line_sensor_publisher` node reads the Stretch ring line-sensor data from `robot_server` via `RobotClient`, projects each bin into the floor frame, and publishes near-field obstacle and small-drop hazards as `PointCloud2` topics in `base_link`.
+
+Processing is split between:
+
+- `stretch_core/line_sensor_filter.py` — projection, height classification, spatial run filtering (spray/point-noise rejection), and multi-frame confirmation.
+- `stretch_core/line_sensor_publisher.py` — ROS 2 wrapper, topic publication, and stale-data handling.
+
+Each frame classifies bins by height (`obstacle`, `small_drop`, `free`, `spray`), then filters them in stages:
+
+Spray rejection evaluates each candidate run from the reporting line sensor’s origin. It checks near-sensor head distance, radial span, angular spread, thin/aspect ratio, monotonic radial direction, directional clusters, and short temporal instability. This handles how noise show up in line sensors when running on dark floors.
+
+Main outputs:
+
+| Topic | Content |
+|-------|---------|
+| `/line_sensor/points` | Finite positive tare-corrected line-sensor bins below the fixed `max_line_sensor_range` validity cutoff, projected into `base_link` with calibrated `z` heights |
+| `/line_sensor/obstacle_points` | Confirmed obstacles near the base |
+| `/line_sensor/small_drop_points` | Confirmed small cliff/drop hazards |
+
+With `publish_debug:=true`, debug topics under `/line_sensor/debug/` expose the intermediate `raw_*`, `spatial_*`, and `spray` stages plus JSON counts on `/line_sensor/debug/source_counts`.
+
+Launch:
+
+```bash
+ros2 launch stretch_core line_sensor.launch.py
+```
+
 ### Head lidar PTP check
 
 Read-only verification of JT128 return mode (Last + Strongest), point-cloud filter (Strong), PTP lock offset (350 µs), locked PTP status (single read), and jitter p95 ≤ 350 µs over 30 s (direct PTC TCP, no ROS topics):

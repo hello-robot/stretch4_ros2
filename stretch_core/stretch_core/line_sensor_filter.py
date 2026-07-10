@@ -8,7 +8,7 @@ from enum import IntEnum
 
 import numpy as np
 
-DEFAULT_LINE_SENSOR_RADIUS_M = 0.4
+max_line_sensor_range = 4.0
 
 
 class BinClass(IntEnum):
@@ -21,12 +21,10 @@ class BinClass(IntEnum):
 
 @dataclass
 class LineSensorConfig:
-    max_range: float = 4.0
     line_obstacle_min_height_m: float = 0.025
     floor_band_m: float = 0.015
     cliff_min_drop_m: float = 0.02
     cliff_max_drop_m: float = 0.10
-    line_sensor_radius_m: float = DEFAULT_LINE_SENSOR_RADIUS_M
     line_min_run_bins: int = 3
     line_max_run_radial_span_m: float = 0.25
     line_point_noise_max_run_bins: int = 12
@@ -37,16 +35,25 @@ class LineSensorConfig:
     line_fast_confirm_range_m: float = 0.55
     line_window_frames: int = 4
     line_require_consecutive: bool = True
-    spray_min_run_bins: int = 16
-    spray_max_run_bins: int = 96
-    spray_depth_p2p_min_m: float = 0.07
-    spray_residual_p2p_min_m: float = 0.06
-    spray_jump_p90_min_m: float = 0.010
-    spray_large_jump_min_count: int = 4
-    spray_large_jump_m: float = 0.015
-    spray_turn_min_count: int = 2
-    spray_turn_jump_m: float = 0.010
-    spray_path_ratio_min: float = 1.75
+    line_spray_merge_gap_bins: int = 6
+    line_radial_streak_head_radius_max_m: float = 0.35
+    line_radial_streak_span_min_m: float = 0.04
+    line_radial_streak_angular_spread_max_deg: float = 20.0
+    line_radial_streak_aspect_ratio_min: float = 3.0
+    spray_min_run_bins: int = 3
+    spray_roughness_thresh_m: float = 0.03
+    spray_max_run_bins: int = 0
+    spray_head_radius_max_m: float = 0.30
+    spray_radial_span_min_m: float = 0.05
+    spray_angular_spread_max_deg: float = 15.0
+    spray_aspect_ratio_min: float = 5.0
+    spray_direction_cluster_gap_deg: float = 5.0
+    spray_monotonic_score_min: float = 0.70
+    spray_monotonic_tolerance_m: float = 0.005
+    spray_short_run_bonus_max_bins: int = 15
+    spray_temporal_window_frames: int = 5
+    spray_temporal_stable_min_frames: int = 2
+    spray_temporal_stable_fraction: float = 0.50
 
 
 @dataclass
@@ -90,10 +97,16 @@ class LineSensorSource:
                 1,
             ),
         )
+        self._raw_history: deque[dict[tuple[int, int], BinClass]] = deque(
+            maxlen=max(
+                config.line_window_frames,
+                config.spray_temporal_window_frames,
+                1,
+            ),
+        )
 
     def project_all(self, status: dict) -> np.ndarray:
         points: list[np.ndarray] = []
-        cfg = self.config
         for sensor_idx, sensor_name in enumerate(self.sensor_names):
             sensor_status = status.get(sensor_name, {})
             if not isinstance(sensor_status, dict):
@@ -105,8 +118,7 @@ class LineSensorSource:
             valid = (
                 np.isfinite(ranges)
                 & (ranges > 0.0)
-                & (ranges < cfg.max_range)
-                & ((projected[:, 0] ** 2 + projected[:, 1] ** 2) <= cfg.line_sensor_radius_m ** 2)
+                & (ranges < max_line_sensor_range)
             )
             if np.any(valid):
                 points.append(projected[valid])
@@ -129,16 +141,18 @@ class LineSensorSource:
                 if (
                     not np.isfinite(ranges[bin_idx])
                     or ranges[bin_idx] <= 0.0
-                    or ranges[bin_idx] >= cfg.max_range
+                    or ranges[bin_idx] >= max_line_sensor_range
                 ):
                     continue
                 pt = projected[bin_idx]
-                r2 = pt[0] * pt[0] + pt[1] * pt[1]
-                if r2 > cfg.line_sensor_radius_m * cfg.line_sensor_radius_m:
-                    continue
                 cls = self._classify_bin(pt[2])
                 if cls in (BinClass.OBSTACLE, BinClass.SMALL_DROP):
                     candidates.append((sensor_idx, bin_idx, cls, pt))
+
+        self._raw_history.append({
+            (sensor_idx, bin_idx): cls
+            for sensor_idx, bin_idx, cls, _pt in candidates
+        })
 
         gated = self._spatial_gate(candidates)
         self._history.append({
@@ -169,6 +183,86 @@ class LineSensorSource:
         if self.apply_tare is not None:
             ranges = self.apply_tare(ranges, sensor_name)
         return ranges
+
+    def _sensor_origin_xy(self, sensor_idx: int) -> np.ndarray:
+        pos_angle_deg = sum(self.geometry.sensor_angles[: sensor_idx + 1])
+        pos_angle_rad = -np.deg2rad(pos_angle_deg)
+        radius_m = (self.geometry.param_diameter_cm / 2.0) / 100.0
+        return np.array([
+            radius_m * np.cos(pos_angle_rad),
+            radius_m * np.sin(pos_angle_rad),
+        ], dtype=np.float64)
+
+    def _sensor_radial_metrics(
+        self,
+        run: list[tuple[int, int, BinClass, np.ndarray]],
+    ) -> dict[str, float] | None:
+        if not run:
+            return None
+
+        sensor_idx = run[0][0]
+        xy = np.vstack([item[3][:2] for item in run]).astype(np.float64)
+        origin = self._sensor_origin_xy(sensor_idx)
+        vectors = xy - origin
+        ranges = np.linalg.norm(vectors, axis=1)
+        if not np.all(np.isfinite(ranges)) or np.any(ranges <= 1e-6):
+            return None
+
+        directions = vectors / ranges[:, np.newaxis]
+        dots = np.clip(directions @ directions.T, -1.0, 1.0)
+        angular_spread_deg = float(np.rad2deg(np.arccos(np.min(dots))))
+
+        mean_direction = np.mean(directions, axis=0)
+        mean_norm = float(np.linalg.norm(mean_direction))
+        if mean_norm <= 1e-6:
+            return None
+        mean_direction /= mean_norm
+
+        along = vectors @ mean_direction
+        perp_direction = np.array([-mean_direction[1], mean_direction[0]], dtype=np.float64)
+        across = vectors @ perp_direction
+        extent_para = float(np.ptp(along))
+        extent_perp = float(np.ptp(across))
+        aspect_ratio = extent_para / max(extent_perp, 1e-6)
+
+        radial_diffs = np.diff(ranges)
+        if radial_diffs.size == 0:
+            monotonic_score = 0.0
+        else:
+            tol = max(float(self.config.spray_monotonic_tolerance_m), 0.0)
+            increasing = float(np.mean(radial_diffs >= -tol))
+            decreasing = float(np.mean(radial_diffs <= tol))
+            monotonic_score = max(increasing, decreasing)
+
+        return {
+            'head_radius': float(np.min(ranges)),
+            'radial_span': float(np.ptp(ranges)),
+            'angular_spread_deg': angular_spread_deg,
+            'extent_para': extent_para,
+            'extent_perp': extent_perp,
+            'aspect_ratio': aspect_ratio,
+            'monotonic_score': monotonic_score,
+        }
+
+    def _run_temporally_unstable(
+        self,
+        run: list[tuple[int, int, BinClass, np.ndarray]],
+    ) -> bool:
+        cfg = self.config
+        window_frames = cfg.spray_temporal_window_frames
+        if window_frames <= 0 or len(self._raw_history) < window_frames:
+            return False
+
+        recent = list(self._raw_history)[-window_frames:]
+        stable_bins = 0
+        for sensor_idx, bin_idx, hazard_cls, _pt in run:
+            key = (sensor_idx, bin_idx)
+            hits = sum(1 for hist in recent if hist.get(key) == hazard_cls)
+            if hits >= cfg.spray_temporal_stable_min_frames:
+                stable_bins += 1
+
+        stable_fraction = stable_bins / max(len(run), 1)
+        return stable_fraction < cfg.spray_temporal_stable_fraction
 
     def _project_sensor_bins(self, sensor_idx: int, ranges: np.ndarray) -> np.ndarray:
         slant = np.asarray(ranges, dtype=np.float64)
@@ -214,24 +308,172 @@ class LineSensorSource:
         out: list[tuple[int, int, BinClass, np.ndarray]] = []
         for _sensor_idx, items in by_sensor.items():
             items.sort(key=lambda x: x[1])
+            spray_keys = self._spray_keys_for_sensor(items)
+            for sensor_idx, bin_idx, _cls, pt in items:
+                if (sensor_idx, bin_idx) in spray_keys:
+                    out.append((sensor_idx, bin_idx, BinClass.SPRAY, pt))
+
             for hazard_cls in (BinClass.OBSTACLE, BinClass.SMALL_DROP):
+                runs: list[list[tuple[int, int, BinClass, np.ndarray]]] = []
                 run: list[tuple[int, int, BinClass, np.ndarray]] = []
                 last_bin: int | None = None
                 for item in items:
+                    if (item[0], item[1]) in spray_keys:
+                        if run:
+                            runs.append(run)
+                        run = []
+                        last_bin = None
+                        continue
                     bin_idx = item[1]
                     if item[2] != hazard_cls:
-                        self._append_run(out, run)
+                        if run:
+                            runs.append(run)
                         run = []
                         last_bin = None
                         continue
                     if last_bin is None or bin_idx == last_bin + 1:
                         run.append(item)
                     else:
-                        self._append_run(out, run)
+                        if run:
+                            runs.append(run)
                         run = [item]
                     last_bin = bin_idx
-                self._append_run(out, run)
+                if run:
+                    runs.append(run)
+                self._append_class_runs(out, runs)
         return out
+
+    def _spray_keys_for_sensor(
+        self,
+        items: list[tuple[int, int, BinClass, np.ndarray]],
+    ) -> set[tuple[int, int]]:
+        max_gap = max(int(self.config.line_spray_merge_gap_bins), 0)
+        keys: set[tuple[int, int]] = set()
+        group: list[tuple[int, int, BinClass, np.ndarray]] = []
+        last_bin: int | None = None
+
+        for item in items:
+            bin_idx = item[1]
+            if last_bin is None or bin_idx - last_bin <= max_gap + 1:
+                group.append(item)
+            else:
+                keys.update(self._spray_keys_for_group(group))
+                group = [item]
+            last_bin = bin_idx
+
+        keys.update(self._spray_keys_for_group(group))
+        return keys
+
+    def _spray_keys_for_group(
+        self,
+        group: list[tuple[int, int, BinClass, np.ndarray]],
+    ) -> set[tuple[int, int]]:
+        if self._is_spray(group):
+            return {(sensor_idx, bin_idx) for sensor_idx, bin_idx, _cls, _pt in group}
+
+        keys: set[tuple[int, int]] = set()
+        for cluster in self._direction_clusters(group):
+            if len(cluster) == len(group):
+                continue
+            if self._is_spray(cluster):
+                keys.update(
+                    (sensor_idx, bin_idx)
+                    for sensor_idx, bin_idx, _cls, _pt in cluster
+                )
+        return keys
+
+    def _direction_clusters(
+        self,
+        group: list[tuple[int, int, BinClass, np.ndarray]],
+    ) -> list[list[tuple[int, int, BinClass, np.ndarray]]]:
+        if len(group) < self.config.spray_min_run_bins:
+            return []
+
+        sensor_idx = group[0][0]
+        origin = self._sensor_origin_xy(sensor_idx)
+        decorated: list[tuple[float, tuple[int, int, BinClass, np.ndarray]]] = []
+        for item in group:
+            vector = item[3][:2].astype(np.float64) - origin
+            radius = float(np.linalg.norm(vector))
+            if not np.isfinite(radius) or radius <= 1e-6:
+                continue
+            decorated.append((float(np.arctan2(vector[1], vector[0])), item))
+
+        if len(decorated) < self.config.spray_min_run_bins:
+            return []
+
+        decorated.sort(key=lambda x: x[0])
+        angles = np.array([angle for angle, _item in decorated], dtype=np.float64)
+        gaps = np.diff(angles)
+        wrap_gap = float((angles[0] + 2.0 * np.pi) - angles[-1])
+        if gaps.size > 0 and float(np.max(gaps)) > wrap_gap:
+            split_idx = int(np.argmax(gaps)) + 1
+            decorated = decorated[split_idx:] + decorated[:split_idx]
+            angles = np.array([angle for angle, _item in decorated], dtype=np.float64)
+            angles = np.unwrap(angles)
+
+        max_gap_rad = np.deg2rad(max(float(self.config.spray_direction_cluster_gap_deg), 0.0))
+        clusters: list[list[tuple[int, int, BinClass, np.ndarray]]] = []
+        cluster = [decorated[0][1]]
+        last_angle = float(angles[0])
+        for angle, item in zip(angles[1:], [item for _angle, item in decorated[1:]]):
+            if float(angle) - last_angle > max_gap_rad:
+                if len(cluster) >= self.config.spray_min_run_bins:
+                    clusters.append(cluster)
+                cluster = [item]
+            else:
+                cluster.append(item)
+            last_angle = float(angle)
+
+        if len(cluster) >= self.config.spray_min_run_bins:
+            clusters.append(cluster)
+        return clusters
+
+    def _append_class_runs(
+        self,
+        out: list[tuple[int, int, BinClass, np.ndarray]],
+        runs: list[list[tuple[int, int, BinClass, np.ndarray]]],
+    ) -> None:
+        if not runs:
+            return
+
+        max_gap = max(int(self.config.line_spray_merge_gap_bins), 0)
+        if max_gap == 0:
+            for run in runs:
+                self._append_run(out, run)
+            return
+
+        group: list[list[tuple[int, int, BinClass, np.ndarray]]] = []
+        for run in runs:
+            if not group:
+                group = [run]
+                continue
+
+            gap = run[0][1] - group[-1][-1][1] - 1
+            if gap <= max_gap:
+                group.append(run)
+            else:
+                self._append_run_group(out, group)
+                group = [run]
+
+        self._append_run_group(out, group)
+
+    def _append_run_group(
+        self,
+        out: list[tuple[int, int, BinClass, np.ndarray]],
+        group: list[list[tuple[int, int, BinClass, np.ndarray]]],
+    ) -> None:
+        if len(group) == 1:
+            self._append_run(out, group[0])
+            return
+
+        merged = [item for run in group for item in run]
+        if self._is_spray(merged):
+            out.extend((s, b, BinClass.SPRAY, pt) for s, b, _cls, pt in merged)
+            return
+
+        for run in group:
+            self._append_run(out, run)
 
     def _append_run(
         self,
@@ -255,41 +497,30 @@ class LineSensorSource:
         if cfg.spray_max_run_bins > 0 and n > cfg.spray_max_run_bins:
             return False
 
-        xy = np.vstack([item[3][:2] for item in run]).astype(np.float64)
-        depths = np.linalg.norm(xy, axis=1)
-        if not np.all(np.isfinite(depths)):
+        metrics = self._sensor_radial_metrics(run)
+        if metrics is None:
             return False
 
-        depth_p2p = float(np.ptp(depths))
-        if depth_p2p < cfg.spray_depth_p2p_min_m:
+        if metrics['head_radius'] > cfg.spray_head_radius_max_m:
+            return False
+        if metrics['radial_span'] < cfg.spray_radial_span_min_m:
             return False
 
-        bin_axis = np.arange(n, dtype=np.float64)
-        slope, intercept = np.polyfit(bin_axis, depths, 1)
-        residual = depths - (slope * bin_axis + intercept)
-        residual_p2p = float(np.ptp(residual))
-        if residual_p2p < cfg.spray_residual_p2p_min_m:
-            return False
+        narrow = metrics['angular_spread_deg'] <= cfg.spray_angular_spread_max_deg
+        loose_narrow = metrics['angular_spread_deg'] <= cfg.line_radial_streak_angular_spread_max_deg
+        thin = (
+            metrics['aspect_ratio'] >= cfg.spray_aspect_ratio_min
+            or metrics['extent_perp'] <= cfg.spray_roughness_thresh_m
+        )
+        monotonic = metrics['monotonic_score'] >= cfg.spray_monotonic_score_min
+        unstable = self._run_temporally_unstable(run)
+        short = n <= cfg.spray_short_run_bonus_max_bins
 
-        abs_jumps = np.abs(np.diff(depths))
-        if abs_jumps.size == 0:
-            return False
-        if float(np.percentile(abs_jumps, 90.0)) < cfg.spray_jump_p90_min_m:
-            return False
-        if int(np.count_nonzero(abs_jumps >= cfg.spray_large_jump_m)) < cfg.spray_large_jump_min_count:
-            return False
-
-        jumps = np.diff(depths)
-        significant = jumps[np.abs(jumps) >= cfg.spray_turn_jump_m]
-        if significant.size < 2:
-            return False
-        signs = np.sign(significant)
-        turn_count = int(np.count_nonzero(signs[1:] * signs[:-1] < 0.0))
-        if turn_count < cfg.spray_turn_min_count:
-            return False
-
-        path_len = float(np.sum(abs_jumps))
-        return (path_len / max(depth_p2p, 1e-6)) >= cfg.spray_path_ratio_min
+        if narrow and thin and monotonic:
+            return True
+        if narrow and thin and (unstable or short):
+            return True
+        return loose_narrow and thin and monotonic and unstable
 
     def _is_point_noise(self, run: list[tuple[int, int, BinClass, np.ndarray]]) -> bool:
         cfg = self.config
@@ -311,12 +542,34 @@ class LineSensorSource:
         cfg = self.config
         if len(run) < cfg.line_min_run_bins:
             return False
+        if self._is_radial_streak_noise(run):
+            return False
         if cfg.line_max_run_radial_span_m > 0.0:
             xy = np.vstack([item[3][:2] for item in run])
             radial_span = float(np.ptp(np.linalg.norm(xy, axis=1)))
             if radial_span > cfg.line_max_run_radial_span_m:
                 return False
         return True
+
+    def _is_radial_streak_noise(
+        self,
+        run: list[tuple[int, int, BinClass, np.ndarray]],
+    ) -> bool:
+        cfg = self.config
+        metrics = self._sensor_radial_metrics(run)
+        if metrics is None:
+            return False
+        if metrics['head_radius'] > cfg.line_radial_streak_head_radius_max_m:
+            return False
+        if metrics['radial_span'] < cfg.line_radial_streak_span_min_m:
+            return False
+        narrow = metrics['angular_spread_deg'] <= cfg.line_radial_streak_angular_spread_max_deg
+        thin = (
+            metrics['aspect_ratio'] >= cfg.line_radial_streak_aspect_ratio_min
+            or metrics['extent_perp'] <= cfg.spray_roughness_thresh_m
+        )
+        monotonic = metrics['monotonic_score'] >= cfg.spray_monotonic_score_min
+        return narrow and thin and monotonic
 
     def _bin_confirmed(
         self,

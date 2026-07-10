@@ -20,7 +20,6 @@ from stretch4_body.subsystem.line_sensor.line_sensor_utils import (
 )
 
 from stretch_core.line_sensor_filter import (
-    DEFAULT_LINE_SENSOR_RADIUS_M,
     LineSensorConfig,
     LineSensorHits,
     LineSensorSource,
@@ -84,12 +83,10 @@ class LineSensorPublisher(Node):
             geometry=geometry,
             sensor_names=sensor_names,
             config=LineSensorConfig(
-                max_range=self._max_range,
                 line_obstacle_min_height_m=self._line_obstacle_min_height_m,
                 floor_band_m=self._floor_band_m,
                 cliff_min_drop_m=self._cliff_min_drop_m,
                 cliff_max_drop_m=self._cliff_max_drop_m,
-                line_sensor_radius_m=self._line_sensor_radius_m,
                 line_min_run_bins=self._line_min_run_bins,
                 line_max_run_radial_span_m=self._line_max_run_radial_span_m,
                 line_point_noise_max_run_bins=self._line_point_noise_max_run_bins,
@@ -100,16 +97,25 @@ class LineSensorPublisher(Node):
                 line_fast_confirm_range_m=self._line_fast_confirm_range_m,
                 line_window_frames=self._line_window_frames,
                 line_require_consecutive=self._line_require_consecutive,
+                line_spray_merge_gap_bins=self._line_spray_merge_gap_bins,
+                line_radial_streak_head_radius_max_m=self._line_radial_streak_head_radius_max_m,
+                line_radial_streak_span_min_m=self._line_radial_streak_span_min_m,
+                line_radial_streak_angular_spread_max_deg=self._line_radial_streak_angular_spread_max_deg,
+                line_radial_streak_aspect_ratio_min=self._line_radial_streak_aspect_ratio_min,
                 spray_min_run_bins=self._spray_min_run_bins,
+                spray_roughness_thresh_m=self._spray_roughness_thresh_m,
                 spray_max_run_bins=self._spray_max_run_bins,
-                spray_depth_p2p_min_m=self._spray_depth_p2p_min_m,
-                spray_residual_p2p_min_m=self._spray_residual_p2p_min_m,
-                spray_jump_p90_min_m=self._spray_jump_p90_min_m,
-                spray_large_jump_min_count=self._spray_large_jump_min_count,
-                spray_large_jump_m=self._spray_large_jump_m,
-                spray_turn_min_count=self._spray_turn_min_count,
-                spray_turn_jump_m=self._spray_turn_jump_m,
-                spray_path_ratio_min=self._spray_path_ratio_min,
+                spray_head_radius_max_m=self._spray_head_radius_max_m,
+                spray_radial_span_min_m=self._spray_radial_span_min_m,
+                spray_angular_spread_max_deg=self._spray_angular_spread_max_deg,
+                spray_aspect_ratio_min=self._spray_aspect_ratio_min,
+                spray_direction_cluster_gap_deg=self._spray_direction_cluster_gap_deg,
+                spray_monotonic_score_min=self._spray_monotonic_score_min,
+                spray_monotonic_tolerance_m=self._spray_monotonic_tolerance_m,
+                spray_short_run_bonus_max_bins=self._spray_short_run_bonus_max_bins,
+                spray_temporal_window_frames=self._spray_temporal_window_frames,
+                spray_temporal_stable_min_frames=self._spray_temporal_stable_min_frames,
+                spray_temporal_stable_fraction=self._spray_temporal_stable_fraction,
             ),
             apply_tare=None if calibration is None else calibration.apply_tare,
         )
@@ -154,12 +160,10 @@ class LineSensorPublisher(Node):
 
         self.declare_parameter('obstacle_z', 0.02)
         self.declare_parameter('small_drop_z', -0.05)
-        self.declare_parameter('max_range', 4.0)
         self.declare_parameter('line_obstacle_min_height_m', 0.025)
         self.declare_parameter('floor_band_m', 0.015)
         self.declare_parameter('cliff_min_drop_m', 0.02)
         self.declare_parameter('cliff_max_drop_m', 0.10)
-        self.declare_parameter('line_sensor_radius_m', DEFAULT_LINE_SENSOR_RADIUS_M)
         self.declare_parameter('line_min_run_bins', 3)
         self.declare_parameter('line_max_run_radial_span_m', 0.25)
         self.declare_parameter('line_point_noise_max_run_bins', 12)
@@ -170,16 +174,25 @@ class LineSensorPublisher(Node):
         self.declare_parameter('line_fast_confirm_range_m', 0.55)
         self.declare_parameter('line_window_frames', 4)
         self.declare_parameter('line_require_consecutive', True)
-        self.declare_parameter('spray_min_run_bins', 8)
-        self.declare_parameter('spray_max_run_bins', 96)
-        self.declare_parameter('spray_depth_p2p_min_m', 0.07)
-        self.declare_parameter('spray_residual_p2p_min_m', 0.06)
-        self.declare_parameter('spray_jump_p90_min_m', 0.010)
-        self.declare_parameter('spray_large_jump_min_count', 4)
-        self.declare_parameter('spray_large_jump_m', 0.015)
-        self.declare_parameter('spray_turn_min_count', 2)
-        self.declare_parameter('spray_turn_jump_m', 0.010)
-        self.declare_parameter('spray_path_ratio_min', 1.75)
+        self.declare_parameter('line_spray_merge_gap_bins', 6)
+        self.declare_parameter('line_radial_streak_head_radius_max_m', 0.35)
+        self.declare_parameter('line_radial_streak_span_min_m', 0.04)
+        self.declare_parameter('line_radial_streak_angular_spread_max_deg', 20.0)
+        self.declare_parameter('line_radial_streak_aspect_ratio_min', 3.0)
+        self.declare_parameter('spray_min_run_bins', 3)
+        self.declare_parameter('spray_roughness_thresh_m', 0.03)
+        self.declare_parameter('spray_max_run_bins', 0)
+        self.declare_parameter('spray_head_radius_max_m', 0.30)
+        self.declare_parameter('spray_radial_span_min_m', 0.05)
+        self.declare_parameter('spray_angular_spread_max_deg', 15.0)
+        self.declare_parameter('spray_aspect_ratio_min', 5.0)
+        self.declare_parameter('spray_direction_cluster_gap_deg', 5.0)
+        self.declare_parameter('spray_monotonic_score_min', 0.70)
+        self.declare_parameter('spray_monotonic_tolerance_m', 0.005)
+        self.declare_parameter('spray_short_run_bonus_max_bins', 15)
+        self.declare_parameter('spray_temporal_window_frames', 5)
+        self.declare_parameter('spray_temporal_stable_min_frames', 2)
+        self.declare_parameter('spray_temporal_stable_fraction', 0.50)
 
     def _load_params(self) -> None:
         g = self.get_parameter
@@ -201,12 +214,10 @@ class LineSensorPublisher(Node):
 
         self._obstacle_z = float(g('obstacle_z').value)
         self._small_drop_z = float(g('small_drop_z').value)
-        self._max_range = float(g('max_range').value)
         self._line_obstacle_min_height_m = float(g('line_obstacle_min_height_m').value)
         self._floor_band_m = float(g('floor_band_m').value)
         self._cliff_min_drop_m = float(g('cliff_min_drop_m').value)
         self._cliff_max_drop_m = float(g('cliff_max_drop_m').value)
-        self._line_sensor_radius_m = float(g('line_sensor_radius_m').value)
         self._line_min_run_bins = int(g('line_min_run_bins').value)
         self._line_max_run_radial_span_m = float(g('line_max_run_radial_span_m').value)
         self._line_point_noise_max_run_bins = int(g('line_point_noise_max_run_bins').value)
@@ -217,16 +228,25 @@ class LineSensorPublisher(Node):
         self._line_fast_confirm_range_m = float(g('line_fast_confirm_range_m').value)
         self._line_window_frames = int(g('line_window_frames').value)
         self._line_require_consecutive = bool(g('line_require_consecutive').value)
+        self._line_spray_merge_gap_bins = int(g('line_spray_merge_gap_bins').value)
+        self._line_radial_streak_head_radius_max_m = float(g('line_radial_streak_head_radius_max_m').value)
+        self._line_radial_streak_span_min_m = float(g('line_radial_streak_span_min_m').value)
+        self._line_radial_streak_angular_spread_max_deg = float(g('line_radial_streak_angular_spread_max_deg').value)
+        self._line_radial_streak_aspect_ratio_min = float(g('line_radial_streak_aspect_ratio_min').value)
         self._spray_min_run_bins = int(g('spray_min_run_bins').value)
+        self._spray_roughness_thresh_m = float(g('spray_roughness_thresh_m').value)
         self._spray_max_run_bins = int(g('spray_max_run_bins').value)
-        self._spray_depth_p2p_min_m = float(g('spray_depth_p2p_min_m').value)
-        self._spray_residual_p2p_min_m = float(g('spray_residual_p2p_min_m').value)
-        self._spray_jump_p90_min_m = float(g('spray_jump_p90_min_m').value)
-        self._spray_large_jump_min_count = int(g('spray_large_jump_min_count').value)
-        self._spray_large_jump_m = float(g('spray_large_jump_m').value)
-        self._spray_turn_min_count = int(g('spray_turn_min_count').value)
-        self._spray_turn_jump_m = float(g('spray_turn_jump_m').value)
-        self._spray_path_ratio_min = float(g('spray_path_ratio_min').value)
+        self._spray_head_radius_max_m = float(g('spray_head_radius_max_m').value)
+        self._spray_radial_span_min_m = float(g('spray_radial_span_min_m').value)
+        self._spray_angular_spread_max_deg = float(g('spray_angular_spread_max_deg').value)
+        self._spray_aspect_ratio_min = float(g('spray_aspect_ratio_min').value)
+        self._spray_direction_cluster_gap_deg = float(g('spray_direction_cluster_gap_deg').value)
+        self._spray_monotonic_score_min = float(g('spray_monotonic_score_min').value)
+        self._spray_monotonic_tolerance_m = float(g('spray_monotonic_tolerance_m').value)
+        self._spray_short_run_bonus_max_bins = int(g('spray_short_run_bonus_max_bins').value)
+        self._spray_temporal_window_frames = int(g('spray_temporal_window_frames').value)
+        self._spray_temporal_stable_min_frames = int(g('spray_temporal_stable_min_frames').value)
+        self._spray_temporal_stable_fraction = float(g('spray_temporal_stable_fraction').value)
 
     def _timer_callback(self) -> None:
         self._robot.pull_status()
