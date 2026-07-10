@@ -1,0 +1,51 @@
+hazard_gamepad_teleop:
+  ros__parameters:
+    obstacle_points_topic: /under_base_hazard/obstacle_points
+    cliff_points_topic: /under_base_hazard/cliff_points
+    hazard_timeout_s: 0.5
+    stop_linear_on_stale: true
+    lookahead_m: 0.50
+    cliff_lookahead_m: 0.80
+    footprint_m: 0.35
+    obstacle_buffer_m: 0.02
+    hard_obstacle_buffer_m: 0.01
+    soft_obstacle_buffer_m: 0.10
+    min_clearance_speed_scale: 0.20
+    creep_linear_speed_mps: 0.05
+    cliff_buffer_m: 0.20
+    min_linear_speed_mps: 0.0001
+    blocked_directions_topic: /under_base_hazard/blocked_directions
+    blocked_directions_frame: base_link
+    blocked_directions_publish_rate_hz: 5.0
+    blocked_directions_bins: 72
+    blocked_directions_inner_radius_m: 0.35
+    blocked_directions_outer_radius_m: 0.95
+    blocked_directions_z_m: 0.03
+    blocked_directions_alpha: 0.55
+
+hazard_cmd_vel_filter_node:
+  ros__parameters:
+    cmd_vel_in_topic: cmd_vel_unfiltered
+    cmd_vel_out_topic: cmd_vel
+    obstacle_points_topic: /under_base_hazard/obstacle_points
+    cliff_points_topic: /under_base_hazard/cliff_points
+    hazard_timeout_s: 0.5
+    stop_linear_on_stale: true
+    lookahead_m: 0.50
+    cliff_lookahead_m: 0.80
+    footprint_m: 0.35
+    obstacle_buffer_m: 0.02
+    hard_obstacle_buffer_m: 0.01
+    soft_obstacle_buffer_m: 0.10
+    min_clearance_speed_scale: 0.20
+    creep_linear_speed_mps: 0.05
+    cliff_buffer_m: 0.20
+    min_linear_speed_mps: 0.0001
+    blocked_directions_topic: /under_base_hazard/blocked_directions
+    blocked_directions_frame: base_link
+    blocked_directions_publish_rate_hz: 5.0
+    blocked_directions_bins: 72
+    blocked_directions_inner_radius_m: 0.35
+    blocked_directions_outer_radius_m: 0.95
+    blocked_directions_z_m: 0.03
+    blocked_directions_alpha: 0.55

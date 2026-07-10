@@ -1,0 +1,62 @@
+/**:
+  ros__parameters:
+    # Pipeline preset: region | sor | sor_ransac | self | none | custom
+    filter_type: region
+    # Publish filtered LaserScan output
+    pub_laserscan: true
+    # Debug only: publish filtered merged xyz cloud 
+    pub_pointcloud: true
+    pointcloud_topic: /lidar_pointcloud
+    # PointCloud output keeps floor independently from LaserScan z_min and is cropped near the base for hazard consumers. Use .nan to disable a z bound.
+    pointcloud_z_min: .nan
+    pointcloud_z_max: 1.5
+    pointcloud_range_max: 2.0
+    # Used when filter_type is custom
+    enable_self_robot_filter: true
+    enable_region_filter: true
+    enable_sor_filter: false
+    enable_floor_ransac_filter: false
+    # TF frame for filtered cloud, scan projection, and self-filter markers
+    frame_id: base_footprint
+
+    # Region filter: minimum height (ignored when filter_type is sor_ransac; floor uses plane fit instead)
+    z_min: 0.135
+    # Region filter: maximum height above ground
+    z_max: 1.5
+    # Region filter: maximum horizontal range for LaserScan bins (m)
+    range_max: 30.0
+    # LaserScan angular bin width (deg). 0.1 deg gives 3600 bins; 0.2 deg gives 1800 bins.
+    scan_angle_increment_deg: 0.1
+
+    # Post-projection speckle filter: remove weak isolated LaserScan bins after projection
+    speckle_filter_enabled: true
+    # Reject bins with fewer than this many projected points unless angular neighbors support them
+    speckle_min_points: 2
+    # Check +/- this many LaserScan bins for support
+    speckle_neighbor_window: 3
+    # Keep a weak bin when at least this many neighbors have a similar range
+    speckle_min_neighbors: 2
+    # Maximum range difference (m) for a neighbor to count as support
+    speckle_range_tolerance: 0.15
+
+    # Self-robot filter: cylinder radius around base_footprint to remove base returns (m)
+    base_radius: 0.25
+    # Publish RViz markers for base/arm/wrist filter volumes on /self_filter_markers
+    pub_self_filter_markers: false
+
+    # SOR: square half-width around the robot half-width around robot for near-field denoising (m); far points pass through
+    dist_rob: 2.5
+    # SOR: voxel grid leaf size (m)
+    leaf_size: 0.05
+    # SOR: statistical outlier removal neighbor count
+    sor_mean_k: 50
+    # SOR: statistical outlier removal std-dev multiplier
+    sor_stddev: 0.3
+
+    # FloorRansac: max distance from fitted plane to count as floor (m)
+    plane_fitting_threshold: 0.1
+    # FloorRansac: max tilt from vertical (Z) for plane model (degrees)
+    angle: 10.0
+    # FloorRansac: Z band used only to sample points for plane fitting (not region z_min)
+    floor_detect_z_min: -0.4
+    floor_detect_z_max: 0.1

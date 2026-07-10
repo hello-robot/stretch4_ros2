@@ -1,0 +1,50 @@
+hazard_map_node:
+  ros__parameters:
+    # Topic inputs. lidar_frame empty means use PointCloud2.header.frame_id.
+    base_frame: base_link
+    odom_topic: wheel_odom
+    lidar_topic: /lidar_pointcloud
+    lidar_frame: ''
+    transform_timeout_s: 0.05
+    line_obstacle_topic: /line_sensor/obstacle_points
+    line_small_drop_topic: /line_sensor/small_drop_points
+    line_frame: ''
+    line_topic_timeout_s: 0.5
+    detector_rate_hz: 10.0
+
+    # Rolling hazard grid.
+    map_radius_m: 2.0
+    # The lidar source can already crop the point cloud. Disable this to avoid a second radius crop.
+    lidar_crop_to_map_radius: false
+    resolution_m: 0.05
+    decay_factor: 0.98
+    lidar_weight: 1.0
+    occlusion_weight: 1.0
+    line_weight: 5.0
+    hazard_threshold: 5.0
+
+    # Lidar floor processing. Feed a PointCloud2 that retains near-floor points.
+    base_radius: 0.33
+    voxel_leaf_size: 0.05
+    floor_detect_z_min: -0.15
+    floor_detect_z_max: 0.15
+    floor_fit_threshold_m: 0.015
+    floor_observed_threshold_m: 0.04
+    floor_max_tilt_deg: 10.0
+    floor_ransac_iterations: 200
+    lidar_obstacle_min_height_m: 0.05
+    thresh_cliff_m: 0.04
+    min_cliff_cells: 4
+    min_edge_floor_cells: 2
+    overhead_z_min_m: 0.30
+    base_collision_z_max_m: 0.35
+
+    # Morphology and visualization heights.
+    dilation_cells: 1
+    erosion_cells: 1
+    cliff_z: -0.05
+    obstacle_z: 0.02
+    occlusion_z: 0.15
+    publish_debug: false
+    debug_log_source_counts: false
+    debug_source_counts_period_s: 1.0

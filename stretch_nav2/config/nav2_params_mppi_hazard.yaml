@@ -1,0 +1,56 @@
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      plugins: ["voxel_layer", "hazard_layer", "inflation_layer"]
+      hazard_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: True
+        footprint_clearing_enabled: False
+        observation_sources: hazard_obstacle hazard_cliff
+        hazard_obstacle:
+          topic: /under_base_hazard/obstacle_points
+          data_type: "PointCloud2"
+          marking: True
+          clearing: False
+          min_obstacle_height: -0.20
+          max_obstacle_height: 0.30
+          obstacle_min_range: 0.0
+          obstacle_max_range: 3.0
+        hazard_cliff:
+          topic: /under_base_hazard/cliff_points
+          data_type: "PointCloud2"
+          marking: True
+          clearing: False
+          min_obstacle_height: -0.20
+          max_obstacle_height: 0.30
+          obstacle_min_range: 0.0
+          obstacle_max_range: 3.0
+
+
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      plugins: ["static_layer", "obstacle_layer", "hazard_layer", "inflation_layer"]
+      hazard_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: True
+        footprint_clearing_enabled: False
+        observation_sources: hazard_obstacle hazard_cliff
+        hazard_obstacle:
+          topic: /under_base_hazard/obstacle_points
+          data_type: "PointCloud2"
+          marking: True
+          clearing: False
+          min_obstacle_height: -0.20
+          max_obstacle_height: 0.30
+          obstacle_min_range: 0.0
+          obstacle_max_range: 3.0
+        hazard_cliff:
+          topic: /under_base_hazard/cliff_points
+          data_type: "PointCloud2"
+          marking: True
+          clearing: False
+          min_obstacle_height: -0.20
+          max_obstacle_height: 0.30
+          obstacle_min_range: 0.0
+          obstacle_max_range: 3.0

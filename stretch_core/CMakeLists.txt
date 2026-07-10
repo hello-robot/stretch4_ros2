@@ -43,16 +43,16 @@ include_directories(${PCL_INCLUDE_DIRS} ${EIGEN3_INCLUDE_DIRS})
 link_directories(${PCL_LIBRARY_DIRS})
 add_definitions(${PCL_DEFINITIONS})
 
-set(lidar_filter_lib_sources
+set(lidar_filter_common_sources
   src/robot_self_filter.cpp
   src/sor_filter.cpp
   src/floor_plane_filter.cpp
-  src/dual_lidar_pipeline.cpp
 )
 
 add_executable(dual_lidar_laserscan
   src/dual_lidar_laserscan_node.cpp
-  ${lidar_filter_lib_sources})
+  src/dual_lidar_pipeline.cpp
+  ${lidar_filter_common_sources})
 ament_target_dependencies(dual_lidar_laserscan ${lidar_filter_dependencies} pcl_conversions)
 target_include_directories(dual_lidar_laserscan PUBLIC
   ${EIGEN3_INCLUDE_DIRS}
@@ -60,6 +60,20 @@ target_include_directories(dual_lidar_laserscan PUBLIC
 target_link_libraries(dual_lidar_laserscan ${PCL_LIBRARIES})
 if(OpenMP_CXX_FOUND)
   target_link_libraries(dual_lidar_laserscan OpenMP::OpenMP_CXX)
+endif()
+
+add_executable(dual_lidar_hazard
+  src/dual_lidar_hazard_node.cpp
+  src/dual_lidar_output_pipeline.cpp
+  src/dual_lidar_hazard_pipeline.cpp
+  ${lidar_filter_common_sources})
+ament_target_dependencies(dual_lidar_hazard ${lidar_filter_dependencies} pcl_conversions)
+target_include_directories(dual_lidar_hazard PUBLIC
+  ${EIGEN3_INCLUDE_DIRS}
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
+target_link_libraries(dual_lidar_hazard ${PCL_LIBRARIES})
+if(OpenMP_CXX_FOUND)
+  target_link_libraries(dual_lidar_hazard OpenMP::OpenMP_CXX)
 endif()
 
 add_executable(dual_lidar_pointcloud_merger
@@ -88,6 +102,7 @@ target_include_directories(robot_footprint_publisher PUBLIC
 
 install(TARGETS
   dual_lidar_laserscan
+  dual_lidar_hazard
   dual_lidar_pointcloud_merger
   robot_footprint_publisher
   DESTINATION lib/${PROJECT_NAME}
