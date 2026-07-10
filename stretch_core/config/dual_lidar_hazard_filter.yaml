@@ -58,5 +58,5 @@
     # FloorRansac: max tilt from vertical (Z) for plane model (degrees)
     angle: 10.0
     # FloorRansac: Z band used only to sample points for plane fitting (not region z_min)
-    floor_detect_z_min: -0.4
-    floor_detect_z_max: 0.1
+    floor_detect_z_min: -0.05
+    floor_detect_z_max: 0.05

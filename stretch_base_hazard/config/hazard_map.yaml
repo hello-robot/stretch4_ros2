@@ -24,10 +24,10 @@ hazard_map_node:
     hazard_threshold: 5.0
 
     # Lidar floor processing. Feed a PointCloud2 that retains near-floor points.
-    base_radius: 0.33
+    base_radius: 0.3
     voxel_leaf_size: 0.05
-    floor_detect_z_min: -0.15
-    floor_detect_z_max: 0.15
+    floor_detect_z_min: -0.05
+    floor_detect_z_max: 0.05
     floor_fit_threshold_m: 0.015
     floor_observed_threshold_m: 0.04
     floor_max_tilt_deg: 10.0

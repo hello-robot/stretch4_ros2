@@ -6,7 +6,7 @@ hazard_gamepad_teleop:
     stop_linear_on_stale: true
     lookahead_m: 0.50
     cliff_lookahead_m: 0.80
-    footprint_m: 0.35
+    footprint_m: 0.25
     obstacle_buffer_m: 0.02
     hard_obstacle_buffer_m: 0.01
     soft_obstacle_buffer_m: 0.10
@@ -33,7 +33,7 @@ hazard_cmd_vel_filter_node:
     stop_linear_on_stale: true
     lookahead_m: 0.50
     cliff_lookahead_m: 0.80
-    footprint_m: 0.35
+    footprint_m: 0.25
     obstacle_buffer_m: 0.02
     hard_obstacle_buffer_m: 0.01
     soft_obstacle_buffer_m: 0.10

@@ -21,6 +21,7 @@ def generate_launch_description():
         PythonLaunchDescriptionSource(
             PathJoinSubstitution([pkg_core, 'launch', 'line_sensor.launch.py'])
         ),
+        launch_arguments={'publish_debug': 'true'}.items(),
     )
 
     lidar_launch = IncludeLaunchDescription(
@@ -69,11 +70,18 @@ def generate_launch_description():
         stretch_driver_launch,
         line_sensor_launch,
         lidar_launch,
+        DeclareLaunchArgument('hazard_publish_debug', default_value='true', choices=['true', 'false']),
         Node(
             package='stretch_base_hazard',
             executable='hazard_map_node',
             name='hazard_map_node',
             output='screen',
+            additional_env={
+                'OPENBLAS_NUM_THREADS': '1',
+                'OMP_NUM_THREADS': '1',
+                'MKL_NUM_THREADS': '1',
+                'NUMEXPR_NUM_THREADS': '1',
+            },
             parameters=[
                 LaunchConfiguration('config_file'),
                 {
@@ -91,6 +99,10 @@ def generate_launch_description():
                     'detector_rate_hz': ParameterValue(
                         LaunchConfiguration('detector_rate_hz'),
                         value_type=float,
+                    ),
+                    'publish_debug': ParameterValue(
+                        LaunchConfiguration('hazard_publish_debug'),
+                        value_type=bool,
                     ),
                 },
             ],
