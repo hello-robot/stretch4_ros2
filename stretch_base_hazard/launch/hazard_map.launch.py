@@ -38,6 +38,12 @@ def generate_launch_description():
             executable='hazard_map_node',
             name='hazard_map_node',
             output='screen',
+            additional_env={
+                'OPENBLAS_NUM_THREADS': '1',
+                'OMP_NUM_THREADS': '1',
+                'MKL_NUM_THREADS': '1',
+                'NUMEXPR_NUM_THREADS': '1',
+            },
             parameters=[
                 LaunchConfiguration('config_file'),
                 {

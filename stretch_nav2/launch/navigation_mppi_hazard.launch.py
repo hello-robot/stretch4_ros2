@@ -30,6 +30,7 @@ def generate_launch_description():
             'pointcloud_z_min': 'none',
             'pointcloud_range_max': LaunchConfiguration('pointcloud_range_max'),
             'use_rviz': 'true',
+            # 'frame_id': LaunchConfiguration('lidar_output_frame'),
             'tool_preset': LaunchConfiguration('tool_preset'),
             'scan_angle_increment_deg': LaunchConfiguration('scan_angle_increment_deg'),
         }.items(),
@@ -123,6 +124,11 @@ def generate_launch_description():
             default_value='false',
             choices=['true', 'false'],
             description='Publish /under_base_hazard/debug/* point clouds and source counts.',
+        ),
+        DeclareLaunchArgument(
+            'lidar_output_frame',
+            default_value='base_link',
+            description='Frame used by dual_hesai_hazard for /scan_filtered and /lidar_pointcloud.',
         ),
         DeclareLaunchArgument(
             'pointcloud_range_max',
