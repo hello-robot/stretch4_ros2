@@ -337,6 +337,7 @@ class MobileBaseCommandGroup(BaseCommandGroup):
         self.active_joints: List[str] = []
         self.indices: Dict[str, int] = {}
         self.goals: Dict[str, Dict[str, Any]] = {}
+        self.did_start_moving = False # TODO: remove, move to Stretch Body
 
     @override
     def get_num_active_joints(self) -> int:
@@ -414,6 +415,7 @@ class MobileBaseCommandGroup(BaseCommandGroup):
     @override
     @check_active()
     def queue_execution(self, robot: StretchDriver, **kwargs: Any) -> None:
+        self.did_start_moving = False # TODO: remove, move to Stretch Body
         has_translation = 'translate_mobile_base' in self.active_joints or 'translate_mobile_base_y' in self.active_joints
         has_rotation = 'rotate_mobile_base' in self.active_joints
 
@@ -504,6 +506,13 @@ class MobileBaseCommandGroup(BaseCommandGroup):
             robot_status['omnibase']['wheel_2']['is_mg_moving']
         ]
         is_moving = any(moving_wheels)
+        
+        if is_moving:
+            self.did_start_moving = True
+            
+        if not is_moving and not self.did_start_moving:
+            return False
+            
         return not is_moving
 
     @override
