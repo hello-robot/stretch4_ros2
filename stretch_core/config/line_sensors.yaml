@@ -1,0 +1,64 @@
+line_sensor_publisher:
+  ros__parameters:
+    # Output frame and timing.
+    base_frame: base_link
+    publish_rate_hz: 30.0
+    stale_timeout_s: 0.5
+    use_tare: true
+    publish_debug: false
+
+    # Published topics.
+    points_topic: /line_sensor/points
+    obstacle_topic: /line_sensor/obstacle_points
+    small_drop_topic: /line_sensor/small_drop_points
+    counts_topic: /line_sensor/debug/source_counts
+    raw_obstacle_topic: /line_sensor/debug/raw_obstacle_points
+    spatial_obstacle_topic: /line_sensor/debug/spatial_obstacle_points
+    raw_small_drop_topic: /line_sensor/debug/raw_small_drop_points
+    spatial_small_drop_topic: /line_sensor/debug/spatial_small_drop_points
+    spray_topic: /line_sensor/debug/spray_points
+
+    # Visualization heights for filtered hazard outputs.
+    obstacle_z: 0.02
+    small_drop_z: -0.05
+
+    # Height classification before spatial/temporal filtering.
+    line_obstacle_min_height_m: 0.025
+    floor_band_m: 0.015
+    cliff_min_drop_m: 0.015
+    cliff_max_drop_m: 0.10
+
+    # Spatial filtering for line-shaped artifacts/noise.
+    line_min_run_bins: 3
+    line_max_run_radial_span_m: 0.25
+    line_point_noise_max_run_bins: 12
+    line_point_noise_xy_span_max_m: 0.010
+    line_point_noise_radial_span_max_m: 0.010
+    line_spray_merge_gap_bins: 6
+    line_radial_streak_head_radius_max_m: 0.35
+    line_radial_streak_span_min_m: 0.04
+    line_radial_streak_angular_spread_max_deg: 20.0
+    line_radial_streak_aspect_ratio_min: 3.0
+
+    # Temporal confirmation.
+    line_confirm_frames: 3
+    line_fast_confirm_frames: 2
+    line_fast_confirm_range_m: 0.55
+    line_window_frames: 4
+    line_require_consecutive: true
+
+    # Spray filtering ported from stretch4_direct_hazard.
+    spray_min_run_bins: 3
+    spray_roughness_thresh_m: 0.03
+    spray_max_run_bins: 0
+    spray_head_radius_max_m: 0.30
+    spray_radial_span_min_m: 0.05
+    spray_angular_spread_max_deg: 15.0
+    spray_aspect_ratio_min: 5.0
+    spray_direction_cluster_gap_deg: 5.0
+    spray_monotonic_score_min: 0.70
+    spray_monotonic_tolerance_m: 0.005
+    spray_short_run_bonus_max_bins: 15
+    spray_temporal_window_frames: 5
+    spray_temporal_stable_min_frames: 2
+    spray_temporal_stable_fraction: 0.50
