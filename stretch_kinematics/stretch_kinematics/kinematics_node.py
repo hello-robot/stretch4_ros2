@@ -4,9 +4,10 @@ import time
 import numpy as np
 import pinocchio as pin
 import rclpy
+from rclpy.node import Node
+
 from rclpy.callback_groups import ReentrantCallbackGroup
 from geometry_msgs.msg import PoseStamped
-from hello_helpers.hello_misc import HelloNode
 from moveit_msgs.srv import GetPositionFK, GetPositionIK
 from sensor_msgs.msg import JointState
 
@@ -14,7 +15,7 @@ from stretch4_kinematics.kinematic_models.base_kinematic_models import StretchKi
 from stretch4_kinematics.state.joint_positions import StretchJointPositions
 
 
-class KinematicsNode(HelloNode):
+class KinematicsNode(Node):
     """
     ROS 2 node for providing kinematics services for the Stretch 4 robot.
 
@@ -27,11 +28,8 @@ class KinematicsNode(HelloNode):
         """
         Initialize the KinematicsNode and its services.
         """
-        super().__init__()
-        # Note: self.main initializes the HelloNode basics (subscribers, etc.)
-        self.main("stretch_kinematics_node")
-
-        self.solver = StretchKinematics()
+        super().__init__("stretch_kinematics_node")
+        self.solver = StretchKinematics()  # TODO: make this configurable for different IK modes
         self.default_target_frame = "tool_attachment_site_link"
 
         # Use a ReentrantCallbackGroup for all services to allow them to call
@@ -51,14 +49,6 @@ class KinematicsNode(HelloNode):
             GetPositionFK,
             "compute_fk",
             self.callback_compute_fk,
-            callback_group=self.cb_group,
-        )
-
-        # Sequential Move Service (using IK message type as requested)
-        self.seq_move_srv = self.create_service(
-            GetPositionIK,
-            "sequential_move_to_pose",
-            self.callback_sequential_move,
             callback_group=self.cb_group,
         )
 
@@ -95,7 +85,7 @@ class KinematicsNode(HelloNode):
         target_se3 = pin.SE3(quat.matrix(), translation)
 
         # Use current joint state as guess if not provided
-        q_guess = self._ros_joint_state_to_stretch_pos(self.joint_state)
+        q_guess = StretchJointPositions()  # Default guess
 
         try:
             solution = self.solver.inverse_6dof_local(
@@ -136,7 +126,7 @@ class KinematicsNode(HelloNode):
         joint_state = request.robot_state.joint_state
 
         if not joint_state.name:
-            stretch_pos = self._ros_joint_state_to_stretch_pos(self.joint_state)
+            stretch_pos = StretchJointPositions()  # Default positions if none provided
         else:
             stretch_pos = self._ros_joint_state_to_stretch_pos(joint_state)
 
@@ -168,123 +158,6 @@ class KinematicsNode(HelloNode):
         else:
             response.error_code.val = response.error_code.FAILURE
 
-        return response
-
-    def callback_sequential_move(
-        self,
-        request: GetPositionIK.Request,
-        response: GetPositionIK.Response,
-    ) -> GetPositionIK.Response:
-        """
-        Perform safe sequential motion toward a target pose.
-
-        Moves Base -> Lift -> Arm -> Wrist for extension, or the reverse for stowing.
-
-        Args:
-            request: The service request containing the target pose.
-            response: The service response to be populated.
-
-        Returns:
-            The populated service response indicating success or failure.
-        """
-        # First compute IK to get the target joint positions
-        ik_resp = self.callback_compute_ik(request, GetPositionIK.Response())
-
-        if ik_resp.error_code.val != ik_resp.error_code.SUCCESS:
-            response.error_code.val = ik_resp.error_code.val
-            return response
-
-        target_joint_state = ik_resp.solution.joint_state
-        target_dict = dict(zip(target_joint_state.name, target_joint_state.position))
-
-        # modify base solution:
-        # 1) remove any zero values for base translation/rotation
-        # 2) check for simultaneous base translation and rotation, which is not allowed in sequential move
-        
-        # Remove near-zero base translation/rotation values
-        for key in ["translate_mobile_base", "rotate_mobile_base"]:
-            if key in target_dict and abs(target_dict[key]) < 1e-6:
-                del target_dict[key]
-
-        # Check for simultaneous base translation and rotation
-        if (
-            "translate_mobile_base" in target_dict
-            and "rotate_mobile_base" in target_dict
-        ):
-            self.get_logger().error(
-                "Simultaneous base translation and rotation is not allowed in sequential move."
-            )
-            response.error_code.val = response.error_code.INVALID_MOTION_PLAN
-            return response
-
-        # Determine if we are extending or stowing (heuristic: check arm extension)
-        current_stretch_pos = self._ros_joint_state_to_stretch_pos(self.joint_state)
-        target_stretch_pos = self._ros_joint_state_to_stretch_pos(target_joint_state)
-
-        # Let's check if the target arm is less than current arm -> likely stowing.
-        is_stowing = target_stretch_pos.arm < current_stretch_pos.arm
-
-        self.get_logger().info("Switching to position mode...")
-        self.switch_to_position_mode()
-
-        if not is_stowing:
-            self.get_logger().info(
-                "Executing Sequential Extension: Base -> Lift -> Arm -> Wrist"
-            )
-            # Base motion
-            base_goal = {}
-            if "translate_mobile_base" in target_dict:
-                base_goal["translate_mobile_base"] = target_dict["translate_mobile_base"]
-            if "rotate_mobile_base" in target_dict:
-                base_goal["rotate_mobile_base"] = target_dict["rotate_mobile_base"]
-            if base_goal:
-                self.move_to_pose(base_goal)
-
-            # Lift
-            if "lift_joint" in target_dict:
-                self.move_to_pose({"lift_joint": target_dict["lift_joint"]})
-
-            # Arm
-            if "arm_joint" in target_dict:
-                self.move_to_pose({"arm_joint": target_dict["arm_joint"]})
-
-            # Wrist
-            wrist_goal = {}
-            for joint in ["wrist_yaw_joint", "wrist_pitch_joint", "wrist_roll_joint"]:
-                if joint in target_dict:
-                    wrist_goal[joint] = target_dict[joint]
-            if wrist_goal:
-                self.move_to_pose(wrist_goal)
-        else:
-            self.get_logger().info(
-                "Executing Sequential Stow: Wrist -> Arm -> Lift -> Base"
-            )
-            # Wrist
-            wrist_goal = {}
-            for joint in ["wrist_yaw_joint", "wrist_pitch_joint", "wrist_roll_joint"]:
-                if joint in target_dict:
-                    wrist_goal[joint] = target_dict[joint]
-            if wrist_goal:
-                self.move_to_pose(wrist_goal)
-
-            # Arm
-            if "arm_joint" in target_dict:
-                self.move_to_pose({"arm_joint": target_dict["arm_joint"]})
-
-            # Lift
-            if "lift_joint" in target_dict:
-                self.move_to_pose({"lift_joint": target_dict["lift_joint"]})
-
-            # Base
-            base_goal = {}
-            if "translate_mobile_base" in target_dict:
-                base_goal["translate_mobile_base"] = target_dict["translate_mobile_base"]
-            if "rotate_mobile_base" in target_dict:
-                base_goal["rotate_mobile_base"] = target_dict["rotate_mobile_base"]
-            if base_goal:
-                self.move_to_pose(base_goal)
-
-        response.error_code.val = response.error_code.SUCCESS
         return response
 
     def _ros_joint_state_to_stretch_pos(
@@ -371,12 +244,12 @@ def main() -> None:
     """
     Main entry point for the kinematics node.
     """
+    rclpy.init()
     node = KinematicsNode()
     # HelloNode.main handles spinning in a thread, so we just wait for shutdown.
     # Avoid calling rclpy.spin_once(node) here as HelloNode already has an executor.
     try:
-        while rclpy.ok():
-            time.sleep(1.0)
+        rclpy.spin(node)
     except KeyboardInterrupt:
         pass
     finally:
