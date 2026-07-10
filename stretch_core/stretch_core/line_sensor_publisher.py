@@ -26,6 +26,10 @@ from stretch_core.line_sensor_filter import (
 )
 
 
+STALE_RECONNECT_AFTER_S = 5.0
+STALE_RECONNECT_PERIOD_S = 5.0
+
+
 def numpy_to_pointcloud2(points: np.ndarray, header: Header) -> PointCloud2:
     points = np.atleast_2d(np.asarray(points, dtype=np.float32))
     if points.size == 0:
@@ -63,21 +67,61 @@ class LineSensorPublisher(Node):
         self._declare_params()
         self._load_params()
 
-        self._robot = RobotClient(client_id='ros2_line_sensor_publisher')
-        if not self._robot.startup():
+        self._robot = None
+        self._line_source = None
+        self._calibration = None
+        self._last_stale_warn_time = 0.0
+        self._stale_since_time = None
+        self._last_reconnect_attempt_time = 0.0
+        self._connect_robot_or_raise()
+
+        self._points_pub = self.create_publisher(PointCloud2, self._points_topic, qos_profile_sensor_data)
+        self._obstacle_pub = self.create_publisher(PointCloud2, self._obstacle_topic, qos_profile_sensor_data)
+        self._small_drop_pub = self.create_publisher(PointCloud2, self._small_drop_topic, qos_profile_sensor_data)
+        self._counts_pub = self.create_publisher(String, self._counts_topic, 10)
+
+        self._debug_pubs = {}
+        if self._publish_debug:
+            self._debug_pubs = {
+                'raw_obstacle': self.create_publisher(PointCloud2, self._raw_obstacle_topic, qos_profile_sensor_data),
+                'spatial_obstacle': self.create_publisher(PointCloud2, self._spatial_obstacle_topic, qos_profile_sensor_data),
+                'raw_small_drop': self.create_publisher(PointCloud2, self._raw_small_drop_topic, qos_profile_sensor_data),
+                'spatial_small_drop': self.create_publisher(PointCloud2, self._spatial_small_drop_topic, qos_profile_sensor_data),
+                'spray': self.create_publisher(PointCloud2, self._spray_topic, qos_profile_sensor_data),
+            }
+
+        self.create_timer(1.0 / max(self._publish_rate_hz, 0.1), self._timer_callback)
+        self.get_logger().info(
+            'line_sensor_publisher started '
+            f'points={self._points_topic} obstacle={self._obstacle_topic} small_drop={self._small_drop_topic}',
+        )
+
+    def _connect_robot_or_raise(self) -> None:
+        robot = RobotClient(client_id='ros2_line_sensor_publisher')
+        if not robot.startup():
             raise RuntimeError('RobotClient startup failed')
-        if not hasattr(self._robot, 'line_sensor_loop'):
-            self._robot.stop()
+        if not hasattr(robot, 'line_sensor_loop'):
+            robot.stop()
             raise RuntimeError('line_sensor_loop not available on robot_server')
 
-        line_loop = self._robot.line_sensor_loop
+        if self._line_source is None:
+            self._initialize_line_source(robot.line_sensor_loop)
+        old_robot = self._robot
+        self._robot = robot
+        if old_robot is not None:
+            try:
+                old_robot.stop()
+            except Exception as exc:  # pragma: no cover - defensive cleanup path
+                self.get_logger().warn(f'failed to stop previous RobotClient after reconnect: {exc}')
+
+    def _initialize_line_source(self, line_loop) -> None:
         sensor_names = list(line_loop.params['sensor_names'])
         geometry = LineSensorGeometry(line_loop.params.get('line_sensor_geometry', {}))
 
-        calibration = None
+        self._calibration = None
         if self._use_tare:
-            calibration = LineSensorCalibration(line_loop)
-            calibration.load_latest_tare()
+            self._calibration = LineSensorCalibration(line_loop)
+            self._calibration.load_latest_tare()
 
         self._line_source = LineSensorSource(
             geometry=geometry,
@@ -117,29 +161,29 @@ class LineSensorPublisher(Node):
                 spray_temporal_stable_min_frames=self._spray_temporal_stable_min_frames,
                 spray_temporal_stable_fraction=self._spray_temporal_stable_fraction,
             ),
-            apply_tare=None if calibration is None else calibration.apply_tare,
+            apply_tare=None if self._calibration is None else self._calibration.apply_tare,
         )
 
-        self._points_pub = self.create_publisher(PointCloud2, self._points_topic, qos_profile_sensor_data)
-        self._obstacle_pub = self.create_publisher(PointCloud2, self._obstacle_topic, qos_profile_sensor_data)
-        self._small_drop_pub = self.create_publisher(PointCloud2, self._small_drop_topic, qos_profile_sensor_data)
-        self._counts_pub = self.create_publisher(String, self._counts_topic, 10)
+    def _maybe_reconnect_stale_robot(self) -> bool:
+        now = time.time()
+        if self._stale_since_time is None:
+            self._stale_since_time = now
+            return False
+        if now - self._stale_since_time < STALE_RECONNECT_AFTER_S:
+            return False
+        if now - self._last_reconnect_attempt_time < STALE_RECONNECT_PERIOD_S:
+            return False
 
-        self._debug_pubs = {}
-        if self._publish_debug:
-            self._debug_pubs = {
-                'raw_obstacle': self.create_publisher(PointCloud2, self._raw_obstacle_topic, qos_profile_sensor_data),
-                'spatial_obstacle': self.create_publisher(PointCloud2, self._spatial_obstacle_topic, qos_profile_sensor_data),
-                'raw_small_drop': self.create_publisher(PointCloud2, self._raw_small_drop_topic, qos_profile_sensor_data),
-                'spatial_small_drop': self.create_publisher(PointCloud2, self._spatial_small_drop_topic, qos_profile_sensor_data),
-                'spray': self.create_publisher(PointCloud2, self._spray_topic, qos_profile_sensor_data),
-            }
-
-        self.create_timer(1.0 / max(self._publish_rate_hz, 0.1), self._timer_callback)
-        self.get_logger().info(
-            'line_sensor_publisher started '
-            f'points={self._points_topic} obstacle={self._obstacle_topic} small_drop={self._small_drop_topic}',
-        )
+        self._last_reconnect_attempt_time = now
+        self.get_logger().warn('line_sensor status stayed stale; reconnecting RobotClient')
+        try:
+            self._connect_robot_or_raise()
+        except Exception as exc:
+            self.get_logger().warn(f'RobotClient reconnect failed: {exc}')
+            return False
+        self.get_logger().info('RobotClient reconnected for line_sensor_publisher')
+        self._stale_since_time = None
+        return True
 
     def _declare_params(self) -> None:
         self.declare_parameter('base_frame', 'base_link')
@@ -255,9 +299,18 @@ class LineSensorPublisher(Node):
         stale = self._stale_timeout_s > 0.0 and line_age_s > self._stale_timeout_s
 
         if stale:
+            self._warn_stale_status(line_age_s)
+            if self._maybe_reconnect_stale_robot():
+                self._robot.pull_status()
+                status = self._robot.line_sensor_loop.status
+                line_age_s = self._line_status_age_s(status)
+                stale = self._stale_timeout_s > 0.0 and line_age_s > self._stale_timeout_s
+
+        if stale:
             raw_points = np.zeros((0, 3))
             hits = LineSensorHits()
         else:
+            self._stale_since_time = None
             raw_points = self._line_source.project_all(status)
             hits = self._line_source.process(status)
 
@@ -284,6 +337,17 @@ class LineSensorPublisher(Node):
             )
 
         self._publish_counts(status, hits, raw_points, line_age_s, stale)
+
+    def _warn_stale_status(self, line_age_s: float) -> None:
+        now = time.time()
+        if now - self._last_stale_warn_time < 5.0:
+            return
+        self._last_stale_warn_time = now
+        age_text = "unknown" if not np.isfinite(line_age_s) else f"{line_age_s:.2f}s"
+        self.get_logger().warn(
+            "line_sensor status is stale; publishing empty line sensor point clouds "
+            f"(age={age_text}, stale_timeout_s={self._stale_timeout_s:.2f})",
+        )
 
     @staticmethod
     def _line_status_age_s(status: dict) -> float:
@@ -325,7 +389,7 @@ class LineSensorPublisher(Node):
         self._counts_pub.publish(msg)
 
     def destroy_node(self) -> bool:
-        if hasattr(self, '_robot'):
+        if getattr(self, '_robot', None) is not None:
             self._robot.stop()
         return super().destroy_node()
 
@@ -339,7 +403,8 @@ def main(args=None):
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':
