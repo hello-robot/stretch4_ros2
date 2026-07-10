@@ -326,7 +326,6 @@ class LiftCommandGroup(BaseCommandGroup):
         return (lift_status['pos'], lift_status['vel'], lift_status['motor']['effort_pct'])
 
 
-# TODO: currently only supports x translation, rest is remaining
 class MobileBaseCommandGroup(BaseCommandGroup):
 
     @override
@@ -370,6 +369,7 @@ class MobileBaseCommandGroup(BaseCommandGroup):
             return False
 
         self.active = True
+
         # For compatibility with any legacy code that expects self.index to be set to something:
         if 'translate_mobile_base' in self.active_joints:
             self.index = self.indices['translate_mobile_base']
@@ -388,20 +388,20 @@ class MobileBaseCommandGroup(BaseCommandGroup):
                  **kwargs: Any) -> bool:
         self.goals = {}
         for joint in self.active_joints:
-            index = self.indices[joint]
-            goal_pos = point.positions[index] if len(point.positions) > index else None
+            joint_index = self.indices[joint]
+            goal_pos = point.positions[joint_index] if len(point.positions) > joint_index else None
             if goal_pos is None:
                 err_str = (f"Received goal point with positions array length={len(point.positions)}. "
-                           f"This joint ({joint})'s index is {index}. Length of array must cover all joints "
+                           f"This joint ({joint})'s index is {joint_index}. Length of array must cover all joints "
                            f"listed in commanded_joint_names.")
                 invalid_goal_callback(err_str)
                 return False
 
             self.goals[joint] = {
                 "position": goal_pos,
-                "velocity": point.velocities[index] if len(point.velocities) > index else None,
-                "acceleration": point.accelerations[index] if len(point.accelerations) > index else None,
-                "contact_threshold": abs(point.effort[index]) if len(point.effort) > index else None
+                "velocity": point.velocities[joint_index] if len(point.velocities) > joint_index else None,
+                "acceleration": point.accelerations[joint_index] if len(point.accelerations) > joint_index else None,
+                "contact_threshold": abs(point.effort[joint_index]) if len(point.effort) > joint_index else None
             }
 
         # Maintain self.goal for any backwards compatibility/mocking
