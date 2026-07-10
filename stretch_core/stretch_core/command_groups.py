@@ -333,26 +333,160 @@ class MobileBaseCommandGroup(BaseCommandGroup):
     def __init__(self) -> None:
         super().__init__('translate_mobile_base')
         self.initx: Optional[float] = None
+        self.inity: Optional[float] = None
+        self.inittheta: Optional[float] = None
+        self.active_joints: List[str] = []
+        self.indices: Dict[str, int] = {}
+        self.goals: Dict[str, Dict[str, Any]] = {}
+
+    @override
+    def get_num_active_joints(self) -> int:
+        return len(self.active_joints) if self.active else 0
+
+    @override
+    def activate(self,
+                 commanded_joint_names: List[str],
+                 invalid_joints_callback: Any,
+                 **kwargs: Any) -> bool:
+        self.active = False
+        self.active_joints = []
+        self.indices = {}
+
+        # Check which of our joints are present
+        for joint in ['translate_mobile_base', 'translate_mobile_base_y', 'rotate_mobile_base']:
+            if joint in commanded_joint_names:
+                self.active_joints.append(joint)
+                self.indices[joint] = commanded_joint_names.index(joint)
+
+        if not self.active_joints:
+            return True
+
+        # Check if there is a conflict (both translation and rotation)
+        has_translation = 'translate_mobile_base' in self.active_joints or 'translate_mobile_base_y' in self.active_joints
+        has_rotation = 'rotate_mobile_base' in self.active_joints
+
+        if has_translation and has_rotation:
+            invalid_joints_callback("Cannot command both translation and rotation for the mobile base in the same trajectory.")
+            return False
+
+        self.active = True
+        # For compatibility with any legacy code that expects self.index to be set to something:
+        if 'translate_mobile_base' in self.active_joints:
+            self.index = self.indices['translate_mobile_base']
+        elif 'translate_mobile_base_y' in self.active_joints:
+            self.index = self.indices['translate_mobile_base_y']
+        elif 'rotate_mobile_base' in self.active_joints:
+            self.index = self.indices['rotate_mobile_base']
+
+        return True
+
+    @override
+    @check_active(return_value=True)
+    def set_goal(self,
+                 point: JointTrajectoryPoint,
+                 invalid_goal_callback: Any,
+                 **kwargs: Any) -> bool:
+        self.goals = {}
+        for joint in self.active_joints:
+            index = self.indices[joint]
+            goal_pos = point.positions[index] if len(point.positions) > index else None
+            if goal_pos is None:
+                err_str = (f"Received goal point with positions array length={len(point.positions)}. "
+                           f"This joint ({joint})'s index is {index}. Length of array must cover all joints "
+                           f"listed in commanded_joint_names.")
+                invalid_goal_callback(err_str)
+                return False
+
+            self.goals[joint] = {
+                "position": goal_pos,
+                "velocity": point.velocities[index] if len(point.velocities) > index else None,
+                "acceleration": point.accelerations[index] if len(point.accelerations) > index else None,
+                "contact_threshold": abs(point.effort[index]) if len(point.effort) > index else None
+            }
+
+        # Maintain self.goal for any backwards compatibility/mocking
+        if self.active_joints:
+            first_joint = self.active_joints[0]
+            self.goal = self.goals[first_joint]
+
+        return True
 
     @override
     @check_active()
     def queue_execution(self, robot: StretchDriver, **kwargs: Any) -> None:
-        robot.omnibase.translate_by(
-            self.goal['position'],
-            0.0,
-            v_m=self.goal['velocity'],
-            a_m=self.goal['acceleration']
-        )
-        # Store initial x for relative motion tracking
-        self.initx = robot.omnibase.status['x']
+        has_translation = 'translate_mobile_base' in self.active_joints or 'translate_mobile_base_y' in self.active_joints
+        has_rotation = 'rotate_mobile_base' in self.active_joints
+
+        if has_translation:
+            x_m = self.goals['translate_mobile_base']['position'] if 'translate_mobile_base' in self.active_joints else 0.0
+            y_m = self.goals['translate_mobile_base_y']['position'] if 'translate_mobile_base_y' in self.active_joints else 0.0
+
+            # Extract velocity and acceleration (if any)
+            v_m = None
+            a_m = None
+            if 'translate_mobile_base' in self.active_joints:
+                v_m = self.goals['translate_mobile_base']['velocity']
+                a_m = self.goals['translate_mobile_base']['acceleration']
+            elif 'translate_mobile_base_y' in self.active_joints:
+                v_m = self.goals['translate_mobile_base_y']['velocity']
+                a_m = self.goals['translate_mobile_base_y']['acceleration']
+
+            robot.omnibase.translate_by(x_m, y_m, v_m=v_m, a_m=a_m)
+
+            # Store initial states for relative tracking
+            self.initx = robot.omnibase.status['x']
+            self.inity = robot.omnibase.status['y']
+            self.inittheta = None
+
+        elif has_rotation:
+            w_r = self.goals['rotate_mobile_base']['position']
+            v_r = self.goals['rotate_mobile_base']['velocity']
+            a_r = self.goals['rotate_mobile_base']['acceleration']
+
+            robot.omnibase.rotate_by(w_r, v_r=v_r, a_r=a_r)
+
+            # Store initial states for relative tracking
+            self.initx = None
+            self.inity = None
+            self.inittheta = robot.omnibase.status['theta']
 
     @override
     @check_active()
-    def monitor_execution(self, robot_status: Dict[str, Any], **kwargs: Any) -> Tuple[str, float]:
-        desired = self.goal['position']
-        actual = robot_status['omnibase']['x'] - self.initx
-        self.error: float = desired - actual
-        return self.name, desired, actual, self.error
+    def monitor_execution(self, robot_status: Dict[str, Any], **kwargs: Any) -> List[Tuple[str, float, float, float]]:
+        self.errors = {}
+        progress_list = []
+
+        has_translation = 'translate_mobile_base' in self.active_joints or 'translate_mobile_base_y' in self.active_joints
+        has_rotation = 'rotate_mobile_base' in self.active_joints
+
+        if has_translation:
+            if 'translate_mobile_base' in self.active_joints:
+                desired_x = self.goals['translate_mobile_base']['position']
+                actual_x = robot_status['omnibase']['x'] - self.initx
+                error_x = desired_x - actual_x
+                self.errors['translate_mobile_base'] = error_x
+                progress_list.append(('translate_mobile_base', desired_x, actual_x, error_x))
+
+            if 'translate_mobile_base_y' in self.active_joints:
+                desired_y = self.goals['translate_mobile_base_y']['position']
+                actual_y = robot_status['omnibase']['y'] - self.inity
+                error_y = desired_y - actual_y
+                self.errors['translate_mobile_base_y'] = error_y
+                progress_list.append(('translate_mobile_base_y', desired_y, actual_y, error_y))
+
+        elif has_rotation:
+            if 'rotate_mobile_base' in self.active_joints:
+                desired_theta = self.goals['rotate_mobile_base']['position']
+                actual_theta = robot_status['omnibase']['theta'] - self.inittheta
+                error_theta = desired_theta - actual_theta
+                self.errors['rotate_mobile_base'] = error_theta
+                progress_list.append(('rotate_mobile_base', desired_theta, actual_theta, error_theta))
+
+        # Set self.error for compatibility with any base/monitoring code
+        if self.errors:
+            self.error = list(self.errors.values())[0]
+
+        return progress_list
 
     @override
     @check_active()

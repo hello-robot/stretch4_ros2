@@ -160,11 +160,15 @@ class JointTrajectoryAction:
         feedback = FollowJointTrajectory.Feedback()
         commanded_joint_names = goal.trajectory.joint_names
 
-        progress_dict = {
-            joint: (desired, actual, error)
-            for item in progress if item
-            for joint, desired, actual, error in [item]
-        }
+        progress_dict = {}
+        for item in progress:
+            if item:
+                if isinstance(item, list):
+                    for joint, desired, actual, error in item:
+                        progress_dict[joint] = (desired, actual, error)
+                else:
+                    joint, desired, actual, error = item
+                    progress_dict[joint] = (desired, actual, error)
         desired_point = JointTrajectoryPoint()
         actual_point = JointTrajectoryPoint()
         error_point = JointTrajectoryPoint()
