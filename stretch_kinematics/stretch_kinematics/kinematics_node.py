@@ -197,6 +197,26 @@ class KinematicsNode(HelloNode):
         target_joint_state = ik_resp.solution.joint_state
         target_dict = dict(zip(target_joint_state.name, target_joint_state.position))
 
+        # modify base solution:
+        # 1) remove any zero values for base translation/rotation
+        # 2) check for simultaneous base translation and rotation, which is not allowed in sequential move
+        
+        # Remove near-zero base translation/rotation values
+        for key in ["translate_mobile_base", "rotate_mobile_base"]:
+            if key in target_dict and abs(target_dict[key]) < 1e-6:
+                del target_dict[key]
+
+        # Check for simultaneous base translation and rotation
+        if (
+            "translate_mobile_base" in target_dict
+            and "rotate_mobile_base" in target_dict
+        ):
+            self.get_logger().error(
+                "Simultaneous base translation and rotation is not allowed in sequential move."
+            )
+            response.error_code.val = response.error_code.INVALID_MOTION_PLAN
+            return response
+
         # Determine if we are extending or stowing (heuristic: check arm extension)
         current_stretch_pos = self._ros_joint_state_to_stretch_pos(self.joint_state)
         target_stretch_pos = self._ros_joint_state_to_stretch_pos(target_joint_state)
