@@ -16,6 +16,7 @@ from std_srvs.srv import Trigger, SetBool
 
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
+from std_msgs.msg import Float64MultiArray
 from rcl_interfaces.msg import ParameterDescriptor, ParameterType, SetParametersResult
 from sensor_msgs.msg import BatteryState, JointState, Joy
 from std_msgs.msg import Bool, String
@@ -110,7 +111,7 @@ class Stretch4ROSDriver(Node, ABC):
 
         self.status_rate = self.get_parameter('status_update_rate').value
         self.control_rate = self.get_parameter('control_loop_rate').value
-
+        self.position_tolerance = self.get_parameter('position_tolerance').value
 
     def start(self): #called by subclasses once setup for control & status loops are done
         # Start timer for common publishers to publish status
@@ -154,6 +155,16 @@ class Stretch4ROSDriver(Node, ABC):
             description='Target rate (hz) for robot status publishers',
         ))
 
+        self.declare_parameter('jog_duration', 0.1, ParameterDescriptor(
+            type=ParameterType.PARAMETER_DOUBLE,
+            description='Target duration (s) for robot jogging requests',
+        ))
+        
+        self.declare_parameter('position_tolerance', 0.01, ParameterDescriptor(
+            type=ParameterType.PARAMETER_DOUBLE,
+            description='Tolerance on joint position (rad) for position commands',
+        ))
+
     def setup_common_pubs(self):
         latching_qos = QoSProfile(
             depth=1,
@@ -188,8 +199,15 @@ class Stretch4ROSDriver(Node, ABC):
 
     def setup_common_subs(self):
         # Subscribers
-        self.create_subscription(Twist, "cmd_vel", self.twist_callback, 1, callback_group=self.main_group)
-        self.create_subscription(JointJog, "joint_vel", self.velocity_callback, 1, callback_group=self.main_group)
+        self.create_subscription(Twist, "cmd_vel", self.base_twist_callback, 1, callback_group=self.main_group)
+        self.create_subscription(JointJog, "jog_vel", self.velocity_jog_callback, 1, callback_group=self.main_group)
+
+        self.create_subscription(JointJog, "jog_pos", self.position_jog_callback, 1, callback_group=self.main_group)
+
+        self.create_subscription(Float64MultiArray, "joint_vel_cmd", self.velocity_cmd_callback, 1, callback_group=self.main_group)
+        
+        self.create_subscription(Float64MultiArray, "joint_pos_cmd", self.position_cmd_callback, 1, callback_group=self.main_group)
+        
         self.create_subscription(Joy, "joy", self.joy_callback, 1, callback_group=self.main_group)
 
     def setup_common_srvs(self):
@@ -224,7 +242,7 @@ class Stretch4ROSDriver(Node, ABC):
         #self.joint_trajectory_action = JointTrajectoryAction(self)
 
     @abstractmethod
-    def set_node_param(self, parameter: Parameter) -> bool:
+    def set_child_param(self, parameter: Parameter) -> bool:
         pass
 
     @abstractmethod
@@ -247,6 +265,14 @@ class Stretch4ROSDriver(Node, ABC):
                 self.velocity_timeout_duration = Duration(seconds=velocity_timeout)
                 self.logger.info(f"Changed to velocity timeout = {velocity_timeout} s")
                 updated = True
+            case "default_jog_duration":
+                self.default_jog_duration = Duration(parameter.value)
+                self.logger.info(f"Changed default jog duration to {self.default_jog_duration}")
+                updated = True
+            case "position_tolerance":
+                self.position_tolerance = parameter.value
+                self.logger.info(f"Changed position tolerance to {self.position_tolerance}")
+                updated = True
         return updated
         
     def parameter_callback(self, parameters: list[Parameter]) -> SetParametersResult:
@@ -263,11 +289,23 @@ class Stretch4ROSDriver(Node, ABC):
             return SetParametersResult(successful=True)
 
     @abstractmethod
-    def twist_callback(self, twist:Twist):
+    def base_twist_callback(self, twist:Twist):
         pass
 
     @abstractmethod
-    def velocity_callback(self, jointjog_msg: JointJog):
+    def velocity_jog_callback(self, jog_msg: JointJog):
+        pass
+
+    @abstractmethod
+    def position_jog_callback(self, jog_msg: JointJog):
+        pass
+
+    @abstractmethod
+    def velocity_cmd_callback(self, vel: Float64MultiArray):
+        pass
+
+    @abstractmethod
+    def position_cmd_callback(self, pos: Float64MultiArray):
         pass
 
     @abstractmethod

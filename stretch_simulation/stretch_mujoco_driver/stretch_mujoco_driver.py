@@ -28,6 +28,7 @@ from rclpy.parameter import Parameter
 
 from geometry_msgs.msg import Twist
 from geometry_msgs.msg import TransformStamped
+from std_msgs.msg import Float64MultiArray
 
 from std_srvs.srv import Trigger
 from std_srvs.srv import SetBool
@@ -110,6 +111,19 @@ class StretchMujocoDriver(Stretch4ROSDriver):
         self.last_twist_time = self.get_clock().now()
         self.last_gamepad_joy_time = self.get_clock().now()
 
+        self.continuous_joints = [
+                Actuators.left_wheel_vel,
+                Actuators.right_wheel_vel,
+                Actuators.back_wheel_vel,
+                Actuators.base_rotate,
+                Actuators.base_translate,
+                Actuators.base_translate_y,]
+
+        self.ignored_joints = [
+            Actuators.head_pan,
+            Actuators.head_tilt,
+            Actuators.gripper,]
+
         # Robocasa set-up
         if self.use_robocasa:
             model, xml, objects_info = self.robocasa_setup()
@@ -129,10 +143,14 @@ class StretchMujocoDriver(Stretch4ROSDriver):
                 StretchCameras.all_stretch4() if self.use_cameras else StretchCameras.none()
             ),
         )
+
+        self.robot_stop_lock = threading.Lock()
         
         self.sim.start(headless=not self.use_mujoco_viewer)
         self.setup_cam_pubs()
-        
+        self.last_control_loop_time = None
+        self.movement_mode = None
+        self.target_vel = None
         self.start()
         
     def setup_cam_pubs(self):
@@ -315,40 +333,99 @@ class StretchMujocoDriver(Stretch4ROSDriver):
         self.last_gamepad_joy_time = self.get_clock().now()
         # self.robot_mode_rwlock.release_read()
 
-    def twist_callback(self, twist:Twist):
+    def base_twist_callback(self, twist:Twist):
         if self.robot_mode != "navigation":
             self.logger.error(
-                "{0} action server must be in navigation mode to "
+                "{0} node must be in navigation mode to "
                 "receive a twist on cmd_vel. "
                 "Current mode = {1}.".format(self.node_name, self.robot_mode)
             )
             return
 
-        self.linear_velocity_mps = twist.linear.x
-        self.linear_velocity_mps_y = twist.linear.y
-        self.angular_velocity_radps = twist.angular.z
-        self.last_twist_time = self.get_clock().now()
+        self.sim.set_base_velocity(twist.linear.x, twist.linear.y, twist.angular.z)
+    
+    def velocity_jog_callback(self, jog_msg: JointJog):
+        self.movement_mode = "velocity_jog"
+        self.jog_start_t = self.get_clock().now()
+        self.target_vel = {}
+        if jog_msg.duration and jog_msg.duration > 0.0:
+            self.this_jog_duration = Duration(seconds=jog_msg.duration)
+        else:
+            self.this_jog_duration = self.default_jog_duration
+        for a in Actuators:
+            if a.name in jog_msg.joint_names:
+                self.target_vel[a.name]=jog_msg.velocities[jog_msg.joint_names.index(a.name)]
+        
+    def position_jog_callback(self, jog_msg: JointJog):        
+        self.movement_mode = "position_jog"
+        self.jog_start_t = self.get_clock().now()
+        self.movement_mode = "position_cmd"
+        if jog_msg.duration and jog_msg.duration > 0.0:
+            self.this_jog_duration = Duration(seconds=jog_msg.duration)
+        else:
+            self.this_jog_duration = self.default_jog_duration
+        for a in Actuators:
+            if a.name in jog_msg.joint_names:
+                self.sim.move_by(a,jog_msg.displacements[jog_msg.joint_names.index(a.name)])
 
+    def velocity_cmd_callback(self, vel: Float64MultiArray):
+        if len(vel.data) != len(Actuators):
+            self.logger.error(f"Expected velocity command to have length {len(Actuators)} instead got length {len(vel.data)}")
+        self.movement_mode = "velocity_cmd"
+        self.target_vel = {}
+        for a in Actuators:
+            self.target_vel[a.name]=vel.data[a.value]
+        
+    def position_cmd_callback(self, pos: Float64MultiArray):
+        if len(pos.data) != len(Actuators):
+            self.logger.error(f"Expected position command to have length {len(Actuators)} instead got length {len(pos.data)}")
 
-    def velocity_callback(self, jointjog_msg: JointJog):
-        pass
-
+        self.movement_mode = "position_cmd"
+        for a in Actuators:
+            if a not in self.continuous_joints and a not in self.ignored_joints:
+                self.sim.move_to(a,pos.data[a.value])
 
     def control_loop(self):
-        
-        # Set new mobile base velocities
-        if self.robot_mode == "navigation":
-            time_since_last_twist = self.get_clock().now() - self.last_twist_time
-            if time_since_last_twist < self.timeout:
-                self.sim.set_base_velocity(
-                    self.linear_velocity_mps, self.linear_velocity_mps_y, self.angular_velocity_radps
-                )
-            elif time_since_last_twist < Duration(seconds=self.timeout_s + 1.0):  # type: ignore
-                # self.sim.set_base_velocity(0.0, 0.0)
-                self.sim.move_by(Actuators.base_translate, 0.0)
-            else:
-                self.sim.set_base_velocity(0.0, 0.0, 0.0)
+        if self.last_control_loop_time:
+            dur = self.get_clock().now()-self.last_control_loop_time
+            dt = dur.nanoseconds/1e9
+        else:
+            dt = 0.0
+            
+        match self.movement_mode:
+            case "velocity_jog":
+                if self.get_clock().now()-self.jog_start_t < self.this_jog_duration:
+                    for actuator in Actuators:
+                        if actuator.name in self.target_vel:
+                            self.sim.move_by(actuator,dt*self.target_vel[actuator.name])
+                else:
+                    for actuator in Actuators:
+                        if actuator.name in self.target_vel:
+                            self.sim.move_by(actuator, 0.0)
+                    self.movement_mode="done"
+            case "position_jog":
+                if self.get_clock().now()-self.jog_start_t < self.this_jog_duration:
+                    pass
+                else:
+                    for actuator in Actuators:
+                        if actuator.name in self.target_vel:
+                            self.sim.move_by(actuator, 0.0)
+                    self.movement_mode="done"
+            case "velocity_cmd":
+                for actuator in Actuators:
+                    if actuator not in self.continuous_joints and actuator not in self.ignored_joints:
+                        self.sim.move_by(actuator,dt*self.target_vel[actuator.name])
+            case "position_cmd":
+                done = True
+                for a in Actuators:
+                    if a not in self.continuous_joints and a not in self.ignored_joints:
+                        done = done and self.sim.is_reached_set_position(a,self.position_tolerance)
+                if done:
+                    self.movement_mode="done"
 
+        self.last_control_loop_time = self.get_clock().now()
+
+        
         # get copy of the current robot status
         robot_status = self.sim.pull_status()
 
@@ -560,7 +637,11 @@ class StretchMujocoDriver(Stretch4ROSDriver):
             self.sim.move_by(Actuators.lift, 0.0)
 
             self.sim.move_by("wrist_yaw", 0.0)
-            self.sim.move_by("gripper", 0.0)
+            self.sim.move_by("wrist_pitch", 0.0)
+            self.sim.move_by("wrist_roll", 0.0)
+            self.sim.move_by("gripper",0.0)
+            self.sim.move_by("gripper_right_finger", 0.0)
+            self.sim.move_by("gripper_left_finger", 0.0)
 
         self.logger.info(
             "Received stop_the_robot service call, so commanded all actuators to stop."
@@ -698,7 +779,7 @@ class StretchMujocoDriver(Stretch4ROSDriver):
                 pointcloud_msg = create_pointcloud_msg(camera_info, frame)
                 self.pointcloud_publishers[camera.name].publish(pointcloud_msg)
 
-    def set_node_param(self, parameter:Parameter) -> bool:
+    def set_child_param(self, parameter:Parameter) -> bool:
         updated = False
         match parameter.name:
             case _:
@@ -722,6 +803,9 @@ class StretchMujocoDriver(Stretch4ROSDriver):
             case _:
                 self.robot_mode = mode
 
+
+
+                
 
 name_to_dtypes = {
     "rgb8":    (np.uint8,  3),
@@ -814,6 +898,8 @@ def numpy_to_image(arr, encoding):
     )
 
     return im
+
+
 
 
 def create_laser_scan_msg(lidar_data: np.ndarray, timestamp: TimeMsg, frame_id: str):
