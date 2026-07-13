@@ -1,5 +1,4 @@
 #! /usr/bin/env python3
-
 import array
 import copy
 from functools import cache
@@ -45,9 +44,9 @@ from tf2_ros.static_transform_broadcaster import StaticTransformBroadcaster
 
 from sensor_msgs.msg import PointCloud2, PointField
 import sensor_msgs_py.point_cloud2 as pc2
-import ros2_numpy
 
 from rcl_interfaces.msg import SetParametersResult
+from control_msgs.msg import JointJog
 from sensor_msgs.msg import BatteryState, JointState, Imu, MagneticField, Joy
 from std_msgs.msg import Bool, String, Float64MultiArray
 
@@ -67,40 +66,49 @@ from builtin_interfaces.msg import Time as TimeMsg
 
 from rclpy import time as rclpyTime
 
+from stretch_core.stretch4_ros_api import Stretch4ROSDriver
+
 
 DEFAULT_SIM_TOOL = "eoa_wrist_dw4_tool_sg4"
 
 
-class StretchMujocoDriver(Node):
-
+class StretchMujocoDriver(Stretch4ROSDriver):
     def __init__(self):
+        super().__init__('stretch_mujoco_driver')
 
-        # Node set-up
-        super().__init__("stretch_mujoco_driver")
-        self.node_name = self.get_name()
+        #set up any node specific pubs/subs
+        #set up any node specific member variables
 
-        self.streaming_position_activated = False
+        self.check_and_load_params()
+        self.linear_velocity_mps = 0.0  # m/s ROS SI standard for cmd_vel (REP 103)
+        self.linear_velocity_mps_y = 0.0  # m/s ROS SI standard for cmd_vel (REP 103)
+        self.angular_velocity_radps = 0.0  # rad/s ROS SI standard for cmd_vel (REP 103)
 
-        # Logger set-up
-        self.logger = self.get_logger()
-        self.logger.info(
-            "For use with S T R E T C H (TM) RESEARCH EDITION from Hello Robot Inc."
+        self.max_arm_height = 1.1
+
+        self.clock_pub = self.create_publisher(
+            msg_type=Clock, topic="/clock", qos_profile=5
         )
-        self.logger.info("{0} started".format(self.node_name))
 
-        # Initialize node parameters
-        self.declare_params()
+        self.imu_mobile_base_pub = self.create_publisher(Imu, "imu_mobile_base", 1)
+        self.magnetometer_mobile_base_pub = self.create_publisher(
+            MagneticField, "magnetometer_mobile_base", 1
+        )
+        self.imu_wrist_pub = self.create_publisher(Imu, "imu_wrist", 1)
+        self.is_gamepad_dongle_pub = self.create_publisher(Bool, "is_gamepad_dongle", 1)
+        self.gamepad_state_pub = self.create_publisher(
+            Joy, "stretch_gamepad_state", 1
+        )  # decode using gamepad_conversion.unpack_joy_to_gamepad_state() on client side
 
-        self.prev_runstop_state = None  # variable to track runstop state
+        self.base_frame_id = "base_footprint"
+        self.logger.info(f"base_frame_id = {self.base_frame_id}")
+        self.odom_frame_id = "odom"
+        self.logger.info(f"odom_frame_id = {self.odom_frame_id}")
 
-        self.voltage_history = []
-        self.charging_state_history = [BatteryState.POWER_SUPPLY_STATUS_UNKNOWN] * 10
-        self.charging_state = BatteryState.POWER_SUPPLY_STATUS_UNKNOWN
+        #self.joint_limits_pub = self.create_publisher(JointState, "joint_limits", 1) #needed?
 
-        self.latest_gamepad_joy_msg = get_default_joy_msg()
-
-        self.robot_stop_lock = threading.Lock()
-        # self.robot_mode_rwlock = RWLock()
+        self.last_twist_time = self.get_clock().now()
+        self.last_gamepad_joy_time = self.get_clock().now()
 
         # Robocasa set-up
         if self.use_robocasa:
@@ -112,8 +120,7 @@ class StretchMujocoDriver(Node):
                 scene_xml_path = get_absolute_path_stretch_xml(self.scene_xml)
             else:
                 scene_xml_path = None
-
-        # Start mujoco sim
+        
         self.sim = Stretch4MujocoSimulator(
             scene_xml_path=scene_xml_path,
             model=model,
@@ -122,43 +129,102 @@ class StretchMujocoDriver(Node):
                 StretchCameras.all_stretch4() if self.use_cameras else StretchCameras.none()
             ),
         )
-
+        
         self.sim.start(headless=not self.use_mujoco_viewer)
+        self.setup_cam_pubs()
+        
+        self.start()
+        
+    def setup_cam_pubs(self):
+        self.laser_scan_pub = self.create_publisher(
+            LaserScan,
+            "/scan_filtered",
+            qos_profile=QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT),
+        )
 
-        # Start ros publishers and subscribers
-        self.ros_setup()
-
-        # Initialize backlash state and offsets
-        self.backlash_state = {
-            "wrist_extension_retracted": False,
+        self.camera_publishers = {
+            camera.name: self.create_publisher(
+                Image,
+                get_camera_topic_name(camera),
+                qos_profile=QoSProfile(
+                    depth=1, reliability=ReliabilityPolicy.BEST_EFFORT
+                ),
+            )
+            for camera in self.sim._cameras_to_use
         }
-        self.wrist_extension_calibrated_retracted_offset_m = 0.0
+        self.camera_compressed_publishers = {
+            camera.name: self.create_publisher(
+                CompressedImage,
+                f"{get_camera_topic_name(camera)}/compressed",
+                qos_profile=QoSProfile(
+                    depth=1, reliability=ReliabilityPolicy.BEST_EFFORT
+                ),
+            )
+            for camera in self.sim._cameras_to_use
+        }
+        self.pointcloud_publishers = {
+            camera.name: self.create_publisher(
+                PointCloud2,
+                get_camera_pointcloud_topic_name(camera),
+                qos_profile=QoSProfile(
+                    depth=1, reliability=ReliabilityPolicy.BEST_EFFORT
+                ),
+            )
+            for camera in self.sim._cameras_to_use
+            if camera.is_depth
+        }
+        self.camera_info_publishers = {
+            camera.name: self.create_publisher(
+                CameraInfo,
+                get_camera_info_topic_name(camera),
+                qos_profile=QoSProfile(
+                    depth=1, reliability=ReliabilityPolicy.BEST_EFFORT
+                ),
+            )
+            for camera in self.sim._cameras_to_use
+        }
 
-    def declare_params(self):
 
+    def declare_node_params(self):
         self.declare_parameter("use_cameras", rclpy.Parameter.Type.BOOL)
-        self.use_cameras: bool = self.get_parameter("use_cameras").value
-
         self.declare_parameter("use_mujoco_viewer", rclpy.Parameter.Type.BOOL)
-        self.use_mujoco_viewer: bool = self.get_parameter("use_mujoco_viewer").value
-
         self.declare_parameter("controller_calibration_file", rclpy.Parameter.Type.STRING)
-        self.controller_calibration_file: str = self.get_parameter("controller_calibration_file").value
 
         self.declare_parameter("use_robocasa", rclpy.Parameter.Type.BOOL)
-        self.use_robocasa: bool = self.get_parameter("use_robocasa").value
-        if self.use_robocasa:
+
+        if self.get_parameter("use_robocasa").value:
             self.declare_parameter("robocasa_task", rclpy.Parameter.Type.STRING)
-            self.robocasa_task: str = self.get_parameter("robocasa_task").value
-
             self.declare_parameter("robocasa_layout", rclpy.Parameter.Type.STRING)
-            self.robocasa_layout: str = self.get_parameter("robocasa_layout").value
-
             self.declare_parameter("robocasa_style", rclpy.Parameter.Type.STRING)
-            self.robocasa_style: str = self.get_parameter("robocasa_style").value
-
+            
         self.declare_parameter("scene_xml", rclpy.Parameter.Type.STRING)
         self.declare_parameter("scene_name", rclpy.Parameter.Type.STRING)
+        self.declare_parameter("fail_out_of_range_goal", rclpy.Parameter.Type.BOOL)
+        self.declare_parameter("fail_if_motor_initial_point_is_not_trajectory_first_point", rclpy.Parameter.Type.BOOL)
+        self.declare_parameter("action_server_rate", rclpy.Parameter.Type.DOUBLE)
+        self.declare_parameter("timeout", rclpy.Parameter.Type.DOUBLE)
+        self.declare_parameter("default_goal_timeout_s", rclpy.Parameter.Type.DOUBLE)
+
+    
+         
+    def check_and_load_params(self):
+        self.use_cameras: bool = self.get_parameter("use_cameras").value
+
+        
+        self.use_mujoco_viewer: bool = self.get_parameter("use_mujoco_viewer").value
+
+        
+        self.controller_calibration_file: str = self.get_parameter("controller_calibration_file").value
+
+        self.use_robocasa: bool = self.get_parameter("use_robocasa").value
+        if self.use_robocasa:
+            
+            self.robocasa_task: str = self.get_parameter("robocasa_task").value
+            self.robocasa_layout: str = self.get_parameter("robocasa_layout").value
+
+            self.robocasa_style: str = self.get_parameter("robocasa_style").value
+
+        
         self.scene_xml: str = self.get_parameter("scene_xml").value
         scene_name: str = self.get_parameter("scene_name").value
 
@@ -173,42 +239,29 @@ class StretchMujocoDriver(Node):
         elif scene_name:
             self.scene_xml = models_path / (scene_name + '.xml')
 
-        self.declare_parameter("mode", rclpy.Parameter.Type.STRING)
         self.robot_mode: str = self.get_parameter("mode").value
-        self.control_modes = ["position", "navigation", "trajectory", "gamepad", "teleop"]
-        if self.robot_mode not in self.control_modes:
-            self.logger.warn(
-                f"{self.node_name} given invalid mode={self.robot_mode}, using position instead"
-            )
-            self.robot_mode = "position"
-
-        self.declare_parameter("broadcast_odom_tf", rclpy.Parameter.Type.BOOL)
+        
         self.broadcast_odom_tf: bool = self.get_parameter("broadcast_odom_tf").value
 
-        self.declare_parameter("fail_out_of_range_goal", rclpy.Parameter.Type.BOOL)
+        
         self.fail_out_of_range_goal: bool = self.get_parameter("fail_out_of_range_goal").value
 
-        self.declare_parameter("fail_if_motor_initial_point_is_not_trajectory_first_point", rclpy.Parameter.Type.BOOL)
         self.fail_if_motor_initial_point_is_not_trajectory_first_point: bool = self.get_parameter(
             "fail_if_motor_initial_point_is_not_trajectory_first_point"
         ).value
 
-        self.declare_parameter("action_server_rate", rclpy.Parameter.Type.DOUBLE)
+       
         self.action_server_rate: float = self.get_parameter("action_server_rate").value
 
-        self.declare_parameter("joint_state_rate", rclpy.Parameter.Type.DOUBLE)
-        self.joint_state_rate: float = self.get_parameter("joint_state_rate").value
-
-        self.declare_parameter("timeout", rclpy.Parameter.Type.DOUBLE)
+        
         self.timeout_s: float = self.get_parameter("timeout").value
         self.timeout: Duration = Duration(seconds=self.timeout_s)
 
-        self.declare_parameter("default_goal_timeout_s", rclpy.Parameter.Type.DOUBLE)
         self.default_goal_timeout_s: float = self.get_parameter("default_goal_timeout_s").value
         self.default_goal_timeout_duration: Duration = Duration(
             seconds=self.default_goal_timeout_s
         )
-
+        
     def robocasa_setup(self):
 
         from stretch4_mujoco.robocasa_gen import (
@@ -248,12 +301,12 @@ class StretchMujocoDriver(Node):
         )
         return model, xml, objects_info
 
-    def set_gamepad_motion_callback(self, joy):
+    def joy_callback(self, joy):
         # self.robot_mode_rwlock.acquire_read()
         if self.robot_mode != "gamepad":
             self.logger.error(
                 "{0} Stretch Driver must be in gamepad mode to "
-                "receive a Joy msg on gamepad_joy topic. "
+                "receive a Joy msg on joy topic. "
                 "Current mode = {1}.".format(self.node_name, self.robot_mode)
             )
             # self.robot_mode_rwlock.release_read()
@@ -262,130 +315,27 @@ class StretchMujocoDriver(Node):
         self.last_gamepad_joy_time = self.get_clock().now()
         # self.robot_mode_rwlock.release_read()
 
-    # MOBILE BASE VELOCITY METHODS ############
-
-    def set_mobile_base_velocity_callback(self, twist):
-        # self.robot_mode_rwlock.acquire_read()
+    def twist_callback(self, twist:Twist):
         if self.robot_mode != "navigation":
             self.logger.error(
                 "{0} action server must be in navigation mode to "
                 "receive a twist on cmd_vel. "
                 "Current mode = {1}.".format(self.node_name, self.robot_mode)
             )
-            # self.robot_mode_rwlock.release_read()
             return
+
         self.linear_velocity_mps = twist.linear.x
         self.linear_velocity_mps_y = twist.linear.y
         self.angular_velocity_radps = twist.angular.z
         self.last_twist_time = self.get_clock().now()
-        # self.robot_mode_rwlock.release_read()
 
-    def set_robot_streaming_position_callback(self, msg: Float64MultiArray):
-        # self.robot_mode_rwlock.acquire_read()
-        if not self.streaming_position_activated:
-            self.logger.error(
-                "Streaming position is not activated."
-                " Please activate streaming position to receive command to joint_position_cmd."
-            )
-            # self.robot_mode_rwlock.release_read()
-            return
 
-        if self.robot_mode not in ["position", "navigation"]:
-            self.logger.error(
-                "{0} must be in position or navigation mode with streaming_position activated "
-                "enabled to receive command to joint_position_cmd. "
-                "Current mode = {1}.".format(self.node_name, self.robot_mode)
-            )
-            # self.robot_mode_rwlock.release_read()
-            return
+    def velocity_callback(self, jointjog_msg: JointJog):
+        pass
 
-        qpos = msg.data
-        self.move_to_position(qpos)
-        # self.robot_mode_rwlock.release_read()
 
-    def move_to_position(self, qpos: list):
-        try:
-            Idx: SE4_dw4_sg4_Idx = get_Idx(DEFAULT_SIM_TOOL)  # type: ignore
-
-            if len(qpos) != Idx.num_joints:
-                self.logger.error(
-                    "Received qpos does not match the number of joints in the robot"
-                )
-                return
-
-                
-            self.sim.move_to(Actuators.arm, qpos[Idx.ARM])
-            self.sim.move_to(Actuators.lift, qpos[Idx.LIFT])
-            self.sim.move_to(Actuators.wrist_yaw, qpos[Idx.WRIST_YAW])
-            self.sim.move_to(Actuators.wrist_pitch, qpos[Idx.WRIST_PITCH])
-            self.sim.move_to(Actuators.wrist_roll, qpos[Idx.WRIST_ROLL])
-            self.sim.move_to(Actuators.gripper, qpos[Idx.GRIPPER])
-
-            if (
-                (abs(qpos[Idx.BASE_TRANSLATE]) > 0.0
-                 or abs(qpos[Idx.BASE_ROTATE]) > 0.0)
-                and self.robot_mode != "position"
-            ):
-                self.logger.error(
-                    "Cannot set base position when not in position mode."
-                )
-            elif abs(qpos[Idx.BASE_TRANSLATE]) > 0.0:
-                self.sim.move_by(Actuators.base_translate, qpos[Idx.BASE_TRANSLATE])
-            elif abs(qpos[Idx.BASE_ROTATE]) > 0.0:
-                self.sim.move_by(Actuators.base_rotate, qpos[Idx.BASE_ROTATE])
-
-            for actuator in [
-                Actuators.arm,
-                Actuators.lift,
-                Actuators.wrist_pitch,
-                Actuators.wrist_roll,
-                Actuators.wrist_yaw,
-                Actuators.gripper
-            ]:
-                succeeded = self.sim.wait_until_at_setpoint(actuator, timeout=10.0)
-                if not succeeded:
-                    raise Exception(
-                        f"{actuator} failed to move to {self.sim.data_proxies.get_command().move_to[actuator.name]}"
-                    )
-
-            if self.robot_mode == "position":
-                for actuator in [
-                    Actuators.base_translate,
-                    Actuators.base_rotate,
-                ]:
-                    succeeded = self.sim.wait_while_is_moving(actuator)
-                    if not succeeded:
-                        raise Exception(
-                            f"{actuator} failed to move to {self.sim.data_proxies.get_command().move_to[actuator.name]}"
-                        )
-        except Exception as e:
-            self.logger.error("Failed to move to position: {0}".format(e))
-
-    def update_latched_value(self, pub, value):
-        key = pub.topic
-        if value == self.last_published_value.get(key):
-            return
-        msg = pub.msg_type()
-        msg.data = value
-        pub.publish(msg)
-        self.last_published_value[key] = value
-
-    def command_mobile_base_velocity_and_publish_state(self):
-
-        # self.robot_mode_rwlock.acquire_read()
-
-        # During gamepad mode, the robot can be controlled with provided gamepad dongle plugged into the robot
-        # Or a Joy message type could also be published which can be used for controlling robot with an remote gamepad.
-        # The Joy message should follow the format described in gamepad_conversion.py
-        # if self.robot_mode == 'gamepad':
-        #     time_since_last_joy = self.get_clock().now() - self.last_gamepad_joy_time
-        #     if time_since_last_joy < self.timeout:
-        #         self.gamepad_teleop.do_motion(unpack_joy_to_gamepad_state(self.latest_gamepad_joy_msg),robot=self.robot)
-        #     else:
-        #         self.gamepad_teleop.do_motion(robot=self.robot)
-        # else:
-        #     self.gamepad_teleop.update_gamepad_state(self.robot) # Update gamepad input readings within gamepad_teleop instance
-
+    def control_loop(self):
+        
         # Set new mobile base velocities
         if self.robot_mode == "navigation":
             time_since_last_twist = self.get_clock().now() - self.last_twist_time
@@ -441,24 +391,25 @@ class StretchMujocoDriver(Node):
             t.transform.rotation.w = q[3]
             self.tf_broadcaster.sendTransform(t)
 
-
-        # publish homed status
-        self.update_latched_value(self.homed_pub, True)
+        # TODO: actually check for homing in sim (this was not implemented in
+        # previous driver)
+        with self.state_lock:
+            self.pubs_state["homed"] = True
 
         # publish runstop event
-        runstop_status = self.is_runstopped()
-        self.update_latched_value(self.runstop_event_pub, runstop_status)
+        with self.state_lock:
+            self.pubs_state["runstop_event"] = self.is_runstopped()
 
-        # publish stretch_driver operation mode
-        self.update_latched_value(self.mode_pub, self.robot_mode)
+        with self.state_lock:
+            self.pubs_state["mode"] = self.robot_mode
 
-        # publish end of arm tool
-        self.update_latched_value(self.tool_pub, DEFAULT_SIM_TOOL)
+        with self.state_lock:
+            self.pubs_state["tool"] = DEFAULT_SIM_TOOL
 
         # publish streaming position status
-        streaming_position_status = Bool()
+        '''streaming_position_status = Bool()
         streaming_position_status.data = self.streaming_position_activated
-        self.streaming_position_mode_pub.publish(streaming_position_status)
+        self.streaming_position_mode_pub.publish(streaming_position_status)'''
 
         # publish joint state for the arm
         joint_state = JointState()
@@ -506,10 +457,45 @@ class StretchMujocoDriver(Node):
             joint_state.velocity.append(0.0)
             joint_state.effort.append(0.0)
 
+        with self.state_lock:
+            self.pubs_state["joint_state"]=joint_state
 
-        self.joint_state_pub.publish(joint_state)
+       
+        # publish odometry via the odom topic
+        odom = Odometry()
+        odom.header.stamp = current_time
+        odom.header.frame_id = self.odom_frame_id
+        odom.child_frame_id = self.base_frame_id
+        odom.pose.pose.position.x = x
+        odom.pose.pose.position.y = y
+        odom.pose.pose.orientation.x = q[0]
+        odom.pose.pose.orientation.y = q[1]
+        odom.pose.pose.orientation.z = q[2]
+        odom.pose.pose.orientation.w = q[3]
+        odom.twist.twist.linear.x = x_vel
+        odom.twist.twist.linear.y = y_vel
+        odom.twist.twist.angular.z = theta_vel
 
-        ##################################################
+        with self.state_lock:
+            self.pubs_state["odom"]=odom
+
+        runstop_status = self.is_runstopped()
+
+        if (self.prev_runstop_state is None and runstop_status) or (
+            self.prev_runstop_state is not None
+            and runstop_status != self.prev_runstop_state
+        ):
+            self.runstop_the_robot(runstop_status, just_change_mode=True)
+
+        self.prev_runstop_state = runstop_status
+
+        self.publish_camera_and_lidar(current_time=current_time)
+
+    def publish_child_info(self):
+        # Use node time for other topics, using sim time makes bad things happen.
+        current_time = self.get_clock().now().to_msg()
+
+         ##################################################
         # publish IMU sensor data
         sensor_status = self.sim.pull_sensor_data()
 
@@ -563,229 +549,9 @@ class StretchMujocoDriver(Node):
         i.linear_acceleration.z = az
         self.imu_wrist_pub.publish(i)
 
-        # publish odometry via the odom topic
-        odom = Odometry()
-        odom.header.stamp = current_time
-        odom.header.frame_id = self.odom_frame_id
-        odom.child_frame_id = self.base_frame_id
-        odom.pose.pose.position.x = x
-        odom.pose.pose.position.y = y
-        odom.pose.pose.orientation.x = q[0]
-        odom.pose.pose.orientation.y = q[1]
-        odom.pose.pose.orientation.z = q[2]
-        odom.pose.pose.orientation.w = q[3]
-        odom.twist.twist.linear.x = x_vel
-        odom.twist.twist.linear.y = y_vel
-        odom.twist.twist.angular.z = theta_vel
-        self.odom_pub.publish(odom)
-
-        ##################################################
-        # Publish Stretch Gamepad status
-        # b = Bool()
-        # b.data = True if self.gamepad_teleop.is_gamepad_dongle else False
-        # self.is_gamepad_dongle_pub.publish(b)
-        # j = unpack_gamepad_state_to_joy(self.gamepad_teleop.controller_state)
-        # j.header.stamp = current_time
-        # self.gamepad_state_pub.publish(j)
-
-        # self.robot_mode_rwlock.release_read()
-        # must happen after the read release, otherwise the write lock in change_mode() will cause a deadlock
-        if (self.prev_runstop_state is None and runstop_status) or (
-            self.prev_runstop_state is not None
-            and runstop_status != self.prev_runstop_state
-        ):
-            self.runstop_the_robot(runstop_status, just_change_mode=True)
-
-        self.prev_runstop_state = runstop_status
-
         self.publish_camera_and_lidar(current_time=current_time)
 
-    def publish_camera_and_lidar(self, current_time: TimeMsg | None = None):
-
-        current_time = current_time or self.get_clock().now().to_msg()
-
-        sensor_status = self.sim.pull_sensor_data()
-
-        try:
-            lidar_data = sensor_status.get_data(StretchSensors.base_lidar)
-
-            self.laser_scan_pub.publish(
-                create_laser_scan_msg(
-                    lidar_data, timestamp=current_time, frame_id="laser"
-                )
-            )
-        except ValueError:
-            ...  # Lidar is disabled, get_data() throws a ValueError
-
-        camera_data = self.sim.pull_camera_data()
-        for camera, frame in camera_data.get_all(
-            auto_rotate=False, auto_correct_rgb=True
-        ).items():
-            header = Header()
-            header.frame_id = get_camera_frame(camera)
-            header.stamp = current_time
-
-            ros_image = ros2_numpy.msgify(
-                Image,
-                frame,
-                encoding="bgr8" if not camera.is_depth else "32FC1",
-            )
-            ros_image.header = header
-            self.camera_publishers[camera.name].publish(ros_image)
-
-            settings: CameraSettings = camera.initial_camera_settings
-            camera_info = create_camera_info(
-                camera_settings=settings,
-                frame_id=header.frame_id,
-                timestamp=current_time,
-            )
-            self.camera_info_publishers[camera.name].publish(camera_info)
-
-            if camera.is_depth:
-                ros_image_compressed = compress_depth_image(frame)
-            else:
-                success, encoded_image = cv2.imencode(".png", frame)
-                if not success:
-                    self.logger.error(f"Failed to encode compressed image for {camera.name}")
-                    continue
-
-                ros_image_compressed = CompressedImage()
-                ros_image_compressed.format = "png"
-                ros_image_compressed.data = encoded_image.tobytes()
-
-            ros_image_compressed.header = header
-            self.camera_compressed_publishers[camera.name].publish(ros_image_compressed)
-
-            if camera.is_depth:
-                # if camera == StretchCameras.cam_gripper_se4_stereo_depth:
-                #     pointcloud_msg = create_pointcloud_rgb_msg(
-                #         camera_info_msg=camera_info,
-                #         rgb_image=camera_data.get_camera_data(
-                #             StretchCameras.cam_gripper_se4_stereo_depth
-                #         ),
-                #         depth_image=frame,
-                #     )
-                # elif camera == StretchCameras.cam_hemilidar_left:
-                #     pointcloud_msg = create_pointcloud_rgb_msg(
-                #         camera_info_msg=camera_info,
-                #         rgb_image=camera_data.get_camera_data(
-                #             StretchCameras.cam_nav_rgb_se4_left, auto_rotate=False
-                #         ),
-                #         depth_image=camera_data.get_camera_data(
-                #             StretchCameras.cam_hemilidar_left, auto_rotate=False
-                #         ),
-                #     )
-                # elif camera == StretchCameras.cam_hemilidar_right:
-                #     pointcloud_msg = create_pointcloud_rgb_msg(
-                #         camera_info_msg=camera_info,
-                #         rgb_image=camera_data.get_camera_data(
-                #             StretchCameras.cam_nav_rgb_se4_right, auto_rotate=False
-                #         ),
-                #         depth_image=camera_data.get_camera_data(
-                #             StretchCameras.cam_hemilidar_right, auto_rotate=False
-                #         ),
-                #     )
-                # else:
-                #     pointcloud_msg = create_pointcloud_msg(camera_info, frame)
-                pointcloud_msg = create_pointcloud_msg(camera_info, frame)
-                self.pointcloud_publishers[camera.name].publish(pointcloud_msg)
-
-    # CHANGE MODES ################
-    def change_mode(self, new_mode, code_to_run=None):
-        # self.robot_mode_rwlock.acquire_write()
-
-        self.robot_mode = new_mode
-
-        if code_to_run:
-            code_to_run()
-
-        self.logger.info(f"Changed to mode = {self.robot_mode}")
-        # self.robot_mode_rwlock.release_write()
-
-    def turn_on_navigation_mode(self):
-        # Navigation mode enables mobile base velocity control via
-        # cmd_vel, and disables position-based control of the mobile
-        # base.
-        def code_to_run():
-            self.linear_velocity_mps = 0.0
-            self.linear_velocity_mps_y = 0.0
-            self.angular_velocity_radps = 0.0
-
-        self.change_mode("navigation", code_to_run)
-        return True, "Now in navigation mode."
-
-    def turn_on_position_mode(self):
-        # Position mode enables mobile base translation and rotation
-        # using position control with sequential incremental rotations
-        # and translations. It also disables velocity control of the
-        # mobile base. It does not update the virtual prismatic
-        # joint. The frames associated with 'floor_link' and
-        # 'base_link' become identical in this mode.
-        def code_to_run():
-            # self.sim.base.enable_pos_incr_mode()
-            ...
-
-        self.change_mode("position", code_to_run)
-        return True, "Now in position mode."
-
-    def turn_on_trajectory_mode(self):
-        # Trajectory mode is able to execute plans from
-        # high level planners like MoveIt2. These planners
-        # send whole robot waypoint trajectories to the
-        # joint trajectory action server, and the underlying
-        # Python interface to the robot (Stretch Body) executes
-        # the trajectory, respecting each waypoints' time_from_start
-        # attribute of the trajectory_msgs/JointTrajectoryPoint
-        # message. This allows coordinated motion of the base + arm.
-        raise NotImplementedError(
-            "Trajectory Mode is not yet supported in StretchMujocoDriver."
-        )
-
-        def code_to_run():
-            try:
-                self.sim.stop_trajectory()
-            except NotImplementedError as e:
-                return False, str(e)
-            self.sim.base.first_step = True
-            self.sim.base.pull_status()
-
-        self.change_mode("trajectory", code_to_run)
-        return True, "Now in trajectory mode."
-
-    def turn_on_gamepad_mode(self):
-        # Gamepad mode enables the provided gamepad with stretch
-        # to control the robot motions. If the gamepad USB dongle is plugged out
-        # the robot would stop making any motions in this mode and could plugged in back in reltime.
-        # Alternatively in this mode, stretch driver also listens to `gamepad_joy` topic
-        # for valid Joy type message from a remote gamepad to control stretch.
-        # The Joy message format is described in the gamepad_conversion.py
-        raise NotImplementedError(
-            "Gamepad Mode is not yet supported in StretchMujocoDriver."
-        )
-
-        def code_to_run():
-            try:
-                self.sim.stop_trajectory()
-            except NotImplementedError as e:
-                return False, str(e)
-            self.gamepad_teleop.do_double_beep(self.robot)
-            self.sim.base.pull_status()
-
-        self.change_mode("gamepad", code_to_run)
-        return True, "Now in gamepad mode."
-
-    def activate_streaming_position(self, request):
-        self.streaming_position_activated = True
-        self.logger.info("Activated streaming position.")
-        return True, "Activated streaming position."
-
-    def deactivate_streaming_position(self, request):
-        self.streaming_position_activated = False
-        self.logger.info("Deactivated streaming position.")
-        return True, "Deactivated streaming position."
-
-    # SERVICE CALLBACKS ##############
-
+        
     def stop_the_robot_callback(self, request, response):
         with self.robot_stop_lock:
             self.sim.move_by(Actuators.base_translate, 0.0)
@@ -817,113 +583,12 @@ class StretchMujocoDriver(Node):
         response.message = message
         return response
 
-    def navigation_mode_service_callback(self, request, response):
-        success, message = self.turn_on_navigation_mode()
-        response.success = success
-        response.message = message
-        return response
-
-    def position_mode_service_callback(self, request, response):
-        success, message = self.turn_on_position_mode()
-        response.success = success
-        response.message = message
-        return response
-
-    def trajectory_mode_service_callback(self, request, response):
-        success, message = self.turn_on_trajectory_mode()
-        response.success = success
-        response.message = message
-        return response
-
-    def gamepad_mode_service_callback(self, request, response):
-        success, message = self.turn_on_gamepad_mode()
-        response.success = success
-        response.message = message
-        return response
-
     def runstop_service_callback(self, request, response):
         self.logger.info("Received runstop_the_robot service call.")
         self.runstop_the_robot(request.data)
         response.success = True
         response.message = f"is_runstopped: {request.data}"
         return response
-
-    def activate_streaming_position_service_callback(self, request, response):
-        success, message = self.activate_streaming_position(request)
-        response.success = success
-        response.message = message
-        return response
-
-    def deactivate_streaming_position_service_callback(self, request, response):
-        success, message = self.deactivate_streaming_position(request)
-        response.success = success
-        response.message = message
-        return response
-
-    def get_joint_states_callback(self, request, response):
-        joint_limits = JointState()
-        joint_limits.header.stamp = self.get_clock().now().to_msg()
-
-        joint_limits_from_sim = self.sim.pull_joint_limits()
-        for actuator, min_max in joint_limits_from_sim.items():
-            joint_name = actuator.get_joint_names_in_mjcf()[0]
-            min_limit, max_limit = min_max
-            if actuator == Actuators.arm:
-                joint_name = "arm_joint"  # Instead of the telescoping names
-                max_limit *= 4  # 4x the telescoping limit
-            if actuator == Actuators.gripper:
-                joint_name = "gripper_aperture"  # A different mapping from stretch_core command_groups
-            if actuator in [
-                Actuators.gripper_left_finger,
-                Actuators.gripper_right_finger,
-            ]:
-                joint_name = joint_name.replace(
-                    "_open", ""
-                )  # A different mapping from stretch_core command_groups
-
-            joint_limits.name.append(joint_name)  # type:ignore
-            joint_limits.position.append(min_limit)
-            joint_limits.velocity.append(max_limit)
-
-        # add "wrist_extension" because it's expected downstream
-        arm_joint_limit = joint_limits_from_sim[Actuators.arm]
-        joint_limits.name.append("wrist_extension")  # type:ignore
-        joint_limits.position.append(arm_joint_limit[0])
-        joint_limits.velocity.append(arm_joint_limit[1] * 4)  # 4x the telescoping limit
-
-        self.joint_limits_pub.publish(joint_limits)
-        response.success = True
-        response.message = ""
-        return response
-
-    def self_collision_avoidance_callback(self, request, response):
-        # enable_self_collision_avoidance = request.data
-        # if enable_self_collision_avoidance:
-        #     self.sim.enable_collision_mgmt()
-        # else:
-        #     self.sim.disable_collision_mgmt()
-
-        response.success = False
-        response.message = "collision avoidance is not supported in simulation mode."
-        # response.message = (
-        #     f"is self collision avoidance enabled: {enable_self_collision_avoidance}"
-        # )
-        return response
-
-    def parameter_callback(self, parameters: list[Parameter]) -> SetParametersResult:
-        """
-        Update the parameters that allow for dynamic updates.
-        """
-        for parameter in parameters:
-            if parameter.name == "default_goal_timeout_s":
-                self.default_goal_timeout_s = parameter.value
-                self.default_goal_timeout_duration = Duration(
-                    seconds=self.default_goal_timeout_s  # type: ignore
-                )
-                self.logger.info(
-                    f"Set default_goal_timeout_s to {self.default_goal_timeout_s}"
-                )
-        return SetParametersResult(successful=True)
 
     def home_the_robot(self):
         # self.robot_mode_rwlock.acquire_read()
@@ -955,7 +620,7 @@ class StretchMujocoDriver(Node):
 
     def is_runstopped(self):
         return self.robot_mode == "runstopped"
-
+    
     def runstop_the_robot(self, runstopped, just_change_mode=False):
         if runstopped:
             # self.robot_mode_rwlock.acquire_read()
@@ -974,297 +639,181 @@ class StretchMujocoDriver(Node):
                 return
             self.change_mode(self.prerunstop_mode, lambda: None)
 
-    # ROS Setup #################
-    def ros_setup(self):
+    def publish_camera_and_lidar(self, current_time: TimeMsg | None = None):
 
-        # Handle the non_dxl status in local loop, not thread
-        # if not self.sim.startup(start_non_dxl_thread=False,
-        #                           start_dxl_thread=True,
-        #                           start_sys_mon_thread=True):
-        #     self.logger.fatal('Robot startup failed.')
-        #     rclpy.shutdown()
-        #     exit()
-        # if not self.sim.is_homed():
-        #     self.logger.warn("Robot not homed. Call /home_the_robot service.")
+        current_time = current_time or self.get_clock().now().to_msg()
 
-        # Create Gamepad Teleop instance
-        # self.gamepad_teleop = gamepad_teleop.GamePadTeleop(robot_instance=False,print_dongle_status=False, lock=self.robot_stop_lock)
-        # self.gamepad_teleop.startup(self.robot)
+        sensor_status = self.sim.pull_sensor_data()
 
-        self.logger.info("broadcast_odom_tf = " + str(self.broadcast_odom_tf))
-        if self.broadcast_odom_tf:
-            self.tf_broadcaster = tf2_ros.TransformBroadcaster(self)
-            self.tf_static_broadcaster = StaticTransformBroadcaster(self)
+        try:
+            lidar_data = sensor_status.get_data(StretchSensors.base_lidar)
 
-        self.tf_buffer = tf2_ros.Buffer()
-        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
-
-        # large_ang = np.radians(45.0)
-        # self.logger.debug('Loading controller calibration parameters for the head from YAML file named {0}'.format(self.controller_calibration_file))
-        # with open(self.controller_calibration_file, 'r') as fid:
-        #     self.controller_parameters = yaml.safe_load(fid)
-
-        #     self.logger.debug('controller parameters loaded = {0}'.format(self.controller_parameters))
-
-        #     self.wrist_extension_calibrated_retracted_offset_m = self.controller_parameters['arm_retracted_offset']
-        #     m = self.wrist_extension_calibrated_retracted_offset_m
-        #     if (abs(m) > 0.05):
-        #         self.logger.warn('self.wrist_extension_calibrated_retracted_offset_m HAS AN UNUSUALLY LARGE MAGNITUDE')
-        #     self.logger.debug(
-        #         'self.wrist_extension_calibrated_retracted_offset_m in meters = {0}'.format(
-        #             self.wrist_extension_calibrated_retracted_offset_m))
-
-        self.linear_velocity_mps = 0.0  # m/s ROS SI standard for cmd_vel (REP 103)
-        self.linear_velocity_mps_y = 0.0  # m/s ROS SI standard for cmd_vel (REP 103)
-        self.angular_velocity_radps = 0.0  # rad/s ROS SI standard for cmd_vel (REP 103)
-
-        self.max_arm_height = 1.1
-
-        self.odom_pub = self.create_publisher(Odometry, "odom", 1)
-        self.laser_scan_pub = self.create_publisher(
-            LaserScan,
-            "/scan_filtered",
-            qos_profile=QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT),
-        )
-
-        self.camera_publishers = {
-            camera.name: self.create_publisher(
-                Image,
-                get_camera_topic_name(camera),
-                qos_profile=QoSProfile(
-                    depth=1, reliability=ReliabilityPolicy.BEST_EFFORT
-                ),
+            self.laser_scan_pub.publish(
+                create_laser_scan_msg(
+                    lidar_data, timestamp=current_time, frame_id="laser"
+                )
             )
-            for camera in self.sim._cameras_to_use
-        }
-        self.camera_compressed_publishers = {
-            camera.name: self.create_publisher(
-                CompressedImage,
-                f"{get_camera_topic_name(camera)}/compressed",
-                qos_profile=QoSProfile(
-                    depth=1, reliability=ReliabilityPolicy.BEST_EFFORT
-                ),
+        except ValueError:
+            ...  # Lidar is disabled, get_data() throws a ValueError
+
+        camera_data = self.sim.pull_camera_data()
+        for camera, frame in camera_data.get_all(
+            auto_rotate=False, auto_correct_rgb=True
+        ).items():
+            header = Header()
+            header.frame_id = get_camera_frame(camera)
+            header.stamp = current_time
+
+            ros_image = numpy_to_image(
+                frame,
+                encoding="bgr8" if not camera.is_depth else "32FC1",
             )
-            for camera in self.sim._cameras_to_use
-        }
-        self.pointcloud_publishers = {
-            camera.name: self.create_publisher(
-                PointCloud2,
-                get_camera_pointcloud_topic_name(camera),
-                qos_profile=QoSProfile(
-                    depth=1, reliability=ReliabilityPolicy.BEST_EFFORT
-                ),
+            ros_image.header = header
+            self.camera_publishers[camera.name].publish(ros_image)
+
+            settings: CameraSettings = camera.initial_camera_settings
+            camera_info = create_camera_info(
+                camera_settings=settings,
+                frame_id=header.frame_id,
+                timestamp=current_time,
             )
-            for camera in self.sim._cameras_to_use
-            if camera.is_depth
-        }
-        self.camera_info_publishers = {
-            camera.name: self.create_publisher(
-                CameraInfo,
-                get_camera_info_topic_name(camera),
-                qos_profile=QoSProfile(
-                    depth=1, reliability=ReliabilityPolicy.BEST_EFFORT
-                ),
-            )
-            for camera in self.sim._cameras_to_use
-        }
+            self.camera_info_publishers[camera.name].publish(camera_info)
 
-        self.clock_pub = self.create_publisher(
-            msg_type=Clock, topic="/clock", qos_profile=5
-        )
+            if camera.is_depth:
+                ros_image_compressed = compress_depth_image(frame)
+            else:
+                success, encoded_image = cv2.imencode(".png", frame)
+                if not success:
+                    self.logger.error(f"Failed to encode compressed image for {camera.name}")
+                    continue
 
-        latching_qos = QoSProfile(
-            depth=1,
-            durability=QoSDurabilityPolicy.TRANSIENT_LOCAL
-        )
+                ros_image_compressed = CompressedImage()
+                ros_image_compressed.format = "png"
+                ros_image_compressed.data = encoded_image.tobytes()
 
-        self.power_pub = self.create_publisher(BatteryState, "battery", 1)
-        self.homed_pub = self.create_publisher(Bool, "is_homed", latching_qos)
-        self.mode_pub = self.create_publisher(String, "mode", latching_qos)
-        self.tool_pub = self.create_publisher(String, "tool", latching_qos)
-        self.streaming_position_mode_pub = self.create_publisher(
-            Bool, "is_streaming_position", 1
-        )
+            ros_image_compressed.header = header
+            self.camera_compressed_publishers[camera.name].publish(ros_image_compressed)
 
-        self.imu_mobile_base_pub = self.create_publisher(Imu, "imu_mobile_base", 1)
-        self.magnetometer_mobile_base_pub = self.create_publisher(
-            MagneticField, "magnetometer_mobile_base", 1
-        )
-        self.imu_wrist_pub = self.create_publisher(Imu, "imu_wrist", 1)
-        self.runstop_event_pub = self.create_publisher(Bool, "is_runstopped", latching_qos)
+            if camera.is_depth:
+                pointcloud_msg = create_pointcloud_msg(camera_info, frame)
+                self.pointcloud_publishers[camera.name].publish(pointcloud_msg)
 
-        self.is_gamepad_dongle_pub = self.create_publisher(Bool, "is_gamepad_dongle", 1)
-        self.gamepad_state_pub = self.create_publisher(
-            Joy, "stretch_gamepad_state", 1
-        )  # decode using gamepad_conversion.unpack_joy_to_gamepad_state() on client side
+    def set_node_param(self, parameter:Parameter) -> bool:
+        updated = False
+        match parameter.name:
+            case _:
+                pass
+        return updated
 
-        # Saved Message States (for latched topics)
-        self.last_published_value = {}
+    def change_mode(self, mode):
+        if mode not in self.control_modes and mode not in self.priority_modes:
+            self.logger.error(f"Mode {mode} not in available control modes, not changing mode.")
+            return
 
-        self.main_group = ReentrantCallbackGroup()
-        self.mutex_group = MutuallyExclusiveCallbackGroup()
-        self.create_subscription(
-            Twist,
-            "cmd_vel",
-            self.set_mobile_base_velocity_callback,
-            1,
-            callback_group=self.main_group,
-        )
+        if self.robot_mode in self.priority_modes:
+            self.logger.error
+        
+        match mode:
+            case "navigation":       
+                self.linear_velocity_mps = 0.0
+                self.linear_velocity_mps_y = 0.0
+                self.angular_velocity_radps = 0.0
+                self.robot_mode = mode
+            case _:
+                self.robot_mode = mode
 
-        self.create_subscription(
-            Joy,
-            "gamepad_joy",
-            self.set_gamepad_motion_callback,
-            1,
-            callback_group=self.main_group,
-        )
 
-        self.create_subscription(
-            Float64MultiArray,
-            "joint_pose_cmd",
-            self.set_robot_streaming_position_callback,
-            1,
-            callback_group=self.main_group,
-        )
+name_to_dtypes = {
+    "rgb8":    (np.uint8,  3),
+    "rgba8":   (np.uint8,  4),
+    "rgb16":   (np.uint16, 3),
+    "rgba16":  (np.uint16, 4),
+    "bgr8":    (np.uint8,  3),
+    "bgra8":   (np.uint8,  4),
+    "bgr16":   (np.uint16, 3),
+    "bgra16":  (np.uint16, 4),
+    "mono8":   (np.uint8,  1),
+    "mono16":  (np.uint16, 1),
 
-        self.logger.info(f"rate = {self.joint_state_rate} Hz")
-        self.logger.info(f"twist timeout = {self.timeout_s} s")
+    # for bayer image (based on cv_bridge.cpp)
+    "bayer_rggb8":  (np.uint8,  1),
+    "bayer_bggr8":  (np.uint8,  1),
+    "bayer_gbrg8":  (np.uint8,  1),
+    "bayer_grbg8":  (np.uint8,  1),
+    "bayer_rggb16":     (np.uint16, 1),
+    "bayer_bggr16":     (np.uint16, 1),
+    "bayer_gbrg16":     (np.uint16, 1),
+    "bayer_grbg16":     (np.uint16, 1),
 
-        self.base_frame_id = "base_footprint"
-        self.logger.info(f"base_frame_id = {self.base_frame_id}")
-        self.odom_frame_id = "odom"
-        self.logger.info(f"odom_frame_id = {self.odom_frame_id}")
+    # OpenCV CvMat types
+    "8UC1":    (np.uint8,   1),
+    "8UC2":    (np.uint8,   2),
+    "8UC3":    (np.uint8,   3),
+    "8UC4":    (np.uint8,   4),
+    "8SC1":    (np.int8,    1),
+    "8SC2":    (np.int8,    2),
+    "8SC3":    (np.int8,    3),
+    "8SC4":    (np.int8,    4),
+    "16UC1":   (np.uint16,   1),
+    "16UC2":   (np.uint16,   2),
+    "16UC3":   (np.uint16,   3),
+    "16UC4":   (np.uint16,   4),
+    "16SC1":   (np.int16,  1),
+    "16SC2":   (np.int16,  2),
+    "16SC3":   (np.int16,  3),
+    "16SC4":   (np.int16,  4),
+    "32SC1":   (np.int32,   1),
+    "32SC2":   (np.int32,   2),
+    "32SC3":   (np.int32,   3),
+    "32SC4":   (np.int32,   4),
+    "32FC1":   (np.float32, 1),
+    "32FC2":   (np.float32, 2),
+    "32FC3":   (np.float32, 3),
+    "32FC4":   (np.float32, 4),
+    "64FC1":   (np.float64, 1),
+    "64FC2":   (np.float64, 2),
+    "64FC3":   (np.float64, 3),
+    "64FC4":   (np.float64, 4)
+}
 
-        self.joint_state_pub = self.create_publisher(JointState, "joint_states", 1)
-        self.joint_limits_pub = self.create_publisher(JointState, "joint_limits", 1)
 
-        self.last_twist_time = self.get_clock().now()
-        self.last_gamepad_joy_time = self.get_clock().now()
+def numpy_to_image(arr, encoding):
+    if not encoding in name_to_dtypes:
+        raise TypeError('Unrecognized encoding {}'.format(encoding))
 
-        # Add a callback for updating parameters
-        self.add_on_set_parameters_callback(self.parameter_callback)
+    import sys
+    im = Image(encoding=encoding)
 
-        # self.diagnostics = StretchDiagnostics(self, self.robot)
+    # extract width, height, and channels
+    dtype_class, exp_channels = name_to_dtypes[encoding]
+    dtype = np.dtype(dtype_class)
+    if len(arr.shape) == 2:
+        im.height, im.width, channels = arr.shape + (1,)
+    elif len(arr.shape) == 3:
+        im.height, im.width, channels = arr.shape
+    else:
+        raise TypeError("Array must be two or three dimensional")
 
-        self.switch_to_navigation_mode_service = self.create_service(
-            Trigger,
-            "/switch_to_navigation_mode",
-            self.navigation_mode_service_callback,
-            callback_group=self.main_group,
-        )
+    # check type and channels
+    if exp_channels != channels:
+        raise TypeError("Array has {} channels, {} requires {}".format(
+            channels, encoding, exp_channels
+        ))
+    if dtype_class != arr.dtype.type:
+        raise TypeError("Array is {}, {} requires {}".format(
+            arr.dtype.type, encoding, dtype_class
+        ))
 
-        self.switch_to_position_mode_service = self.create_service(
-            Trigger,
-            "/switch_to_position_mode",
-            self.position_mode_service_callback,
-            callback_group=self.main_group,
-        )
+    # make the array contiguous in memory, as mostly required by the format
+    contig = np.ascontiguousarray(arr)
+    im.data = contig.tobytes()
+    im.step = contig.strides[0]
+    im.is_bigendian = int(
+        arr.dtype.byteorder == '>' or
+        arr.dtype.byteorder == '=' and sys.byteorder == 'big'
+    )
 
-        self.switch_to_trajectory_mode_service = self.create_service(
-            Trigger,
-            "/switch_to_trajectory_mode",
-            self.trajectory_mode_service_callback,
-            callback_group=self.main_group,
-        )
-
-        self.switch_to_gamepad_mode_service = self.create_service(
-            Trigger,
-            "/switch_to_gamepad_mode",
-            self.gamepad_mode_service_callback,
-            callback_group=self.main_group,
-        )
-
-        self.activate_streaming_position_service = self.create_service(
-            Trigger,
-            "/activate_streaming_position",
-            self.activate_streaming_position_service_callback,
-            callback_group=self.main_group,
-        )
-
-        self.deactivate_streaming_position_service = self.create_service(
-            Trigger,
-            "/deactivate_streaming_position",
-            self.deactivate_streaming_position_service_callback,
-            callback_group=self.main_group,
-        )
-
-        self.stop_the_robot_service = self.create_service(
-            Trigger,
-            "/stop_the_robot",
-            self.stop_the_robot_callback,
-            callback_group=self.main_group,
-        )
-
-        self.home_the_robot_service = self.create_service(
-            Trigger,
-            "/home_the_robot",
-            self.home_the_robot_callback,
-            callback_group=self.main_group,
-        )
-
-        self.stow_the_robot_service = self.create_service(
-            Trigger,
-            "/stow_the_robot",
-            self.stow_the_robot_callback,
-            callback_group=self.main_group,
-        )
-
-        self.runstop_service = self.create_service(
-            SetBool,
-            "/runstop",
-            self.runstop_service_callback,
-            callback_group=self.main_group,
-        )
-
-        self.get_joint_states = self.create_service(
-            Trigger,
-            "/get_joint_states",
-            self.get_joint_states_callback,
-            callback_group=self.main_group,
-        )
-
-        self.self_collision_avoidance = self.create_service(
-            SetBool,
-            "/self_collision_avoidance",
-            self.self_collision_avoidance_callback,
-            callback_group=self.main_group,
-        )
-
-        # start action server for joint trajectories
-        self.joint_trajectory_action = JointTrajectoryAction(
-            self, self.action_server_rate
-        )
-
-        # Switch to mode:
-        self.logger.debug("mode = " + str(self.robot_mode))
-        if self.robot_mode == "position":
-            self.turn_on_position_mode()
-        elif self.robot_mode == "navigation":
-            self.turn_on_navigation_mode()
-        elif self.robot_mode == "trajectory":
-            self.turn_on_trajectory_mode()
-        elif self.robot_mode == "gamepad":
-            self.turn_on_gamepad_mode()
-        else:
-            self.logger.warn(
-                f"{self.node_name} given invalid mode={self.robot_mode}, using position instead"
-            )
-            self.robot_mode = "position"
-            self.turn_on_position_mode()
-
-        # start loop to command the mobile base velocity, publish
-        # odometry, and publish joint states
-        timer_period: float = 1.0 / self.joint_state_rate
-        self.timer = self.create_timer(
-            timer_period,
-            self.command_mobile_base_velocity_and_publish_state,
-            callback_group=self.mutex_group,
-        )
-
-        # self.create_timer(
-        #     1/15,
-        #     self.publish_camera_and_lidar,
-        # )
+    return im
 
 
 def create_laser_scan_msg(lidar_data: np.ndarray, timestamp: TimeMsg, frame_id: str):
@@ -1471,6 +1020,8 @@ def get_camera_frame(camera: StretchCameras):
     raise NotImplementedError(f"Camera {camera} frame is not implemented")
 
 
+
+                
 def main():
     rclpy.init()
 
