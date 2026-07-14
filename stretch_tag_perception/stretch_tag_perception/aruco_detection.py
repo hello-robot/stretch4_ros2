@@ -164,23 +164,13 @@ class ArucoMarker:
         
         R = cv2.Rodrigues(self.aruco_rotation)[0]
 
-        # ----------------- 3D POSE DIAGNOSTIC TRANSFORMS -----------------
-        # Uncomment and modify these to test how transforming the solved 3D pose affects mirroring.
-        
-        # Example C: Mirror position along X axis (e.g., if left/right are inverted)
+        # Mirroring about both X and Y (equivalent to a 180-degree rotation around the optical Z-axis)
         self.marker_position[0] = -self.marker_position[0]
-        R[0, 1] = -R[0, 1]
-        R[0, 2] = -R[0, 2]
-        R[1, 0] = -R[1, 0]
-        R[2, 0] = -R[2, 0]
-        
-        # Example D: Mirror position along Y axis (e.g., if up/down are inverted)
         self.marker_position[1] = -self.marker_position[1]
-        R[1, 0] = -R[1, 0]
-        R[1, 2] = -R[1, 2]
-        R[0, 1] = -R[0, 1]
-        R[2, 1] = -R[2, 1]
-        # -----------------------------------------------------------------
+        
+        # Negate X and Y rows of the rotation matrix (proper right-handed SO(3) rotation)
+        R[0, :] = -R[0, :]
+        R[1, :] = -R[1, :]
 
         T = np.identity(4)
         T[:3,3] = self.marker_position
@@ -396,31 +386,12 @@ class ArucoMarkerCollection:
             num_detected = len(self.aruco_ids)
 
         if num_detected > 0:
-            h_rot, w_rot = rgb_image.shape[:2]
-            w_raw = h_rot
-            h_raw = w_rot
-
             for corners, aruco_id in zip(self.aruco_corners, self.aruco_ids):
-                # Map 2D corners back to unrotated raw space (Approach A)
-                raw_corners = corners.copy()
-                if self.camera_name == 'left':
-                    # 90° CCW rotation: u_raw = w_raw - 1 - v_rot, v_raw = u_rot
-                    u_rot = corners[:, :, 0]
-                    v_rot = corners[:, :, 1]
-                    raw_corners[:, :, 0] = w_raw - 1 - v_rot
-                    raw_corners[:, :, 1] = u_rot
-                elif self.camera_name in ['right', 'center']:
-                    # 90° CW rotation: u_raw = v_rot, v_raw = h_raw - 1 - u_rot
-                    u_rot = corners[:, :, 0]
-                    v_rot = corners[:, :, 1]
-                    raw_corners[:, :, 0] = v_rot
-                    raw_corners[:, :, 1] = h_raw - 1 - u_rot
-                
                 marker = self.get_marker_from_id(aruco_id)
 
                 if marker is not None: 
                     marker.update(
-                        raw_corners,
+                        corners,
                         self.timestamp,
                         self.frame_number,
                         camera_matrix,
@@ -439,7 +410,7 @@ class ArucoMarkerCollection:
                         camera_name=self.camera_name,
                     )
                     temp_marker.update(
-                        raw_corners,
+                        corners,
                         self.timestamp,
                         self.frame_number,
                         camera_matrix,
@@ -571,7 +542,7 @@ class DetectArucoNode(Node):
 
         self.rgb_subs = []
         for cam in self.cameras:
-            topic = f"/cameras_head/{cam}/rotated_image"
+            topic = f"/cameras_head/{cam}/image_raw"
             sub = self.create_subscription(
                 Image,
                 topic,
@@ -708,19 +679,6 @@ class DetectArucoNode(Node):
     def camera_info_callback(self, msg, camera_name):
         matrix = np.array(msg.k).reshape((3, 3))
         dist_coeffs = np.array(msg.d)
-        
-        # ----------------- CAMERA INFO DIAGNOSTIC TRANSFORMS -----------------
-        # Uncomment and modify these to test how changing intrinsics/distortion affects mirroring.
-        
-        # Example A: Horizontal Mirroring of Intrinsics
-        # matrix[0, 2] = msg.width - matrix[0, 2]  # Flip principal point cx
-        # matrix[0, 0] = -matrix[0, 0]             # Invert focal length fx
-        
-        # Example B: Zeroing out Distortion Coefficients (to isolate lens distortion issues)
-        # dist_coeffs = np.zeros_like(dist_coeffs)
-        
-        # logger.info(f"[{camera_name}] Camera Info Callback: matrix=\n{matrix}\ndist_coeffs={dist_coeffs}")
-        # ---------------------------------------------------------------------
 
         self.camera_infos[camera_name] = (matrix, dist_coeffs, msg.header.frame_id)
 

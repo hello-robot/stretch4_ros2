@@ -280,9 +280,6 @@ def launch_setup(context, *args, **kwargs):
         output="both",
     )
 
-
-    # The optical links are now defined natively in the URDF, so we do not need hacky static TFs.
-
     rviz_config_path = os.path.join(
         get_package_share_directory("stretch_core"), "rviz", "cameras.rviz"
     )
