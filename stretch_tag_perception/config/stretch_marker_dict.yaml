@@ -28,7 +28,7 @@
         length_mm: 40.0
         tag_dictionary: "DICT_6X6_50"
         link: apex_aruco_marker_link
-      '66':
+      '68':
         name: 'wrist'
         length_mm: 25.0
         tag_dictionary: "DICT_6X6_100"

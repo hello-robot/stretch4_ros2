@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import copy
 import functools
 import os
 import sys
@@ -17,11 +18,12 @@ from geometry_msgs.msg import Point, TransformStamped
 from rclpy.duration import Duration
 from rclpy.node import Node
 from rclpy.parameter import Parameter
+from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import CameraInfo, Image, PointCloud2
 from tf2_ros.transform_broadcaster import TransformBroadcaster
 from tf_transformations import quaternion_from_matrix
-from visualization_msgs.msg import Marker, MarkerArray
 from vision_msgs.msg import Detection3D, Detection3DArray, ObjectHypothesisWithPose
+from visualization_msgs.msg import Marker, MarkerArray
 
 HEAD_CAMERA_FRAME = "cameras_head_center_camera_optical_frame"
 CAMERA_INFO_TOPIC = "/cameras_head/center/camera_info"
@@ -144,10 +146,10 @@ class ArucoMarker:
         rvecs = np.zeros((len(corners), 1, 3), dtype=np.float64)
         tvecs = np.zeros((len(corners), 1, 3), dtype=np.float64)
         
-        for marker_num in range(len(corners)):
+        for marker_num, corner in enumerate(corners):
             solved, rvecs_ret, tvecs_ret = cv2.solvePnP(
                 objectPoints=points_3d,
-                imagePoints=corners[marker_num],
+                imagePoints=corner,
                 cameraMatrix=self.camera_matrix,
                 distCoeffs=self.camera_dist_coeffs,
             )
@@ -160,9 +162,29 @@ class ArucoMarker:
         # Convert ArUco position estimate to be in meters.        
         self.marker_position = tvecs[0][0]/1000.0
         
+        R = cv2.Rodrigues(self.aruco_rotation)[0]
+
+        # ----------------- 3D POSE DIAGNOSTIC TRANSFORMS -----------------
+        # Uncomment and modify these to test how transforming the solved 3D pose affects mirroring.
+        
+        # Example C: Mirror position along X axis (e.g., if left/right are inverted)
+        self.marker_position[0] = -self.marker_position[0]
+        R[0, 1] = -R[0, 1]
+        R[0, 2] = -R[0, 2]
+        R[1, 0] = -R[1, 0]
+        R[2, 0] = -R[2, 0]
+        
+        # Example D: Mirror position along Y axis (e.g., if up/down are inverted)
+        self.marker_position[1] = -self.marker_position[1]
+        R[1, 0] = -R[1, 0]
+        R[1, 2] = -R[1, 2]
+        R[0, 1] = -R[0, 1]
+        R[2, 1] = -R[2, 1]
+        # -----------------------------------------------------------------
+
         T = np.identity(4)
         T[:3,3] = self.marker_position
-        T[:3, :3] = cv2.Rodrigues(self.aruco_rotation)[0]
+        T[:3, :3] = R
         self.marker_quaternion = quaternion_from_matrix(T)
 
         self.broadcasted = False
@@ -176,7 +198,7 @@ class ArucoMarker:
                 transform_stamped = TransformStamped()
                 transform_stamped.header.stamp = self.timestamp
                 transform_stamped.header.frame_id = self.frame_id
-                transform_stamped.child_frame_id = f"{self.camera_name}_{self.label}"
+                transform_stamped.child_frame_id = f"{self.label}_{self.camera_name}"
                 transform_stamped.transform.translation.x = self.marker_position[0]
                 transform_stamped.transform.translation.y = self.marker_position[1]
                 transform_stamped.transform.translation.z = self.marker_position[2]
@@ -261,8 +283,9 @@ class ArucoMarkerCollection:
 
         self.collection: List[ArucoMarker] = collection
         self.show_debug_images = show_debug_images
-        self.frame_id = frame_id
+        self._frame_id = frame_id
         self.camera_name = camera_name
+        self.temp_markers: List[ArucoMarker] = []
 
         self.aruco_detection_parameters = aruco.DetectorParameters()
         # Apparently available in OpenCV 3.4.1, but not OpenCV 3.2.0.
@@ -274,6 +297,16 @@ class ArucoMarkerCollection:
         self.aruco_detector = aruco_detector
 
         self.frame_number = 0
+
+    @property
+    def frame_id(self):
+        return self._frame_id
+
+    @frame_id.setter
+    def frame_id(self, val):
+        self._frame_id = val
+        for marker in self.collection:
+            marker.frame_id = val
 
     @classmethod
     def from_dict(cls, marker_info: dict, show_debug_images=False, frame_id: str = HEAD_CAMERA_FRAME, camera_name: str = "center"):
@@ -346,12 +379,15 @@ class ArucoMarkerCollection:
         # marker a single time after it has been updated.
         for marker in self.collection:
             marker.broadcast_tf(tf_broadcaster)
+        for marker in self.temp_markers:
+            marker.broadcast_tf(tf_broadcaster, force_redundant=True)
 
     def update(self, rgb_image, camera_matrix, camera_dist_coeffs, timestamp=None):
 
         self.frame_number += 1
         self.timestamp = timestamp
         self.rgb_image = rgb_image
+        self.temp_markers = []
 
         self.aruco_corners, self.aruco_ids = self.aruco_detector.detect_markers(self.rgb_image)
         if self.aruco_ids is None or len(self.aruco_ids) == 0:
@@ -360,24 +396,66 @@ class ArucoMarkerCollection:
             num_detected = len(self.aruco_ids)
 
         if num_detected > 0:
+            h_rot, w_rot = rgb_image.shape[:2]
+            w_raw = h_rot
+            h_raw = w_rot
+
             for corners, aruco_id in zip(self.aruco_corners, self.aruco_ids):
+                # Map 2D corners back to unrotated raw space (Approach A)
+                raw_corners = corners.copy()
+                if self.camera_name == 'left':
+                    # 90° CCW rotation: u_raw = w_raw - 1 - v_rot, v_raw = u_rot
+                    u_rot = corners[:, :, 0]
+                    v_rot = corners[:, :, 1]
+                    raw_corners[:, :, 0] = w_raw - 1 - v_rot
+                    raw_corners[:, :, 1] = u_rot
+                elif self.camera_name in ['right', 'center']:
+                    # 90° CW rotation: u_raw = v_rot, v_raw = h_raw - 1 - u_rot
+                    u_rot = corners[:, :, 0]
+                    v_rot = corners[:, :, 1]
+                    raw_corners[:, :, 0] = v_rot
+                    raw_corners[:, :, 1] = h_raw - 1 - u_rot
                 
                 marker = self.get_marker_from_id(aruco_id)
 
                 if marker is not None: 
                     marker.update(
-                        corners,
+                        raw_corners,
                         self.timestamp,
                         self.frame_number,
                         camera_matrix,
                         camera_dist_coeffs,
                     )
+                else:
+                    # Unknown marker - create a temporary one on the fly and update it
+                    # Default size to 40.0 mm
+                    temp_marker = ArucoMarker(
+                        aruco_id=aruco_id,
+                        label=f"tag_{aruco_id}",
+                        length_mm=40.0,
+                        aruco_detector=None,
+                        show_debug_images=self.show_debug_images,
+                        frame_id=self.frame_id,
+                        camera_name=self.camera_name,
+                    )
+                    temp_marker.update(
+                        raw_corners,
+                        self.timestamp,
+                        self.frame_number,
+                        camera_matrix,
+                        camera_dist_coeffs,
+                    )
+                    self.temp_markers.append(temp_marker)
 
     def get_ros_marker_array(self):
         marker_array = MarkerArray()
         for marker in self.collection:
             if marker.frame_number == self.frame_number:
                 ros_marker = marker.get_ros_marker()
+                marker_array.markers.append(ros_marker)
+        for marker in self.temp_markers:
+            ros_marker = marker.get_ros_marker()
+            if ros_marker:
                 marker_array.markers.append(ros_marker)
         return marker_array
 
@@ -391,6 +469,10 @@ class ArucoMarkerCollection:
                 ros_detection = marker.to_ros_msg()
                 if ros_detection:
                     detection_array.detections.append(ros_detection)
+        for marker in self.temp_markers:
+            ros_detection = marker.to_ros_msg()
+            if ros_detection:
+                detection_array.detections.append(ros_detection)
         return detection_array
 
     def draw_markers(self, img: np.ndarray): 
@@ -463,29 +545,38 @@ class DetectArucoNode(Node):
             self.destroy_subscription(sub)
 
         for cam in self.cameras:
-            matrix, coeffs = self.camera_infos[cam]
+            matrix, coeffs, _ = self.camera_infos[cam]
             logger.info(f"[{cam}] Camera matrix received:\n{matrix}")
             logger.info(f"[{cam}] Camera distortion coefficients received:\n{coeffs}")
 
         # Initialize the aruco marker collections for each camera
         self.aruco_marker_collections = {}
         for cam in self.cameras:
-            camera_frame = f"cameras_head_{cam}_camera_optical_frame"
+            if cam in self.camera_infos:
+                frame_id = self.camera_infos[cam][2]
+            else:
+                if cam == "left":
+                    frame_id = "cameras_head_left_camera_optical_frame"
+                elif cam == "right":
+                    frame_id = "cameras_head_right_camera_optical_frame"
+                else:
+                    frame_id = "cameras_head_center_camera_optical_frame"
+
             self.aruco_marker_collections[cam] = ArucoMarkerCollection.from_dict(
                 self.marker_info,
                 self.show_debug_images,
-                frame_id=camera_frame,
+                frame_id=frame_id,
                 camera_name=cam
             )
 
         self.rgb_subs = []
         for cam in self.cameras:
-            topic = f"/cameras_head/{cam}/image_raw"
+            topic = f"/cameras_head/{cam}/rotated_image"
             sub = self.create_subscription(
                 Image,
                 topic,
                 functools.partial(self.img_callback, camera_name=cam),
-                qos_profile=1
+                qos_profile=qos_profile_sensor_data
             )
             self.rgb_subs.append(sub)
 
@@ -540,12 +631,12 @@ class DetectArucoNode(Node):
     def img_callback(self, img_msg, camera_name):
         try:
             rgb_image = self.cv_bridge.imgmsg_to_cv2(img_msg, 'bgr8')
-            rgb_image_timestamp = img_msg.header.stamp
+            rgb_image_timestamp =  img_msg.header.stamp
         except CvBridgeError as error:
             logger.error(error)
             return
 
-        camera_matrix, camera_dist_coeffs = self.camera_infos[camera_name]
+        camera_matrix, camera_dist_coeffs, _ = self.camera_infos[camera_name]
         collection = self.aruco_marker_collections[camera_name]
 
         collection.update(rgb_image, camera_matrix, camera_dist_coeffs, rgb_image_timestamp)
@@ -617,7 +708,24 @@ class DetectArucoNode(Node):
     def camera_info_callback(self, msg, camera_name):
         matrix = np.array(msg.k).reshape((3, 3))
         dist_coeffs = np.array(msg.d)
-        self.camera_infos[camera_name] = (matrix, dist_coeffs)
+        
+        # ----------------- CAMERA INFO DIAGNOSTIC TRANSFORMS -----------------
+        # Uncomment and modify these to test how changing intrinsics/distortion affects mirroring.
+        
+        # Example A: Horizontal Mirroring of Intrinsics
+        # matrix[0, 2] = msg.width - matrix[0, 2]  # Flip principal point cx
+        # matrix[0, 0] = -matrix[0, 0]             # Invert focal length fx
+        
+        # Example B: Zeroing out Distortion Coefficients (to isolate lens distortion issues)
+        # dist_coeffs = np.zeros_like(dist_coeffs)
+        
+        # logger.info(f"[{camera_name}] Camera Info Callback: matrix=\n{matrix}\ndist_coeffs={dist_coeffs}")
+        # ---------------------------------------------------------------------
+
+        self.camera_infos[camera_name] = (matrix, dist_coeffs, msg.header.frame_id)
+
+        if hasattr(self, 'aruco_marker_collections') and camera_name in self.aruco_marker_collections:
+            self.aruco_marker_collections[camera_name].frame_id = msg.header.frame_id
 
 
 def main(args=None):
