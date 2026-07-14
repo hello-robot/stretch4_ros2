@@ -280,28 +280,8 @@ def launch_setup(context, *args, **kwargs):
         output="both",
     )
 
-    # The driver ignores i_tf_base_frame, so as a hack, we publish a static transform to connect the driver frame to the optical link.
-    static_tf_nodes = []
-    for camera_name in camera_names:
-        if is_launch_config_true(context, f"use_{camera_name}"):
-            driver_name = "rgb" if camera_name == "center" else camera_name
-            static_tf_nodes.append(
-                Node(
-                    package="tf2_ros",
-                    executable="static_transform_publisher",
-                    name=f"static_tf_{camera_name}_camera",
-                    arguments=[
-                        "0",
-                        "0",
-                        "0",
-                        "0",
-                        "0",
-                        "0",
-                        f"camera_{camera_name}_optical_link",
-                        f"{VisionTopics.cameras_namespace()}_{driver_name}_camera_optical_frame",  # This is the name published by the driver
-                    ],
-                )
-            )
+
+    # The optical links are now defined natively in the URDF, so we do not need hacky static TFs.
 
     rviz_config_path = os.path.join(
         get_package_share_directory("stretch_core"), "rviz", "cameras.rviz"
@@ -316,4 +296,4 @@ def launch_setup(context, *args, **kwargs):
         condition=IfCondition(LaunchConfiguration("use_rviz")),
     )
 
-    return [camera_node, rviz_node] + camera_info_nodes + static_tf_nodes
+    return [camera_node, rviz_node] + camera_info_nodes

@@ -9,13 +9,13 @@
         tag_dictionary: "DICT_6X6_100"
         link: None
       '30':
-        name: "tag_30"
+        name: "cube"
         length_mm: 40.0
         tag_dictionary: "DICT_6X6_100"
         link: None
       '31':
         name: "tag_31"
-        length_mm: 60.0
+        length_mm: 64.0
         tag_dictionary: "DICT_6X6_100"
         link: None
       '32':

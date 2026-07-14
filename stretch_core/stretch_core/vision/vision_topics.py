@@ -37,9 +37,9 @@ class VisionFrames(str, Enum):
     ```
     """
 
-    LEFT = "camera_left_optical_link"
-    RIGHT = "camera_right_optical_link"
-    CENTER = "camera_center_optical_link"
+    LEFT = "cameras_head_left_camera_optical_frame"
+    RIGHT = "cameras_head_right_camera_optical_frame"
+    CENTER = "cameras_head_center_camera_optical_frame"
 
     LIDAR_LEFT = "lidar_left_link"
     LIDAR_RIGHT = "lidar_right_link"
