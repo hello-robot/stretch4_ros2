@@ -384,10 +384,25 @@ class StretchDriver(Node):
         lease_holder_msg = DiagnosticStatus()
         lease_holder_msg.name = self.prefix + 'server_lease_holder'
         lease_holder_msg.level = DiagnosticStatus.OK
-        for key in ["lease_holder","lease_holder_priority","lease_expiry"]:
-            lease_holder_msg.values.append(KeyValue(key=key, value=str(robot_status['server'][key])))
-        lease_holder_msg.values.append(KeyValue(key="lease_expired", value=str(time.monotonic() > robot_status['server']['lease_expiry'])))
-        lease_holder_msg.values.append(KeyValue(key="routine_active", value=str(self.robot.routines.status['active_routine'] != 'routine_nop')))
+
+        lease_expiry = robot_status['server']['lease_expiry']
+        lease_expired = time.monotonic() > robot_status['server']['lease_expiry']
+        
+        if lease_expired: 
+            lease_holder = None
+            lease_priority = 0
+            routine_active = False
+        else: 
+            lease_holder = robot_status['server']["lease_holder"]
+            lease_priority = robot_status["server"]["lease_holder_priority"]
+            routine_active = self.robot.routines.status['active_routine'] != 'routine_nop'
+
+        lease_holder_msg.values.append(KeyValue(key="lease_holder", value=str(lease_holder))) 
+        lease_holder_msg.values.append(KeyValue(key="lease_priority", value=str(lease_priority)))
+        lease_holder_msg.values.append(KeyValue(key="lease_expiry", value=str(lease_expiry)))        
+        lease_holder_msg.values.append(KeyValue(key="lease_expired", value=str(lease_expired)))
+        lease_holder_msg.values.append(KeyValue(key="routine_active", value=str(routine_active)))
+        
         self.lease_holder_pub.publish(lease_holder_msg)
 
         # obtain odometry
