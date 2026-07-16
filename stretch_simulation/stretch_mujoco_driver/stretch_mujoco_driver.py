@@ -40,6 +40,13 @@ from sensor_msgs.msg import Image
 from std_msgs.msg import Header
 from rosgraph_msgs.msg import Clock
 
+from rcl_interfaces.msg import ParameterDescriptor, ParameterType, SetParametersResult
+from sensor_msgs.msg import BatteryState, JointState, Joy
+from std_msgs.msg import Bool, String
+from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus
+from control_msgs.msg import JointJog
+
+
 from tf2_ros.static_transform_broadcaster import StaticTransformBroadcaster
 
 
@@ -61,19 +68,28 @@ from hello_helpers.joy_conversion import (
 )
 
 
-# from .joint_trajectory_server import JointTrajectoryAction
+#from .joint_trajectory_server import JointTrajectoryAction
 from builtin_interfaces.msg import Time as TimeMsg
 
 
 from rclpy import time as rclpyTime
 
-from stretch_core.stretch4_ros_api import Stretch4ROSDriver
+from hello_helpers.stretch4_ros_api import Stretch4ROSDriver
 
 
 DEFAULT_SIM_TOOL = "eoa_wrist_dw4_tool_sg4"
 
 
 class StretchMujocoDriver(Stretch4ROSDriver):
+    body_joints = ["lift",
+                   "arm", #joint state pub splits arm into 4; should we do that here
+                   "wrist_yaw",
+                   "wrist_pitch",
+                   "wrist_roll",
+                   #"gripper", #does gripper even work as a joint?
+                   "gripper_right_finger",
+                   "gripper_left_finger"]
+    
     def __init__(self):
         super().__init__('stretch_mujoco_driver')
 
@@ -87,6 +103,8 @@ class StretchMujocoDriver(Stretch4ROSDriver):
 
         self.max_arm_height = 1.1
 
+
+        # Setup sim-only publishers
         self.clock_pub = self.create_publisher(
             msg_type=Clock, topic="/clock", qos_profile=5
         )
@@ -321,9 +339,9 @@ class StretchMujocoDriver(Stretch4ROSDriver):
 
     def joy_callback(self, joy):
         # self.robot_mode_rwlock.acquire_read()
-        if self.robot_mode != "gamepad":
+        if self.robot_mode != "teleop":
             self.logger.error(
-                "{0} Stretch Driver must be in gamepad mode to "
+                "{0} Stretch Driver must be in teleop mode to "
                 "receive a Joy msg on joy topic. "
                 "Current mode = {1}.".format(self.node_name, self.robot_mode)
             )
@@ -344,91 +362,22 @@ class StretchMujocoDriver(Stretch4ROSDriver):
 
         self.sim.set_base_velocity(twist.linear.x, twist.linear.y, twist.angular.z)
     
-    def velocity_jog_callback(self, jog_msg: JointJog):
-        self.movement_mode = "velocity_jog"
-        self.jog_start_t = self.get_clock().now()
-        self.target_vel = {}
-        if jog_msg.duration and jog_msg.duration > 0.0:
-            self.this_jog_duration = Duration(seconds=jog_msg.duration)
-        else:
-            self.this_jog_duration = self.default_jog_duration
-        for a in Actuators:
-            if a.name in jog_msg.joint_names:
-                self.target_vel[a.name]=jog_msg.velocities[jog_msg.joint_names.index(a.name)]
+
+    def set_joint_position(self, joint, target):
+        self.sim.move_to(joint,target)
+
+    def set_joint_velocity(self, joint, target):
+        raise NotImplementedError("Velocity control not yet implemented in sim")
+    
+
+    def publish_child_info(self):
+        # > sim only publish streaming position (??)
+        # > sim only ?? handle runstop?
         
-    def position_jog_callback(self, jog_msg: JointJog):        
-        self.movement_mode = "position_jog"
-        self.jog_start_t = self.get_clock().now()
-        self.movement_mode = "position_cmd"
-        if jog_msg.duration and jog_msg.duration > 0.0:
-            self.this_jog_duration = Duration(seconds=jog_msg.duration)
-        else:
-            self.this_jog_duration = self.default_jog_duration
-        for a in Actuators:
-            if a.name in jog_msg.joint_names:
-                self.sim.move_by(a,jog_msg.displacements[jog_msg.joint_names.index(a.name)])
-
-    def velocity_cmd_callback(self, vel: Float64MultiArray):
-        if len(vel.data) != len(Actuators):
-            self.logger.error(f"Expected velocity command to have length {len(Actuators)} instead got length {len(vel.data)}")
-        self.movement_mode = "velocity_cmd"
-        self.target_vel = {}
-        for a in Actuators:
-            self.target_vel[a.name]=vel.data[a.value]
-        
-    def position_cmd_callback(self, pos: Float64MultiArray):
-        if len(pos.data) != len(Actuators):
-            self.logger.error(f"Expected position command to have length {len(Actuators)} instead got length {len(pos.data)}")
-
-        self.movement_mode = "position_cmd"
-        for a in Actuators:
-            if a not in self.continuous_joints and a not in self.ignored_joints:
-                self.sim.move_to(a,pos.data[a.value])
-
-    def control_loop(self):
-        if self.last_control_loop_time:
-            dur = self.get_clock().now()-self.last_control_loop_time
-            dt = dur.nanoseconds/1e9
-        else:
-            dt = 0.0
-            
-        match self.movement_mode:
-            case "velocity_jog":
-                if self.get_clock().now()-self.jog_start_t < self.this_jog_duration:
-                    for actuator in Actuators:
-                        if actuator.name in self.target_vel:
-                            self.sim.move_by(actuator,dt*self.target_vel[actuator.name])
-                else:
-                    for actuator in Actuators:
-                        if actuator.name in self.target_vel:
-                            self.sim.move_by(actuator, 0.0)
-                    self.movement_mode="done"
-            case "position_jog":
-                if self.get_clock().now()-self.jog_start_t < self.this_jog_duration:
-                    pass
-                else:
-                    for actuator in Actuators:
-                        if actuator.name in self.target_vel:
-                            self.sim.move_by(actuator, 0.0)
-                    self.movement_mode="done"
-            case "velocity_cmd":
-                for actuator in Actuators:
-                    if actuator not in self.continuous_joints and actuator not in self.ignored_joints:
-                        self.sim.move_by(actuator,dt*self.target_vel[actuator.name])
-            case "position_cmd":
-                done = True
-                for a in Actuators:
-                    if a not in self.continuous_joints and a not in self.ignored_joints:
-                        done = done and self.sim.is_reached_set_position(a,self.position_tolerance)
-                if done:
-                    self.movement_mode="done"
-
-        self.last_control_loop_time = self.get_clock().now()
-
+        current_time = self.get_clock().now().to_msg()
         
         # get copy of the current robot status
         robot_status = self.sim.pull_status()
-
         self.logger.debug(robot_status.sim_to_real_time_ratio_msg)
 
         # Publish /clock for ROS to use sim time:
@@ -437,140 +386,12 @@ class StretchMujocoDriver(Stretch4ROSDriver):
         sim_time = rclpyTime.Time(seconds=seconds, nanoseconds=nanoseconds).to_msg()
         self.clock_pub.publish(Clock(clock=sim_time))
 
-        # Use node time for other topics, using sim time makes bad things happen.
-        current_time = self.get_clock().now().to_msg()
-
-        # obtain odometry
-        # assign relevant base status to variables
-        base_status = robot_status.base
-        x = base_status.x
-        y = base_status.y
-        theta = base_status.theta
-        x_vel = base_status.x_vel
-        # y_vel = base_status.y_vel #TODO: implement y_vel in base_status
-        y_vel = base_status.x_vel
-        theta_vel = base_status.theta_vel
-
-        q = quaternion_from_euler(0.0, 0.0, theta)
-
-        if self.broadcast_odom_tf:
-            # publish odometry via TF
-            t = TransformStamped()
-            t.header.stamp = current_time
-            t.header.frame_id = self.odom_frame_id
-            t.child_frame_id = self.base_frame_id
-            t.transform.translation.x = x
-            t.transform.translation.y = y
-            t.transform.translation.z = 0.0
-            t.transform.rotation.x = q[0]
-            t.transform.rotation.y = q[1]
-            t.transform.rotation.z = q[2]
-            t.transform.rotation.w = q[3]
-            self.tf_broadcaster.sendTransform(t)
-
-        # TODO: actually check for homing in sim (this was not implemented in
-        # previous driver)
-        with self.state_lock:
-            self.pubs_state["homed"] = True
-
-        # publish runstop event
-        with self.state_lock:
-            self.pubs_state["runstop_event"] = self.is_runstopped()
-
-        with self.state_lock:
-            self.pubs_state["mode"] = self.robot_mode
-
-        with self.state_lock:
-            self.pubs_state["tool"] = DEFAULT_SIM_TOOL
 
         # publish streaming position status
+        # TODO: figure out what this code is doing and why
         '''streaming_position_status = Bool()
         streaming_position_status.data = self.streaming_position_activated
         self.streaming_position_mode_pub.publish(streaming_position_status)'''
-
-        # publish joint state for the arm
-        joint_state = JointState()
-        joint_state.header = Header()
-        joint_state.header.stamp = current_time
-
-        joint_state.name.append("lift_joint")
-        joint_state.position.append(robot_status.lift.pos)
-        joint_state.velocity.append(robot_status.lift.vel)
-        joint_state.effort.append(robot_status.lift.effort)
-
-        for link in ['arm_l4_joint', 'arm_l3_joint', 'arm_l2_joint', 'arm_l1_joint']:
-            joint_state.name.append(link)
-            joint_state.position.append(robot_status.arm.pos/4)
-            joint_state.velocity.append(robot_status.arm.vel/4)
-            joint_state.effort.append(robot_status.arm.effort/4)
-
-        joint_state.name.append('wrist_yaw_joint')
-        joint_state.position.append(robot_status.wrist_yaw.pos)
-        joint_state.velocity.append(robot_status.wrist_yaw.vel)
-        joint_state.effort.append(robot_status.wrist_yaw.effort)
-
-        joint_state.name.append('wrist_pitch_joint')
-        joint_state.position.append(robot_status.wrist_pitch.pos)
-        joint_state.velocity.append(robot_status.wrist_pitch.vel)
-        joint_state.effort.append(robot_status.wrist_pitch.effort)
-
-        joint_state.name.append('wrist_roll_joint')
-        joint_state.position.append(robot_status.wrist_roll.pos)
-        joint_state.velocity.append(robot_status.wrist_roll.vel)
-        joint_state.effort.append(robot_status.wrist_roll.effort)
-        
-        # for link in ['gripper_finger_left_joint', 'gripper_finger_right_joint']:
-        joint_state.name.append("gripper_finger_left_joint")
-        joint_state.position.append(robot_status.gripper_left_finger.pos)
-        joint_state.velocity.append(robot_status.gripper_left_finger.vel)
-        joint_state.effort.append(robot_status.gripper_left_finger.effort)
-        joint_state.name.append("gripper_finger_right_joint")
-        joint_state.position.append(robot_status.gripper_right_finger.pos)
-        joint_state.velocity.append(robot_status.gripper_right_finger.vel)
-        joint_state.effort.append(robot_status.gripper_right_finger.effort)
-        for w in ['wheel_0_joint', 'wheel_1_joint', 'wheel_2_joint']:
-            joint_state.name.append(w)
-            joint_state.position.append(0.0)
-            joint_state.velocity.append(0.0)
-            joint_state.effort.append(0.0)
-
-        with self.state_lock:
-            self.pubs_state["joint_state"]=joint_state
-
-       
-        # publish odometry via the odom topic
-        odom = Odometry()
-        odom.header.stamp = current_time
-        odom.header.frame_id = self.odom_frame_id
-        odom.child_frame_id = self.base_frame_id
-        odom.pose.pose.position.x = x
-        odom.pose.pose.position.y = y
-        odom.pose.pose.orientation.x = q[0]
-        odom.pose.pose.orientation.y = q[1]
-        odom.pose.pose.orientation.z = q[2]
-        odom.pose.pose.orientation.w = q[3]
-        odom.twist.twist.linear.x = x_vel
-        odom.twist.twist.linear.y = y_vel
-        odom.twist.twist.angular.z = theta_vel
-
-        with self.state_lock:
-            self.pubs_state["odom"]=odom
-
-        runstop_status = self.is_runstopped()
-
-        if (self.prev_runstop_state is None and runstop_status) or (
-            self.prev_runstop_state is not None
-            and runstop_status != self.prev_runstop_state
-        ):
-            self.runstop_the_robot(runstop_status, just_change_mode=True)
-
-        self.prev_runstop_state = runstop_status
-
-        self.publish_camera_and_lidar(current_time=current_time)
-
-    def publish_child_info(self):
-        # Use node time for other topics, using sim time makes bad things happen.
-        current_time = self.get_clock().now().to_msg()
 
          ##################################################
         # publish IMU sensor data
@@ -779,20 +600,23 @@ class StretchMujocoDriver(Stretch4ROSDriver):
                 pointcloud_msg = create_pointcloud_msg(camera_info, frame)
                 self.pointcloud_publishers[camera.name].publish(pointcloud_msg)
 
-    def set_child_param(self, parameter:Parameter) -> bool:
-        updated = False
+    def update_child_parameter(self, parameter:Parameter) -> bool:
         match parameter.name:
             case _:
                 pass
-        return updated
+
+    def check_child_param(self, parameter: Parameter) -> tuple[bool,String]:
+        #TODO: implement actual checking
+        return [True,None] #pass all parameter changes
 
     def change_mode(self, mode):
+        #TODO: clean this up and move checking to check_child_parameter
         if mode not in self.control_modes and mode not in self.priority_modes:
             self.logger.error(f"Mode {mode} not in available control modes, not changing mode.")
             return
 
         if self.robot_mode in self.priority_modes:
-            self.logger.error
+            self.logger.error(f"In priority  mode {self.robot_mode}.")
         
         match mode:
             case "navigation":       
@@ -804,8 +628,320 @@ class StretchMujocoDriver(Stretch4ROSDriver):
                 self.robot_mode = mode
 
 
+    
+    def setup_trajectory_action(self):
+        #TODO: trajectory action server not implemented for mujoco
+        pass
 
-                
+
+    def push_robot_command(self):
+        return
+        if self.last_control_loop_time:
+            dur = self.get_clock().now()-self.last_control_loop_time
+            dt = dur.nanoseconds/1e9
+        else:
+            dt = 0.0
+            
+        match self.movement_mode:
+            case "velocity_jog":
+                if self.get_clock().now()-self.jog_start_t < self.this_jog_duration:
+                    for actuator in Actuators:
+                        if actuator.name in self.target_vel:
+                            self.sim.move_by(actuator,dt*self.target_vel[actuator.name])
+                else:
+                    for actuator in Actuators:
+                        if actuator.name in self.target_vel:
+                            self.sim.move_by(actuator, 0.0)
+                    self.movement_mode="done"
+            case "position_jog":
+                if self.get_clock().now()-self.jog_start_t < self.this_jog_duration:
+                    pass
+                else:
+                    for actuator in Actuators:
+                        if actuator.name in self.target_vel:
+                            self.sim.move_by(actuator, 0.0)
+                    self.movement_mode="done"
+            case "velocity_cmd":
+                for actuator in Actuators:
+                    if actuator not in self.continuous_joints and actuator not in self.ignored_joints:
+                        self.sim.move_by(actuator,dt*self.target_vel[actuator.name])
+            case "position_cmd":
+                done = True
+                for a in Actuators:
+                    if a not in self.continuous_joints and a not in self.ignored_joints:
+                        done = done and self.sim.is_reached_set_position(a,self.position_tolerance)
+                if done:
+                    self.movement_mode="done"
+
+        self.last_control_loop_time = self.get_clock().now()
+
+        # Use node time for other topics, using sim time makes bad things happen.
+        current_time = self.get_clock().now().to_msg()
+        pass
+
+    def get_robot_status(self):
+        robot_status = self.sim.pull_status()
+        self.logger.debug(robot_status.sim_to_real_time_ratio_msg)
+        return robot_status
+        
+    def get_odom(self, robot_status, status_time) -> Odometry:
+         # obtain odometry
+        # assign relevant base status to variables
+        base_status = robot_status.base
+        x = base_status.x
+        y = base_status.y
+        theta = base_status.theta
+        x_vel = base_status.x_vel
+        # y_vel = base_status.y_vel #TODO: implement y_vel in base_status
+        y_vel = base_status.x_vel
+        theta_vel = base_status.theta_vel
+
+        q = quaternion_from_euler(0.0, 0.0, theta)
+        
+        odom = Odometry()
+        odom.header.stamp = status_time
+        odom.header.frame_id = self.odom_frame_id
+        odom.child_frame_id = self.base_frame_id
+        odom.pose.pose.position.x = x
+        odom.pose.pose.position.y = y
+        odom.pose.pose.orientation.x = q[0]
+        odom.pose.pose.orientation.y = q[1]
+        odom.pose.pose.orientation.z = q[2]
+        odom.pose.pose.orientation.w = q[3]
+        odom.twist.twist.linear.x = x_vel
+        odom.twist.twist.linear.y = y_vel
+        odom.twist.twist.angular.z = theta_vel
+
+        return odom
+
+    def get_homed(self, robot_status, status_time) -> Bool:
+        #TODO: return a real value for this (original driver just returns true)
+        return True
+
+
+    def get_mode(self, robot_status, status_time) -> String:
+        return self.robot_mode
+
+                                  
+    def get_tool(self, robot_status, status_time) -> String:
+        return DEFAULT_SIM_TOOL
+
+                                   
+    def get_sensitivity(self, robot_status, status_time) -> String:
+        #TODO: return a real value for this (original driver doesn't do anything)
+        return "simulation"
+              
+    def get_runstop(self, robot_status, status_time) -> Bool:
+        runstop_status = self.is_runstopped()
+
+        #TODO: figure out what this code is doing and why
+        if (self.prev_runstop_state is None and runstop_status) or (
+            self.prev_runstop_state is not None
+            and runstop_status != self.prev_runstop_state
+        ):
+            self.runstop_the_robot(runstop_status, just_change_mode=True)
+
+        self.prev_runstop_state = runstop_status
+
+        return runstop_status
+    
+                                
+    def get_joint_state(self, robot_status, status_time) -> JointState:
+        joint_state = JointState()
+        joint_state.header = Header()
+        joint_state.header.stamp = status_time
+
+        joint_state.name.append("lift_joint")
+        joint_state.position.append(robot_status.lift.pos)
+        joint_state.velocity.append(robot_status.lift.vel)
+        joint_state.effort.append(robot_status.lift.effort)
+
+        for link in ['arm_l4_joint', 'arm_l3_joint', 'arm_l2_joint', 'arm_l1_joint']:
+            joint_state.name.append(link)
+            joint_state.position.append(robot_status.arm.pos/4)
+            joint_state.velocity.append(robot_status.arm.vel/4)
+            joint_state.effort.append(robot_status.arm.effort/4)
+
+        joint_state.name.append('wrist_yaw_joint')
+        joint_state.position.append(robot_status.wrist_yaw.pos)
+        joint_state.velocity.append(robot_status.wrist_yaw.vel)
+        joint_state.effort.append(robot_status.wrist_yaw.effort)
+
+        joint_state.name.append('wrist_pitch_joint')
+        joint_state.position.append(robot_status.wrist_pitch.pos)
+        joint_state.velocity.append(robot_status.wrist_pitch.vel)
+        joint_state.effort.append(robot_status.wrist_pitch.effort)
+
+        joint_state.name.append('wrist_roll_joint')
+        joint_state.position.append(robot_status.wrist_roll.pos)
+        joint_state.velocity.append(robot_status.wrist_roll.vel)
+        joint_state.effort.append(robot_status.wrist_roll.effort)
+        
+        # for link in ['gripper_finger_left_joint', 'gripper_finger_right_joint']:
+        joint_state.name.append("gripper_finger_left_joint")
+        joint_state.position.append(robot_status.gripper_left_finger.pos)
+        joint_state.velocity.append(robot_status.gripper_left_finger.vel)
+        joint_state.effort.append(robot_status.gripper_left_finger.effort)
+        joint_state.name.append("gripper_finger_right_joint")
+        joint_state.position.append(robot_status.gripper_right_finger.pos)
+        joint_state.velocity.append(robot_status.gripper_right_finger.vel)
+        joint_state.effort.append(robot_status.gripper_right_finger.effort)
+        for w in ['wheel_0_joint', 'wheel_1_joint', 'wheel_2_joint']:
+            joint_state.name.append(w)
+            joint_state.position.append(0.0)
+            joint_state.velocity.append(0.0)
+            joint_state.effort.append(0.0)
+
+        return joint_state
+                                  
+    def get_battery(self, robot_status, status_time) -> BatteryState:
+        battery = BatteryState()
+
+        battery.header = Header()
+        battery.header.stamp = status_time
+
+        battery.voltage = float("nan")
+        battery.temperature = float("nan")
+        battery.current = float("nan")
+        battery.charge = float("nan")
+        battery.capacity = float("nan")
+        battery.design_capacity = float("nan")
+        battery.percentage = float("nan")
+
+        battery.power_supply_status = BatteryState.POWER_SUPPLY_STATUS_UNKNOWN
+        battery.power_supply_health = BatteryState.POWER_SUPPLY_HEALTH_UNKNOWN
+        battery.power_supply_technology = BatteryState.POWER_SUPPLY_TECHNOLOGY_UNKNOWN
+
+        battery.present = False
+
+        return battery
+
+    
+    def get_diagnostics(self, robot_status, status_time) -> DiagnosticArray:
+        #TODO: figure out what diagnostics would be helpful to get from sim OR
+        #match the real robot
+        return None
+
+    
+    def get_lease_holder(self, robot_status, status_time) -> DiagnosticStatus:
+        #TODO: figure out what diagnostics would be helpful to get from sim OR
+        #match the real robot
+        # code snippet from real robot driver:
+        '''
+        lease_holder_msg = DiagnosticStatus()
+        lease_holder_msg.name = self.prefix + 'server_lease_holder'
+        lease_holder_msg.level = DiagnosticStatus.OK
+        for key in ["lease_holder","lease_holder_priority","lease_expiry"]:
+            lease_holder_msg.values.append(KeyValue(key=key, value=str(robot_status['server'][key])))
+        lease_holder_msg.values.append(KeyValue(key="lease_expired", value=str(time.monotonic() > robot_status['server']['lease_expiry'])))
+        lease_holder_msg.values.append(KeyValue(key="routine_active", value=str(self.robot.routines.status['active_routine'] != 'routine_nop')))
+        self.lease_holder_pub.publish(lease_holder_msg)'''
+
+        lease_holder_msg = DiagnosticStatus()
+        lease_holder_msg.name = self.prefix + 'server_lease_holder'
+        lease_holder_msg.level = DiagnosticStatus.OK
+        return lease_holder_msg
+
+
+    def get_joint_state_diagnostics(self, robot_status, status_time) -> DiagnosticArray:
+        #TODO: figure out what diagnostics would be helpful to get from sim OR
+        #match the real robot
+        # code snippet from real robot driver:
+        
+        '''
+        joint_state_diagnostics = DiagnosticArray()
+        joint_state_diagnostics.header.stamp = current_time
+
+        at_limit_msg = DiagnosticStatus(name="at_limit")
+        soft_limits_msg = DiagnosticStatus(name="soft_motion_limits")
+        braking_distance_msg = DiagnosticStatus(name="braking_distance")
+        is_homed_msg = DiagnosticStatus(name="is_homed")
+        is_homing_msg = DiagnosticStatus(name="is_homing")
+        is_runstopped_msg = DiagnosticStatus(name="is_runstopped")
+
+        for cg in self.joint_trajectory_action.command_groups:
+            #[... removed some code here that reads off joint states ...]
+            joint_status_key = cg.name.replace("_joint","")
+            if joint_status_key == "gripper":
+                joint_status_key = "stretch_gripper"
+
+            if joint_status_key in ["wrist_roll", "wrist_pitch", "wrist_yaw", "stretch_gripper", "parallel_gripper"]:
+                status_dict = robot_status["end_of_arm"][joint_status_key]
+                is_homed = bool(status_dict.get('pos_calibrated', False))
+                is_homing = bool(status_dict.get('is_homing', False))
+            else: 
+                status_dict = robot_status[joint_status_key]
+                is_homed = bool(status_dict['motor'].get('pos_calibrated', False))
+                is_homing = bool(status_dict['motor'].get('is_homing', False))
+                is_runstopped = bool(status_dict['motor'].get('runstop_on', False))
+
+            at_limit_msg.values.append(KeyValue(key=cg.name, value=f"{status_dict['at_limit']}"))
+            soft_limits_msg.values.append(KeyValue(key=cg.name, value=f"{status_dict['soft_motion_limits']}"))
+            braking_distance_msg.values.append(KeyValue(key=cg.name, value=f"{status_dict['braking_distance']}"))
+            is_homed_msg.values.append(KeyValue(key=cg.name, value=f"{is_homed}"))
+            is_homing_msg.values.append(KeyValue(key=cg.name, value=f"{is_homing}"))
+            is_runstopped_msg.values.append(KeyValue(key=cg.name, value=f"{is_runstopped}"))
+
+        joint_state_diagnostics.status.append(is_runstopped_msg)
+        joint_state_diagnostics.status.append(is_homed_msg)
+        joint_state_diagnostics.status.append(is_homing_msg)
+        joint_state_diagnostics.status.append(at_limit_msg)
+        joint_state_diagnostics.status.append(soft_limits_msg)
+        joint_state_diagnostics.status.append(braking_distance_msg)'''
+        
+        joint_state_diagnostics = DiagnosticArray()
+        joint_state_diagnostics.header.stamp = status_time
+        
+        return joint_state_diagnostics
+
+    def get_safety_diagnostics(self, robot_status, status_time):
+        #TODO: figure out what diagnostics would be helpful to get from sim OR
+        #match the real robot
+        # code snippet from real robot driver:
+
+        '''
+        safety_status = robot_status.get('safety_layer', {})
+        if safety_status:
+            # Safe Motion Manager
+            smm_status = safety_status.get('safe_motion_manager', {})
+            smm_diag = DiagnosticStatus()
+            smm_diag.name = self.prefix + 'safety_layer/safe_motion_manager'
+            smm_diag.level = DiagnosticStatus.OK
+            smm_diag.message = 'OK'
+
+            smm_active = smm_status.get('active', {})
+            for motion_name, is_active in smm_active.items():
+                smm_diag.values.append(KeyValue(key=f"active/{motion_name}", value=str(is_active)))
+
+                motion_data = smm_status.get(motion_name, {})
+                for k, v in motion_data.items():
+                    smm_diag.values.append(KeyValue(key=f"{motion_name}/{k}", value=str(v)))
+
+            triggered = smm_status.get('safe_motions_triggered', [])
+            smm_diag.values.append(KeyValue(key="safe_motions_triggered", value=str(triggered)))
+            if triggered:
+                smm_diag.level = DiagnosticStatus.WARN
+                smm_diag.message = f"Triggered: {', '.join(triggered)}"
+            diag_msg.status.append(smm_diag)
+
+            # Sentry Manager
+            sm_status = safety_status.get('sentry_manager', {})
+            sm_diag = DiagnosticStatus()
+            sm_diag.name = self.prefix + 'safety_layer/sentry_manager'
+            sm_diag.level = DiagnosticStatus.OK
+            sm_diag.message = 'OK'
+
+            sm_active = sm_status.get('active', {})
+            for sentry_name, is_active in sm_active.items():
+                sm_diag.values.append(KeyValue(key=f"active/{sentry_name}", value=str(is_active)))
+
+                sentry_data = sm_status.get(sentry_name, {})
+                for k, v in sentry_data.items():
+                    sm_diag.values.append(KeyValue(key=f"{sentry_name}/{k}", value=str(v)))
+            diag_msg.status.append(sm_diag)
+
+        self.diagnostics_pub.publish(diag_msg)'''
+        return None
 
 name_to_dtypes = {
     "rgb8":    (np.uint8,  3),
