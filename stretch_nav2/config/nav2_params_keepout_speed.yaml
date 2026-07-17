@@ -1,0 +1,28 @@
+# Overlay enabling KeepoutFilter + SpeedFilter on global and local costmaps.
+# Merge after nav2_params_mppi.yaml via MultiYaml.
+
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      filters: ["keepout_filter", "speed_filter"]
+      keepout_filter:
+        plugin: "nav2_costmap_2d::KeepoutFilter"
+        enabled: True
+        filter_info_topic: "/keepout_costmap_filter_info"
+        transform_tolerance: 0.1
+      speed_filter:
+        plugin: "nav2_costmap_2d::SpeedFilter"
+        enabled: True
+        filter_info_topic: "/speed_costmap_filter_info"
+        transform_tolerance: 0.1
+        speed_limit_topic: "/speed_limit"
+
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      filters: ["keepout_filter"]
+      keepout_filter:
+        plugin: "nav2_costmap_2d::KeepoutFilter"
+        enabled: True
+        filter_info_topic: "/keepout_costmap_filter_info"
+        transform_tolerance: 0.1

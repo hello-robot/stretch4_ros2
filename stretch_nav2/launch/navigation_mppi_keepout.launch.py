@@ -1,3 +1,5 @@
+"""Navigation with MPPI + KeepoutFilter + SpeedFilter masks."""
+
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
@@ -35,19 +37,37 @@ def generate_launch_description():
                 PathJoinSubstitution([stretch_navigation_path, 'config', 'nav2_params_core.yaml']),
                 PathJoinSubstitution([stretch_navigation_path, 'config', 'nav2_params_mppi.yaml']),
                 PathJoinSubstitution([stretch_navigation_path, 'config', 'mppi_params.yaml']),
+                PathJoinSubstitution([stretch_navigation_path, 'config', 'nav2_params_keepout_speed.yaml']),
             ]),
             'use_rviz': LaunchConfiguration('use_rviz'),
             'use_composition': LaunchConfiguration('use_composition'),
         }.items(),
     )
 
+    filters_launch = IncludeLaunchDescription(
+        PathJoinSubstitution([
+            stretch_navigation_path, 'launch', 'include', 'keepout_speed_filters.launch.py'
+        ]),
+        launch_arguments={
+            'keepout_mask': LaunchConfiguration('keepout_mask'),
+            'speed_mask': LaunchConfiguration('speed_mask'),
+            'use_sim_time': 'false',
+            'autostart': 'true',
+        }.items(),
+    )
+
     return LaunchDescription([
         DeclareLaunchArgument(
             'map',
-            default_value=PathJoinSubstitution([
-                stretch_navigation_path, 'maps', 'dual_ds3.yaml'
-            ]),
-            description='Full path to the map.yaml file to use for navigation',
+            description='Full path to the occupancy map.yaml',
+        ),
+        DeclareLaunchArgument(
+            'keepout_mask',
+            description='Full path to keepout mask yaml',
+        ),
+        DeclareLaunchArgument(
+            'speed_mask',
+            description='Full path to speed mask yaml',
         ),
         DeclareLaunchArgument(
             'tool_preset',
@@ -58,16 +78,15 @@ def generate_launch_description():
             'use_rviz',
             default_value='true',
             choices=['true', 'false'],
-            description='Start RViz with navigation; requires a graphical display',
         ),
         DeclareLaunchArgument(
             'use_composition',
             default_value='True',
             choices=['True', 'False'],
-            description='Run Nav2 as composed components in a container (False = separate nodes for debugging)',
         ),
         stretch_driver_launch,
         hlidar_launch,
         footprint_launch,
         navigation_launch,
+        filters_launch,
     ])
