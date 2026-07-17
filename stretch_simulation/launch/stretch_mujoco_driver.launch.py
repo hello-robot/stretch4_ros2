@@ -141,8 +141,8 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "mode",
-            default_value="position",
-            choices=["position", "navigation", "trajectory", "gamepad"],
+            default_value="active",
+            choices=["active", "teleop"],
             description="The mode in which the ROS driver commands the robot",
         ),
         DeclareLaunchArgument(

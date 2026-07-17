@@ -14,7 +14,7 @@ from stretch4_mujoco.enums.stretch_cameras import CameraSettings, StretchCameras
 from stretch4_mujoco.utils import get_absolute_path_stretch_xml, models_path
 from stretch4_mujoco.pointcloud_utils import depth_to_points
 
-from rclpy.qos import QoSProfile, ReliabilityPolicy, QoSDurabilityPolicy
+from rclpy.qos import QoSProfile, ReliabilityPolicy
 # from stretch_core.rwlock import RWLock
 from stretch_mujoco_driver.joint_trajectory_server import JointTrajectoryAction
 import tf2_ros
@@ -28,10 +28,6 @@ from rclpy.parameter import Parameter
 
 from geometry_msgs.msg import Twist
 from geometry_msgs.msg import TransformStamped
-from std_msgs.msg import Float64MultiArray
-
-from std_srvs.srv import Trigger
-from std_srvs.srv import SetBool
 
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import CameraInfo
@@ -44,7 +40,6 @@ from rcl_interfaces.msg import ParameterDescriptor, ParameterType, SetParameters
 from sensor_msgs.msg import BatteryState, JointState, Joy
 from std_msgs.msg import Bool, String
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus
-from control_msgs.msg import JointJog
 
 
 from tf2_ros.static_transform_broadcaster import StaticTransformBroadcaster
@@ -61,11 +56,11 @@ from std_msgs.msg import Bool, String, Float64MultiArray
 from hello_helpers.joy_conversion import SE4_dw4_sg4_Idx
 from hello_helpers.joy_conversion import get_Idx
 
-from hello_helpers.joy_conversion import (
+'''from hello_helpers.joy_conversion import (
     unpack_joy_to_gamepad_state,
     unpack_gamepad_state_to_joy,
     get_default_joy_msg,
-)
+)'''
 
 
 #from .joint_trajectory_server import JointTrajectoryAction
@@ -97,11 +92,11 @@ class StretchMujocoDriver(Stretch4ROSDriver):
         #set up any node specific member variables
 
         self.check_and_load_params()
-        self.linear_velocity_mps = 0.0  # m/s ROS SI standard for cmd_vel (REP 103)
-        self.linear_velocity_mps_y = 0.0  # m/s ROS SI standard for cmd_vel (REP 103)
-        self.angular_velocity_radps = 0.0  # rad/s ROS SI standard for cmd_vel (REP 103)
+        #self.linear_velocity_mps = 0.0  # m/s ROS SI standard for cmd_vel (REP 103)
+        #self.linear_velocity_mps_y = 0.0  # m/s ROS SI standard for cmd_vel (REP 103)
+        #self.angular_velocity_radps = 0.0  # rad/s ROS SI standard for cmd_vel (REP 103)
 
-        self.max_arm_height = 1.1
+        #self.max_arm_height = 1.1
 
 
         # Setup sim-only publishers
@@ -126,8 +121,8 @@ class StretchMujocoDriver(Stretch4ROSDriver):
 
         #self.joint_limits_pub = self.create_publisher(JointState, "joint_limits", 1) #needed?
 
-        self.last_twist_time = self.get_clock().now()
-        self.last_gamepad_joy_time = self.get_clock().now()
+        #self.last_twist_time = self.get_clock().now()
+        #self.last_gamepad_joy_time = self.get_clock().now()
 
         self.continuous_joints = [
                 Actuators.left_wheel_vel,
@@ -137,10 +132,10 @@ class StretchMujocoDriver(Stretch4ROSDriver):
                 Actuators.base_translate,
                 Actuators.base_translate_y,]
 
-        self.ignored_joints = [
+        '''self.ignored_joints = [
             Actuators.head_pan,
             Actuators.head_tilt,
-            Actuators.gripper,]
+            Actuators.gripper,]'''
 
         # Robocasa set-up
         if self.use_robocasa:
@@ -152,23 +147,34 @@ class StretchMujocoDriver(Stretch4ROSDriver):
                 scene_xml_path = get_absolute_path_stretch_xml(self.scene_xml)
             else:
                 scene_xml_path = None
-        
+
+        use_cameras = self.get_parameter("use_cameras").value
         self.sim = Stretch4MujocoSimulator(
             scene_xml_path=scene_xml_path,
             model=model,
             camera_hz=10,
             cameras_to_use=(
-                StretchCameras.all_stretch4() if self.use_cameras else StretchCameras.none()
+                StretchCameras.all_stretch4() if use_cameras else StretchCameras.none()
             ),
         )
 
         self.robot_stop_lock = threading.Lock()
-        
-        self.sim.start(headless=not self.use_mujoco_viewer)
+
+        use_mujoco_viewer = self.get_parameter('use_mujoco_viewer').value
+        self.sim.start(headless=not use_mujoco_viewer)
         self.setup_cam_pubs()
-        self.last_control_loop_time = None
-        self.movement_mode = None
-        self.target_vel = None
+        #self.last_control_loop_time = None
+        #self.movement_mode = None
+        #self.target_vel = None
+
+        limits = self.sim.pull_joint_limits()
+        for joint in self.body_joints:
+            (ll,ul) = limits[Actuators[joint]]
+            results = self.set_parameters([Parameter(f"joint_limit.{joint}.upper", Parameter.Type.DOUBLE, ul),
+                                 Parameter(f"joint_limit.{joint}.lower", Parameter.Type.DOUBLE, ll)])
+            success = list(map(lambda x: x.successful, results))
+            reasons = list(map(lambda x: x.reason, results))
+            self.logger.info(f"Setting joint limits for joint {joint} as ({ll},{ul}).  Success: {success}, reasons: {reasons}")
         self.start()
         
     def setup_cam_pubs(self):
@@ -222,16 +228,15 @@ class StretchMujocoDriver(Stretch4ROSDriver):
 
 
     def declare_node_params(self):
-        self.declare_parameter("use_cameras", rclpy.Parameter.Type.BOOL)
-        self.declare_parameter("use_mujoco_viewer", rclpy.Parameter.Type.BOOL)
+        self.declare_parameter("use_cameras", False)
+        self.declare_parameter("use_mujoco_viewer",True)
         self.declare_parameter("controller_calibration_file", rclpy.Parameter.Type.STRING)
 
-        self.declare_parameter("use_robocasa", rclpy.Parameter.Type.BOOL)
+        self.declare_parameter("use_robocasa", False)
 
-        if self.get_parameter("use_robocasa").value:
-            self.declare_parameter("robocasa_task", rclpy.Parameter.Type.STRING)
-            self.declare_parameter("robocasa_layout", rclpy.Parameter.Type.STRING)
-            self.declare_parameter("robocasa_style", rclpy.Parameter.Type.STRING)
+        self.declare_parameter("robocasa_task", rclpy.Parameter.Type.STRING)
+        self.declare_parameter("robocasa_layout", rclpy.Parameter.Type.STRING)
+        self.declare_parameter("robocasa_style", rclpy.Parameter.Type.STRING)
             
         self.declare_parameter("scene_xml", rclpy.Parameter.Type.STRING)
         self.declare_parameter("scene_name", rclpy.Parameter.Type.STRING)
@@ -244,14 +249,6 @@ class StretchMujocoDriver(Stretch4ROSDriver):
     
          
     def check_and_load_params(self):
-        self.use_cameras: bool = self.get_parameter("use_cameras").value
-
-        
-        self.use_mujoco_viewer: bool = self.get_parameter("use_mujoco_viewer").value
-
-        
-        self.controller_calibration_file: str = self.get_parameter("controller_calibration_file").value
-
         self.use_robocasa: bool = self.get_parameter("use_robocasa").value
         if self.use_robocasa:
             
@@ -260,7 +257,6 @@ class StretchMujocoDriver(Stretch4ROSDriver):
 
             self.robocasa_style: str = self.get_parameter("robocasa_style").value
 
-        
         self.scene_xml: str = self.get_parameter("scene_xml").value
         scene_name: str = self.get_parameter("scene_name").value
 
@@ -275,28 +271,7 @@ class StretchMujocoDriver(Stretch4ROSDriver):
         elif scene_name:
             self.scene_xml = models_path / (scene_name + '.xml')
 
-        self.robot_mode: str = self.get_parameter("mode").value
-        
-        self.broadcast_odom_tf: bool = self.get_parameter("broadcast_odom_tf").value
 
-        
-        self.fail_out_of_range_goal: bool = self.get_parameter("fail_out_of_range_goal").value
-
-        self.fail_if_motor_initial_point_is_not_trajectory_first_point: bool = self.get_parameter(
-            "fail_if_motor_initial_point_is_not_trajectory_first_point"
-        ).value
-
-       
-        self.action_server_rate: float = self.get_parameter("action_server_rate").value
-
-        
-        self.timeout_s: float = self.get_parameter("timeout").value
-        self.timeout: Duration = Duration(seconds=self.timeout_s)
-
-        self.default_goal_timeout_s: float = self.get_parameter("default_goal_timeout_s").value
-        self.default_goal_timeout_duration: Duration = Duration(
-            seconds=self.default_goal_timeout_s
-        )
         
     def robocasa_setup(self):
 
@@ -337,31 +312,32 @@ class StretchMujocoDriver(Stretch4ROSDriver):
         )
         return model, xml, objects_info
 
-    def joy_callback(self, joy):
-        # self.robot_mode_rwlock.acquire_read()
-        if self.robot_mode != "teleop":
-            self.logger.error(
-                "{0} Stretch Driver must be in teleop mode to "
-                "receive a Joy msg on joy topic. "
-                "Current mode = {1}.".format(self.node_name, self.robot_mode)
-            )
-            # self.robot_mode_rwlock.release_read()
-            return
-        self.latest_gamepad_joy_msg = joy
-        self.last_gamepad_joy_time = self.get_clock().now()
-        # self.robot_mode_rwlock.release_read()
+    def joy_to_joint_cmd(self, joy):
+        self.get_logger().info(f'Axes: {list(joy.axes)}')
+        self.get_logger().info(f'Buttons: {list(joy.buttons)}')
+        
+        # two-button model for testing; this is placeholder code!
+        # TODO: use actual gamepad mapping
 
-    def base_twist_callback(self, twist:Twist):
-        if self.robot_mode != "navigation":
-            self.logger.error(
-                "{0} node must be in navigation mode to "
-                "receive a twist on cmd_vel. "
-                "Current mode = {1}.".format(self.node_name, self.robot_mode)
-            )
-            return
+        goal_vel = 1.0
+        goal_pos = 1.0
+        
+        goal = JointState()
+        goal.name = ["lift"]
+        if joy.buttons[0] == 1:
+            goal.velocity = [goal_vel]
+            goal.position = [goal_pos]
+        elif joy.buttons[1] == 1:
+            goal.velocity = [-goal_vel]
+            goal.position = [-goal_pos]
+        else:
+            goal.velocity = [0.0]
+            goal.position = [0.0]
 
-        self.sim.set_base_velocity(twist.linear.x, twist.linear.y, twist.angular.z)
-    
+        return goal
+        
+    def set_base_velocity(self, x, y, theta):
+        self.sim.set_base_velocity(x, y, theta)
 
     def set_joint_position(self, joint, target):
         self.sim.move_to(joint,target)
@@ -493,53 +469,52 @@ class StretchMujocoDriver(Stretch4ROSDriver):
         return response
 
     def home_the_robot(self):
-        # self.robot_mode_rwlock.acquire_read()
-        can_home = self.robot_mode in self.control_modes
-        last_robot_mode = copy.copy(self.robot_mode)
-        # self.robot_mode_rwlock.release_read()
+        mode = self.robot_mode()
+        can_home = mode in self.control_modes
+        last_robot_mode = copy.copy(mode)
+        
         if not can_home:
             errmsg = f"Cannot home while in mode={last_robot_mode}."
             self.logger.error(errmsg)
             return False, errmsg
-        self.change_mode("homing", lambda: None)
+
+        self.change_mode("homing")
         self.sim.home()
-        self.change_mode(last_robot_mode, lambda: None)
+        self.change_mode(last_robot_mode)
         return True, "Homed."
 
     def stow_the_robot(self):
-        # self.robot_mode_rwlock.acquire_read()
-        can_stow = self.robot_mode in self.control_modes
-        last_robot_mode = copy.copy(self.robot_mode)
-        # self.robot_mode_rwlock.release_read()
+        mode = self.robot_mode()
+        
+        can_stow = mode in self.control_modes
+        last_robot_mode = copy.copy(mode)
+
         if not can_stow:
             errmsg = f"Cannot stow while in mode={last_robot_mode}."
             self.logger.error(errmsg)
             return False, errmsg
-        self.change_mode("stowing", lambda: None)
+        self.change_mode("stowing")
         self.sim.stow()
-        self.change_mode(last_robot_mode, lambda: None)
+        self.change_mode(last_robot_mode)
         return True, "Stowed."
 
     def is_runstopped(self):
-        return self.robot_mode == "runstopped"
+        return self.robot_mode() == "runstopped"
     
     def runstop_the_robot(self, runstopped, just_change_mode=False):
         if runstopped:
-            # self.robot_mode_rwlock.acquire_read()
-            already_runstopped = self.robot_mode == "runstopped"
+            already_runstopped = self.is_runstopped()
             if not already_runstopped:
-                self.prerunstop_mode = copy.copy(self.robot_mode)
-            # self.robot_mode_rwlock.release_read()
+                self.prerunstop_mode = copy.copy(self.robot_mode())
+
             if already_runstopped:
                 return
-            self.change_mode("runstopped", lambda: None)
+            self.change_mode("runstopped")
         else:
-            # self.robot_mode_rwlock.acquire_read()
-            already_not_runstopped = self.robot_mode != "runstopped"
-            # self.robot_mode_rwlock.release_read()
+            already_not_runstopped = not self.is_runstopped()
             if already_not_runstopped:
                 return
-            self.change_mode(self.prerunstop_mode, lambda: None)
+            self.change_mode(self.prerunstop_mode)
 
     def publish_camera_and_lidar(self, current_time: TimeMsg | None = None):
 
@@ -604,31 +579,27 @@ class StretchMujocoDriver(Stretch4ROSDriver):
         match parameter.name:
             case _:
                 pass
-
+            
     def check_child_param(self, parameter: Parameter) -> tuple[bool,String]:
-        #TODO: implement actual checking
-        return [True,None] #pass all parameter changes
-
-    def change_mode(self, mode):
-        #TODO: clean this up and move checking to check_child_parameter
-        if mode not in self.control_modes and mode not in self.priority_modes:
-            self.logger.error(f"Mode {mode} not in available control modes, not changing mode.")
-            return
-
-        if self.robot_mode in self.priority_modes:
-            self.logger.error(f"In priority  mode {self.robot_mode}.")
+        reason = None
+        found = False
         
-        match mode:
-            case "navigation":       
-                self.linear_velocity_mps = 0.0
-                self.linear_velocity_mps_y = 0.0
-                self.angular_velocity_radps = 0.0
-                self.robot_mode = mode
+        #TODO: implement actual checking
+        match parameter.name:
             case _:
-                self.robot_mode = mode
-
-
+                reason=f"Parameter {parameter.name} not mutable or not found."
+        return found,reason
+        
+                
+    def handle_mode_change(self, mode):
+        # called after set parameter check automatically
+        pass
     
+    def change_mode(self, mode):
+        mode_param = Parameter("mode",Parameter.Type.STRING,mode)
+        result = self.set_parameters([mode_param])[0]
+        return result.successful
+        
     def setup_trajectory_action(self):
         #TODO: trajectory action server not implemented for mujoco
         pass
@@ -636,56 +607,17 @@ class StretchMujocoDriver(Stretch4ROSDriver):
 
     def push_robot_command(self):
         return
-        if self.last_control_loop_time:
-            dur = self.get_clock().now()-self.last_control_loop_time
-            dt = dur.nanoseconds/1e9
-        else:
-            dt = 0.0
-            
-        match self.movement_mode:
-            case "velocity_jog":
-                if self.get_clock().now()-self.jog_start_t < self.this_jog_duration:
-                    for actuator in Actuators:
-                        if actuator.name in self.target_vel:
-                            self.sim.move_by(actuator,dt*self.target_vel[actuator.name])
-                else:
-                    for actuator in Actuators:
-                        if actuator.name in self.target_vel:
-                            self.sim.move_by(actuator, 0.0)
-                    self.movement_mode="done"
-            case "position_jog":
-                if self.get_clock().now()-self.jog_start_t < self.this_jog_duration:
-                    pass
-                else:
-                    for actuator in Actuators:
-                        if actuator.name in self.target_vel:
-                            self.sim.move_by(actuator, 0.0)
-                    self.movement_mode="done"
-            case "velocity_cmd":
-                for actuator in Actuators:
-                    if actuator not in self.continuous_joints and actuator not in self.ignored_joints:
-                        self.sim.move_by(actuator,dt*self.target_vel[actuator.name])
-            case "position_cmd":
-                done = True
-                for a in Actuators:
-                    if a not in self.continuous_joints and a not in self.ignored_joints:
-                        done = done and self.sim.is_reached_set_position(a,self.position_tolerance)
-                if done:
-                    self.movement_mode="done"
 
-        self.last_control_loop_time = self.get_clock().now()
-
-        # Use node time for other topics, using sim time makes bad things happen.
-        current_time = self.get_clock().now().to_msg()
-        pass
-
+    def robot_mode(self):
+        return self.get_parameter('mode').value
+    
     def get_robot_status(self):
         robot_status = self.sim.pull_status()
         self.logger.debug(robot_status.sim_to_real_time_ratio_msg)
         return robot_status
         
     def get_odom(self, robot_status, status_time) -> Odometry:
-         # obtain odometry
+        # obtain odometry
         # assign relevant base status to variables
         base_status = robot_status.base
         x = base_status.x
@@ -720,7 +652,7 @@ class StretchMujocoDriver(Stretch4ROSDriver):
 
 
     def get_mode(self, robot_status, status_time) -> String:
-        return self.robot_mode
+        return self.robot_mode()
 
                                   
     def get_tool(self, robot_status, status_time) -> String:
@@ -820,7 +752,10 @@ class StretchMujocoDriver(Stretch4ROSDriver):
     def get_diagnostics(self, robot_status, status_time) -> DiagnosticArray:
         #TODO: figure out what diagnostics would be helpful to get from sim OR
         #match the real robot
-        return None
+        diagnostics = DiagnosticArray()
+        diagnostics.header.stamp = status_time
+        
+        return diagnostics
 
     
     def get_lease_holder(self, robot_status, status_time) -> DiagnosticStatus:
@@ -941,7 +876,10 @@ class StretchMujocoDriver(Stretch4ROSDriver):
             diag_msg.status.append(sm_diag)
 
         self.diagnostics_pub.publish(diag_msg)'''
-        return None
+        safety_diagnostics = DiagnosticArray()
+        safety_diagnostics.header.stamp = status_time
+        
+        return safety_diagnostics
 
 name_to_dtypes = {
     "rgb8":    (np.uint8,  3),

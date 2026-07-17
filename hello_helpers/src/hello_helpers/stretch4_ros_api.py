@@ -16,12 +16,10 @@ from std_srvs.srv import Trigger, SetBool
 
 from geometry_msgs.msg import Twist, TransformStamped
 from nav_msgs.msg import Odometry
-from std_msgs.msg import Float64MultiArray
 from rcl_interfaces.msg import ParameterDescriptor, ParameterType, SetParametersResult
 from sensor_msgs.msg import BatteryState, JointState, Joy
 from std_msgs.msg import Bool, String
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus
-from control_msgs.msg import JointJog
 
 import tf2_ros
 from tf2_ros.static_transform_broadcaster import StaticTransformBroadcaster
@@ -40,10 +38,10 @@ class Stretch4ROSDriver(Node, ABC):
         self.logger.info("{0} started".format(self.node_name))
 
         self.control_modes = ['active', 'teleop']
-        self.default_mode = "navigation"
+        self.default_mode = 'active'
         self.priority_modes = ['homing', 'stowing', 'runstopped']
         
-        self.declare_common_params()
+        self._declare_common_params()
         self.declare_node_params()
 
         # Runstop management
@@ -54,16 +52,15 @@ class Stretch4ROSDriver(Node, ABC):
         self.main_group = ReentrantCallbackGroup()
         self.mutex_group = MutuallyExclusiveCallbackGroup()
 
-        self.setup_common_pubs()
-        self.setup_common_subs()
-        self.setup_common_srvs()
+        self._setup_common_pubs()
+        self._setup_common_subs()
+        self._setup_common_srvs()
 
         self.last_published_value={}
         
         # TF2
         self.tf_broadcaster = tf2_ros.TransformBroadcaster(self)
         self.tf_static_broadcaster = StaticTransformBroadcaster(self)
-
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
         
@@ -78,27 +75,27 @@ class Stretch4ROSDriver(Node, ABC):
         if mode not in self.control_modes:
             self.logger.warn(f'given invalid mode={mode}, using {self.default_mode} instead')
             mode = self.default_mode
-        self.driver_mode = mode
-        self.driver_mode_lock = Lock()
+            
         self.logger.info('mode = ' + str(mode))
         
-        self.sensitivity = self.get_parameter('sensitivity').value
-        self.logger.info('sensitivity = ' + str(self.sensitivity))
+        sensitivity = self.get_parameter('sensitivity').value
+        self.logger.info('sensitivity = ' + str(sensitivity))
         
-        self.broadcast_odom_tf = self.get_parameter('broadcast_odom_tf').value
-        self.logger.info(f'broadcast_odom_tf = {self.broadcast_odom_tf}')
+        broadcast_odom_tf = self.get_parameter('broadcast_odom_tf').value
+        self.logger.info(f'broadcast_odom_tf = {broadcast_odom_tf}')
 
         action_timeout = self.get_parameter('action_timeout').value
-        self.action_timeout_duration = Duration(seconds=action_timeout)
         self.logger.info(f"action timeout = {action_timeout} s")
         
         velocity_timeout = self.get_parameter('velocity_timeout').value
-        self.velocity_timeout_duration = Duration(seconds=velocity_timeout)
+        #self.velocity_timeout_duration = Duration(seconds=velocity_timeout)
         self.logger.info(f"velocity timeout = {velocity_timeout} s")
         
         self.add_on_set_parameters_callback(self.check_parameter_callback)
         self.add_post_set_parameters_callback(self.parameter_update_callback)
 
+        self.last_position_target = {}
+        self.last_known_state = {}
         self.position_tolerance = self.get_parameter('position_tolerance').value
 
         self.trajectory_server = self.setup_trajectory_action()
@@ -116,19 +113,26 @@ class Stretch4ROSDriver(Node, ABC):
     def declare_node_params(self):
         pass
 
-    def declare_common_params(self):
+    def _declare_common_params(self):
         self.declare_parameter('mode',self.default_mode)
         self.declare_parameter('sensitivity','default')
         self.declare_parameter('broadcast_odom_tf', False) # based on wheel odometry
+
+
+        desc = ParameterDescriptor(
+            dynamic_typing = True,
+            description='Joint properties',
+        )
         
         for joint in self.body_joints:
-            self.declare_parameter(f"joint_acceleration.{joint}",None)
-            self.declare_parameter(f"joint_limit.{joint}.upper",None)
-            self.declare_parameter(f"joint_limit.{joint}.lower",None)
-            self.declare_parameter(f"joint_mode.{joint}","position") #default to position control mode            
+            self.declare_parameter(f"joint_acceleration.{joint}",None, desc)
+            self.declare_parameter(f"joint_limit.{joint}.upper",None, desc)
+            self.declare_parameter(f"joint_limit.{joint}.lower",None, desc)
+            self.declare_parameter(f"joint_mode.{joint}","position", ParameterDescriptor(type=ParameterType.PARAMETER_STRING, description=f"Control mode for individual joint (valid options are: {self.joint_modes})"))
+            #default to position control mode            
             
-        self.declare_parameter("joint_acceleration.omnibase.linear", None)
-        self.declare_parameter("joint_acceleration.omnibase.angular", None)
+        self.declare_parameter("joint_acceleration.omnibase.linear", None, desc)
+        self.declare_parameter("joint_acceleration.omnibase.angular", None, desc)
         
         self.declare_parameter('action_timeout', 3.0, ParameterDescriptor(
             type=ParameterType.PARAMETER_DOUBLE,
@@ -154,7 +158,7 @@ class Stretch4ROSDriver(Node, ABC):
             description='Tolerance on joint position (rad) for position commands',
         ))
 
-    def setup_common_pubs(self):
+    def _setup_common_pubs(self):
         latching_qos = QoSProfile(
             depth=1,
             durability=QoSDurabilityPolicy.TRANSIENT_LOCAL
@@ -182,7 +186,7 @@ class Stretch4ROSDriver(Node, ABC):
         self.latched_publishers.append((self.runstop_pub, self.get_runstop))
         
         self.joint_state_pub = self.create_publisher(JointState, 'joint_states', 1)
-        self.unlatched_publishers.append((self.joint_state_pub, self.get_joint_state))
+        # handle joint state separately; do not add to arrays of regular publishers
         
         self.battery_pub = self.create_publisher(BatteryState, 'battery', 1)
         self.unlatched_publishers.append((self.battery_pub, self.get_battery))
@@ -200,7 +204,7 @@ class Stretch4ROSDriver(Node, ABC):
         # Saved Message States (for latched topics)
         self.last_published_value = {}
 
-    def setup_common_subs(self):
+    def _setup_common_subs(self):
         # Subscribers
         self.create_subscription(Twist, "cmd_vel", self.base_twist_callback, 1, callback_group=self.main_group)
         self.create_subscription(JointState, "joint_velocity_cmd", self.velocity_cmd_callback, 1, callback_group=self.main_group)
@@ -209,7 +213,7 @@ class Stretch4ROSDriver(Node, ABC):
         
         self.create_subscription(Joy, "joy", self.joy_callback, 1, callback_group=self.main_group)
 
-    def setup_common_srvs(self):
+    def _setup_common_srvs(self):
         # Services
         self.stop_the_robot_service = self.create_service(
             Trigger,
@@ -234,7 +238,7 @@ class Stretch4ROSDriver(Node, ABC):
             'runstop_the_robot',
             self.runstop_service_callback,
             callback_group=self.main_group
-        )
+        )    
 
     def setup_common_actions(self):
         pass
@@ -247,11 +251,11 @@ class Stretch4ROSDriver(Node, ABC):
         pass
 
     @abstractmethod
-    def update_child_parameter(self):
+    def update_child_parameter(self, parameter: Parameter):
         pass
 
     @abstractmethod
-    def change_mode(self, mode):
+    def handle_mode_change(self, mode):
         pass
 
     def update_parameter(self, parameter: Parameter):
@@ -259,23 +263,17 @@ class Stretch4ROSDriver(Node, ABC):
         #validated; no need to check
         match parameter.name:
             case "mode":
-                self.change_mode(parameter.value)
+                self.handle_mode_change(parameter.value)
             case "action_timeout":
                 action_timeout = parameter.value
-                self.action_timeout_duration = Duration(seconds=action_timeout)
                 self.logger.info(f"Changed to action timeout = {action_timeout} s")
             case "velocity_timeout":
                 velocity_timeout = parameter.value
-                self.velocity_timeout_duration = Duration(seconds=velocity_timeout)
                 self.logger.info(f"Changed to velocity timeout = {velocity_timeout} s")
-            case "default_jog_duration":
-                self.default_jog_duration = Duration(parameter.value)
-                self.logger.info(f"Changed default jog duration to {self.default_jog_duration}")
             case "position_tolerance":
-                self.position_tolerance = parameter.value
                 self.logger.info(f"Changed position tolerance to {self.position_tolerance}")
             case n if n in [f"joint_mode.{joint}" for joint in self.body_joints]:
-                self.change_joint_mode(joint, parameter.value)
+                self.change_joint_mode(n.split(".")[1], parameter.value)
 
     def change_joint_mode(self, joint, mode):
         #TODO: handle this elegantly (make sure joint is settled before changing modes)
@@ -298,8 +296,8 @@ class Stretch4ROSDriver(Node, ABC):
         match parameter.name:
             case "mode":
                 found=True
-                if parameter.value not in self.control_modes:
-                    reason=f"Mode not in control modes. (Control modes are {self.control_modes})"
+                if parameter.value not in self.control_modes and parameter.value not in self.priority_modes:
+                    reason=f"Mode does not exist. (Control modes are {self.control_modes}. Priority modes are {self.priority_modes}.)"
             case "action_timeout":
                 found=True
                 if parameter.value < 0.0:
@@ -314,8 +312,12 @@ class Stretch4ROSDriver(Node, ABC):
                     reason="Position tolerance cannot be less than 0.0"
             case n if n in [f"joint_mode.{joint}" for joint in self.body_joints]:
                 found = True
-                if parameter not in self.joint_modes:
-                    reason=f"Joint mode must be in {self.joint_modes}."                
+                if parameter.value not in self.joint_modes:
+                    reason=f"Joint mode must be in {self.joint_modes}." 
+            case n if n in [f"joint_limit.{joint}.upper" for joint in self.body_joints]:
+                found = True
+            case n if n in [f"joint_limit.{joint}.lower" for joint in self.body_joints]:
+                found = True
             case _:
                 reason=f"Parameter {parameter.name} not mutable or not found."
         return found,reason
@@ -327,6 +329,7 @@ class Stretch4ROSDriver(Node, ABC):
         for p in parameters:
             found_here,reason_here = self.check_common_param(p)
             found_child,reason_child = self.check_child_param(p)
+            #self.logger.warning(f"Param: {p.name}, found (here,child): {found_here},{found_child}, reason(here,child): {reason_here},{reason_child}")
             
             if found_here and found_child:
                 self.logger.warn(f"Parameter {p.name} exists in Stretch4 API ROS superclass and robot/sim specific subclass.  Subclass should shadow superclass but unexpected behavior may result.")
@@ -334,52 +337,109 @@ class Stretch4ROSDriver(Node, ABC):
                 #if not found, both reasons will be not found errors; use the one here for consistency between real and sim.
                 return SetParametersResult(successful=False,reason=reason_here)
 
-            if reason_here or reason_child:
+            if (reason_here and found_here) or (reason_child and found_child):
                 reasons = [reason_here,reason_child]
-                return SetParametersResult(successful=False,reason=f"{reasons.join(' ')} (multiple reasons for rejection are possible)")
+                reasons = filter(lambda x: x is not None, reasons)
+                return SetParametersResult(successful=False,reason=f"{' '.join(reasons)} (multiple reasons for rejection are possible)")
 
-            return SetParametersResult(successful=True)
+        return SetParametersResult(successful=True)
+
+    def base_twist_callback(self, twist:Twist):
+        self.logger.info(f"Got request for base twist: x:{twist.linear.x}, y:{twist.linear.y}, theta:{twist.angular.z}") 
+        
+        mode = self.robot_mode()
+        if self.robot_mode() != "active":
+            self.logger.warn(f"Cannot send base commands while robot is in mode {mode}.  Must be in mode 'active'")
+            return
+
+        self.set_base_velocity(twist.linear.x, twist.linear.y, twist.angular.z)
 
     @abstractmethod
-    def base_twist_callback(self, twist:Twist):
+    def set_base_velocity(self, x, y, theta):
         pass
 
     def velocity_cmd_callback(self, target: JointState):
+        self.logger.info(f"Got velocity command request: names: {target.name} velocities: {target.velocity} position: {target.position} (NB: position not used in velocity command!)")
+        current_mode = self.get_parameter('mode').value
+        if current_mode != 'active':
+            self.logger.warn(f"Cannot send position commands while robot is in mode {current_mode}.  Must be in mode 'active'")
+            return
+            
         for i in range(len(target.name)):
-            joint_name = target.name[i]
-            mode = self.get_parameter(f"joint_mode.{joint_name}").value
-            if mode != "velocity":
-                self.logger.warn(f"Cannot send velocity command to joint {joint_name} while in {mode} mode (must be in 'velocity' mode).")
-            else:
-                self.set_joint_velocity(joint, target.velocity[i])
+            self._check_and_set_vel(target.name[i],target.velocity[i])
 
     @abstractmethod
     def set_joint_velocity(self, joint, target):
         pass
 
-    def position_cmd_callback(self, target: JointState):
-        for i in range(len(target.name)):
-            joint_name = target.name[i]
-            mode = self.get_parameter(f"joint_mode.{joint_name}").value
-            if mode != "position":
-                self.logger.warn(f"Cannot send position command to joint {joint_name} while in {mode} mode (must be in 'position' mode).")
-            else:
-                goal_pose = target.position[i]
-                limits = self.get_parameters_by_prefix(f"joint_limit.{joint_name}")
-                ul = limits["upper"].value
-                ll = limits["lower"].value
+    def _check_and_set_vel(self, joint_name, goal):
+        mode = self.get_parameter(f"joint_mode.{joint_name}").value
+        if mode != "velocity":
+            self.logger.warn(f"Cannot send velocity command to joint {joint_name} while in {mode} mode (must be in 'velocity' mode).")
+        else:
+            self.set_joint_velocity(joint_name, goal)
+        
+        
+    def _check_and_set_pos(self, joint_name, goal):
+        mode = self.get_parameter(f"joint_mode.{joint_name}").value
+        if mode != "position":
+            self.logger.warn(f"Cannot send position command to joint {joint_name} while in {mode} mode (must be in 'position' mode).")
+        else:
+            limits = self.get_parameters_by_prefix(f"joint_limit.{joint_name}")
+            ul = limits["upper"].value
+            ll = limits["lower"].value
                 
-                if (ul is None or goal_pose <= ul) and (ll is None or goal_pose >= ll):
-                    self.set_joint_position(joint_name, target.position[i])
-                else:
-                    self.logger.warn(f"Cannot send position command to joint {joint_name}: goal pose {goal_pose} outside of joint limits ({ll},{ul}).")
+            if (ul is None or goal <= ul) and (ll is None or goal >= ll):
+                # TODO: maybe one last check that the robot's mode hasn't changed
+                self.last_position_target[joint_name]=goal
+                self.set_joint_position(joint_name, goal)
+            else:
+                self.logger.warn(f"Cannot send position command to joint {joint_name}: goal pose {goal} outside of joint limits ({ll},{ul}).")
     
+    
+    def position_cmd_callback(self, target: JointState):
+        self.logger.info(f"Got position command request: names: {target.name} velocities: {target.velocity} position: {target.position} (NB: velocity not used in velocity command!)")
+        current_mode = self.get_parameter('mode').value
+        if current_mode != 'active':
+            self.logger.warn(f"Cannot send position commands while robot is in mode {current_mode}.  Must be in mode 'active'")
+            return
+            
+        for i in range(len(target.name)):
+            self._check_and_set_pos(target.name[i],target.position[i])
+
     @abstractmethod
     def set_joint_position(self, joint, target):
         pass
 
-    @abstractmethod
     def joy_callback(self, joy_msg: Joy):
+        self.logger.info(f"Got joy message. Buttons: {joy_msg.buttons} Axes: {joy_msg.axes} (this message is throttled to appear at most every 2s)", throttle_duration_sec = 2.0)
+        
+        current_mode = self.get_parameter('mode').value
+        if current_mode != 'teleop':
+            self.logger.warn(f"Cannot send joystick commands while robot is in mode {current_mode}.  Must be in mode 'active'")
+            return
+        
+        goal = self.joy_to_joint_cmd(joy_msg)
+        for i in range(len(goal.name)):
+            joint_name = goal.name[i]
+            joint_mode = self.get_parameter(f"joint_mode.{joint_name}").value
+            match joint_mode:
+                case "position":
+                    if len(goal.position) < len(goal.name):
+                        self.logger.error(f"Joystick command mapping for position has length {len(goal.position)} (expected length {len(goal.name)} to set target for joint {joint_name} in position control mode)")
+                    self._check_and_set_pos(joint_name, goal.position[i])
+                case "velocity":
+                    if len(goal.velocity) < len(goal.name):
+                        self.logger.error(f"Joystick command mapping for velocity has length {len(goal.velocity)} (expected length {len(goal.name)} to set target for joint {joint_name} in veloctiy control mode)")
+                    self._check_and_set_vel(joint_name, goal.velocity[i])
+                case _:
+                    self.logger.warn(f"Joint in unsupported mode {joint_mode}.  Joint must be in position or velocity mode to accept joystick control.  Skipping this joint.")
+            
+        
+        
+    @abstractmethod
+    def joy_to_joint_cmd(self, joy_msg: Joy) -> JointState:
+        #joint state returned must contain ONLY velocity or position
         pass
 
     @abstractmethod
@@ -387,7 +447,7 @@ class Stretch4ROSDriver(Node, ABC):
         pass
 
     def update_latched_value(self, pub: Publisher, value: Any):
-        key = pub.topic
+        key = pub.topic_name
         if value == self.last_published_value.get(key):
             return
         msg = pub.msg_type()
@@ -413,17 +473,17 @@ class Stretch4ROSDriver(Node, ABC):
 
     def control_loop(self):
         # Capture driver mode
-        current_mode = None
-        with self.driver_mode_lock:
-            current_mode = self.driver_mode
+        current_mode = self.get_parameter('mode').value
 
         status = self.get_robot_status()
         
         current_time = self.get_clock().now().to_msg()
 
+        # handle odom separately
         odom = self.get_odom(status, current_time)
-        
-        if self.broadcast_odom_tf:
+
+        broadcast_odom_tf=self.get_parameter("broadcast_odom_tf").value
+        if broadcast_odom_tf:
             # publish odometry via TF
             t = TransformStamped()
             t.header.stamp = current_time
@@ -440,9 +500,14 @@ class Stretch4ROSDriver(Node, ABC):
 
         self.odom_pub.publish(odom)
 
+        # handle joint state separately to enable internal tracking
+        joint_state = self.get_joint_state(status, current_time)
+        self.last_known_state = dict(zip(joint_state.name, joint_state.position))
+        self.joint_state_pub.publish(joint_state)
+        
         for (pub, msg_cb) in self.latched_publishers:
             message = msg_cb(status, current_time)
-            if message:
+            if message is not None:
                 self.update_latched_value(pub, message)
             else:
                 self.logger.warn(f"Function {msg_cb.__name__} for latched publisher returned None; skipping latched value update. (This warning is throttled to appear at most every 2s)", throttle_duration_sec=2)
