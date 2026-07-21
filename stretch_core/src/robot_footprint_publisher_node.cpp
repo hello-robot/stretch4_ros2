@@ -183,6 +183,7 @@ private:
     declare_parameter("joint_change_threshold_rad", 0.01);
     declare_parameter("footprint_change_epsilon_m", 0.01);
     declare_parameter("base_footprint_polygon", std::vector<double>{});
+    declare_parameter("base_only_footprint_polygon", std::vector<double>{});
   }
 
   void loadParameters()
@@ -201,6 +202,12 @@ private:
     joint_change_threshold_rad_ = get_parameter("joint_change_threshold_rad").as_double();
     footprint_change_epsilon_m_ = get_parameter("footprint_change_epsilon_m").as_double();
     base_polygon_ = parseBasePolygon(get_parameter("base_footprint_polygon").as_double_array());
+    base_only_polygon_ = parseBasePolygon(
+      get_parameter("base_only_footprint_polygon").as_double_array());
+    // Fall back to the normal base polygon if base-only is unset.
+    if (base_only_polygon_.size() < 3) {
+      base_only_polygon_ = base_polygon_;
+    }
 
     self_filter_config_ = stretch_core::loadRobotSelfFilterConfig(*this);
     self_filter_.setConfig(self_filter_config_);
@@ -325,12 +332,12 @@ private:
 
   void publishBaseFootprintOnly()
   {
-    if (base_polygon_.size() < 3) {
+    if (base_only_polygon_.size() < 3) {
       RCLCPP_ERROR(get_logger(), "Cannot publish base footprint; polygon has fewer than 3 vertices.");
       return;
     }
-    last_published_hull_ = base_polygon_;
-    publishFootprint(base_polygon_);
+    last_published_hull_ = base_only_polygon_;
+    publishFootprint(base_only_polygon_);
   }
 
   void joystickControlCallback(
@@ -391,6 +398,7 @@ private:
   bool joystick_control_{false};
 
   std::vector<Eigen::Vector2f> base_polygon_;
+  std::vector<Eigen::Vector2f> base_only_polygon_;
   std::vector<Eigen::Vector2f> last_published_hull_;
   std::unordered_map<std::string, double> last_joint_positions_;
 
