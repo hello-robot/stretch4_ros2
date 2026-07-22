@@ -306,6 +306,7 @@ private:
       return;
     }
     msg1_ = msg;
+    msg1_arrival_time_ = now();
   }
 
   void pointcloudCallback2(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
@@ -314,6 +315,7 @@ private:
       return;
     }
     msg2_ = msg;
+    msg2_arrival_time_ = now();
   }
 
 
@@ -326,6 +328,17 @@ private:
 
     if (!msg1_ || !msg2_) {
       RCLCPP_WARN(get_logger(), "One or both LIDAR messages not yet received.");
+      return;
+    }
+
+    const auto current_time = now();
+    const double msg1_age = (current_time - msg1_arrival_time_).seconds();
+    const double msg2_age = (current_time - msg2_arrival_time_).seconds();
+    if (msg1_age > 1.0 || msg2_age > 1.0) {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 2000,
+        "LIDAR messages are stale (arrival age: msg1=%.3f s, msg2=%.3f s). Ignoring to prevent outdated collision monitoring.",
+        msg1_age, msg2_age);
       return;
     }
 
@@ -356,8 +369,7 @@ private:
     }
 
     auto scan = std::make_shared<sensor_msgs::msg::LaserScan>();
-    // scan->header.stamp = now();
-    scan->header.stamp = output_header.stamp;
+    scan->header.stamp = now();
     scan->header.frame_id = "laser";
     scan->angle_min = scan_cfg_.angle_min;
     scan->angle_max = scan_cfg_.angle_max;
@@ -497,6 +509,8 @@ private:
 
   sensor_msgs::msg::PointCloud2::ConstSharedPtr msg1_;
   sensor_msgs::msg::PointCloud2::ConstSharedPtr msg2_;
+  rclcpp::Time msg1_arrival_time_;
+  rclcpp::Time msg2_arrival_time_;
 
   std::string filter_type_;
   std::string lidar1_topic_;
