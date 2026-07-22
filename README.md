@@ -12,6 +12,7 @@ Resource                                                     | Description
 [stretch_description](stretch_description/README.md)         | Visualize Stretch 4's URDF
 [stretch_nav2](stretch_nav2/README.md)                       | Navigation stack built on Nav2
 [stretch_simulation](stretch_simulation/README.md)           | Simulation of Stretch 4, built on [Stretch4 Mujoco](https://github.com/hello-robot/stretch4_mujoco)
+[stretch_tag_perception](stretch_python_bridge/README.md)     | Detect aruco tags with Stretch 4 
 [stretch_python_bridge](stretch_python_bridge/README.md)     | A high-level Python API that abstracts away rclpy 
 [hello_helpers](hello_helpers/README.md)                     | Miscellaneous helper code used across the stretch_ros2 repository
 
@@ -26,4 +27,5 @@ stretch_description     | [BSD 3-Clause Clear License](https://choosealicense.co
 stretch_nav2            | [Apache 2.0](http://www.apache.org/licenses/LICENSE-2.0)
 stretch_simulation      | [Apache 2.0](http://www.apache.org/licenses/LICENSE-2.0)
 stretch_python_bridge   | [Apache 2.0](http://www.apache.org/licenses/LICENSE-2.0)
+stretch_tag_perception   | [Apache 2.0](http://www.apache.org/licenses/LICENSE-2.0)
 hello_helpers           | [Apache 2.0](http://www.apache.org/licenses/LICENSE-2.0)

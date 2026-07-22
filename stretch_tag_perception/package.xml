@@ -3,9 +3,9 @@
 <package format="3">
   <name>stretch_tag_perception</name>
   <version>0.0.0</version>
-  <description>Node to detect aruco tags in stretch</description>
+  <description>A package to detect aruco tags with Stretch 4</description>
   <maintainer email="support@hello-robot.com"></maintainer>
-  <license>TODO: License declaration</license>
+  <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
   <buildtool_depend>ament_cmake_python</buildtool_depend>
