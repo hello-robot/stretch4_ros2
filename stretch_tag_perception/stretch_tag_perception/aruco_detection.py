@@ -527,11 +527,11 @@ class DetectArucoNode(Node):
                 frame_id = self.camera_infos[cam][2]
             else:
                 if cam == "left":
-                    frame_id = "cameras_head_left_camera_optical_frame"
+                    frame_id = "camera_left_optical_link"
                 elif cam == "right":
-                    frame_id = "cameras_head_right_camera_optical_frame"
+                    frame_id = "camera_right_optical_link"
                 else:
-                    frame_id = "cameras_head_center_camera_optical_frame"
+                    frame_id = "camera_center_optical_link"
 
             self.aruco_marker_collections[cam] = ArucoMarkerCollection.from_dict(
                 self.marker_info,
