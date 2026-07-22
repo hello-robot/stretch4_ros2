@@ -25,7 +25,7 @@ from tf_transformations import quaternion_from_matrix
 from vision_msgs.msg import Detection3D, Detection3DArray, ObjectHypothesisWithPose
 from visualization_msgs.msg import Marker, MarkerArray
 
-HEAD_CAMERA_FRAME = "cameras_head_center_camera_optical_frame"
+HEAD_CAMERA_FRAME = "camera_center_optical_link"
 CAMERA_INFO_TOPIC = "/cameras_head/center/camera_info"
 CENTER_CAMERA_TOPIC = "/cameras_head/center/image_raw"
 
@@ -673,6 +673,7 @@ class DetectArucoNode(Node):
             new_h = int(h * scale)
             combined_image = cv2.resize(combined_image, (max_display_width, new_h))
 
+        cv2.namedWindow('Detected ArUco Markers - Combined', cv2.WINDOW_NORMAL)
         cv2.imshow('Detected ArUco Markers - Combined', combined_image)
         cv2.waitKey(1)
 
