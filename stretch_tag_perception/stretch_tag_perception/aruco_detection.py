@@ -188,7 +188,7 @@ class ArucoMarker:
                 transform_stamped = TransformStamped()
                 transform_stamped.header.stamp = self.timestamp
                 transform_stamped.header.frame_id = self.frame_id
-                transform_stamped.child_frame_id = f"{self.label}_{self.camera_name}"
+                transform_stamped.child_frame_id = f"aruco_perception_{self.label}_{self.camera_name}"
                 transform_stamped.transform.translation.x = self.marker_position[0]
                 transform_stamped.transform.translation.y = self.marker_position[1]
                 transform_stamped.transform.translation.z = self.marker_position[2]
@@ -554,6 +554,7 @@ class DetectArucoNode(Node):
         if not self.has_parameter('publish_markers'):
             self.declare_parameter('publish_markers', False)
         self.publish_markers = self.get_parameter('publish_markers').value
+        self.publish_markers = self.publish_markers == "true" or self.publish_markers == True
 
         self.visualize_markers_pub = self.create_publisher(MarkerArray, '/aruco/marker_array', 1)
         self.visualize_detections_pub = self.create_publisher(Detection3DArray, '/aruco/detections', 1)
@@ -565,7 +566,7 @@ class DetectArucoNode(Node):
         try:
             pkg_share = get_package_share_directory('stretch_tag_perception')
             stretch_yaml_path = os.path.join(pkg_share, 'config', 'stretch_marker_dict.yaml')
-            user_yaml_path = os.path.join(pkg_share, 'config', 'user_aruco_dictionary.yaml')
+            user_yaml_path = os.path.join(pkg_share, 'config', 'user_aruco_dict.yaml')
 
             for yaml_path in [stretch_yaml_path, user_yaml_path]:
                 if os.path.exists(yaml_path):

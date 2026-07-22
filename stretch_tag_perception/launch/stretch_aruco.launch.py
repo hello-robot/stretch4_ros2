@@ -11,7 +11,7 @@ def launch_setup(context, *args, **kwargs):
 
     additional_marker_dict = LaunchConfiguration("aruco_config_filepath").perform(context)
     if not additional_marker_dict:
-        additional_marker_dict = os.path.join(get_package_share_directory('stretch_tag_perception'), 'config', 'user_aruco_dictionary.yaml')
+        additional_marker_dict = os.path.join(get_package_share_directory('stretch_tag_perception'), 'config', 'user_aruco_dict.yaml')
         
     stretch_marker_dict = os.path.join(get_package_share_directory('stretch_tag_perception'), 'config', 'stretch_marker_dict.yaml')
 
@@ -40,6 +40,11 @@ def generate_launch_description():
             "cameras",
             default_value="center",
             description="Camera(s) to use for detection (comma-separated list of: left, right, center, or 'all')."
+        ),
+        DeclareLaunchArgument(
+            "publish_markers",
+            default_value="false",
+            description="Publish the markers topic. If you do not publish this, the detections will still be available via TF."
         ),
         OpaqueFunction(function=launch_setup)
     ])
