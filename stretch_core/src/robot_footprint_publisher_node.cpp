@@ -2,6 +2,7 @@
 #include <geometry_msgs/msg/polygon.hpp>
 #include <geometry_msgs/msg/polygon_stamped.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
+#include <std_srvs/srv/set_bool.hpp>
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
 
@@ -151,6 +152,16 @@ public:
     joint_states_sub_ = create_subscription<sensor_msgs::msg::JointState>(
       joint_states_topic_, rclcpp::QoS(10),
       std::bind(&RobotFootprintPublisherNode::jointStatesCallback, this, std::placeholders::_1));
+
+    joystick_control_service_ = create_service<std_srvs::srv::SetBool>(
+      "joystick_control",
+      std::bind(
+        &RobotFootprintPublisherNode::joystickControlCallback, this,
+        std::placeholders::_1, std::placeholders::_2));
+    RCLCPP_INFO(
+      get_logger(),
+      "Joystick control footprint service ready on ~/joystick_control "
+      "(data=true: base-only; data=false: joint-state / arm footprint).");
   }
 
 private:
@@ -172,6 +183,7 @@ private:
     declare_parameter("joint_change_threshold_rad", 0.01);
     declare_parameter("footprint_change_epsilon_m", 0.01);
     declare_parameter("base_footprint_polygon", std::vector<double>{});
+    declare_parameter("base_only_footprint_polygon", std::vector<double>{});
   }
 
   void loadParameters()
@@ -190,6 +202,12 @@ private:
     joint_change_threshold_rad_ = get_parameter("joint_change_threshold_rad").as_double();
     footprint_change_epsilon_m_ = get_parameter("footprint_change_epsilon_m").as_double();
     base_polygon_ = parseBasePolygon(get_parameter("base_footprint_polygon").as_double_array());
+    base_only_polygon_ = parseBasePolygon(
+      get_parameter("base_only_footprint_polygon").as_double_array());
+    // Fall back to the normal base polygon if base-only is unset.
+    if (base_only_polygon_.size() < 3) {
+      base_only_polygon_ = base_polygon_;
+    }
 
     self_filter_config_ = stretch_core::loadRobotSelfFilterConfig(*this);
     self_filter_.setConfig(self_filter_config_);
@@ -312,8 +330,46 @@ private:
     return true;
   }
 
+  void publishBaseFootprintOnly()
+  {
+    if (base_only_polygon_.size() < 3) {
+      RCLCPP_ERROR(get_logger(), "Cannot publish base footprint; polygon has fewer than 3 vertices.");
+      return;
+    }
+    last_published_hull_ = base_only_polygon_;
+    publishFootprint(base_only_polygon_);
+  }
+
+  void joystickControlCallback(
+    const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
+    std::shared_ptr<std_srvs::srv::SetBool::Response> response)
+  {
+    joystick_control_ = request->data;
+    if (joystick_control_) {
+      // Joystick teleop: publish the fixed base polygon only (no arm).
+      publishBaseFootprintOnly();
+      response->success = true;
+      response->message = "Joystick control enabled; publishing base footprint only.";
+      RCLCPP_INFO(get_logger(), "%s", response->message.c_str());
+      return;
+    }
+
+    // Default / joystick off: expand footprint from live arm / joint TF.
+    const bool updated = updateFootprintIfChanged(true);
+    response->success = true;
+    response->message = updated
+      ? "Joystick control disabled; publishing joint-state / arm footprint."
+      : "Joystick control disabled; waiting for joint-state / TF footprint update.";
+    RCLCPP_INFO(get_logger(), "%s", response->message.c_str());
+  }
+
   void jointStatesCallback(const sensor_msgs::msg::JointState::SharedPtr msg)
   {
+    // While joystick teleop is active, keep the fixed base footprint.
+    if (joystick_control_) {
+      return;
+    }
+
     const bool first_joint_state = !received_first_joint_state_;
     received_first_joint_state_ = true;
     if (!first_joint_state && !jointsMovedEnough(*msg)) {
@@ -339,8 +395,10 @@ private:
   bool published_local_costmap_footprint_{false};
   bool published_global_costmap_footprint_{false};
   bool received_first_joint_state_{false};
+  bool joystick_control_{false};
 
   std::vector<Eigen::Vector2f> base_polygon_;
+  std::vector<Eigen::Vector2f> base_only_polygon_;
   std::vector<Eigen::Vector2f> last_published_hull_;
   std::unordered_map<std::string, double> last_joint_positions_;
 
@@ -355,6 +413,7 @@ private:
   rclcpp::Subscription<geometry_msgs::msg::PolygonStamped>::SharedPtr local_published_footprint_sub_;
   rclcpp::Subscription<geometry_msgs::msg::PolygonStamped>::SharedPtr global_published_footprint_sub_;
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr joint_states_sub_;
+  rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr joystick_control_service_;
 };
 
 int main(int argc, char ** argv)

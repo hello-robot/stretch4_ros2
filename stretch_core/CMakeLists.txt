@@ -26,6 +26,7 @@ find_package(message_filters REQUIRED)
 find_package(PCL REQUIRED)
 find_package(pcl_conversions REQUIRED)
 find_package(visualization_msgs REQUIRED)
+find_package(std_srvs REQUIRED)
 find_package(OpenMP REQUIRED)
 
 set(lidar_filter_dependencies
@@ -79,6 +80,7 @@ ament_target_dependencies(
   rclcpp
   geometry_msgs
   sensor_msgs
+  std_srvs
   visualization_msgs
   tf2_ros
   tf2_eigen)
