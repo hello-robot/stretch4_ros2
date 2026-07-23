@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import time
+from dataclasses import fields as dataclass_fields
 
 import numpy as np
 import rclpy
@@ -81,6 +82,11 @@ class LineSensorPublisher(Node):
         self._points_pub = self.create_publisher(PointCloud2, self._points_topic, qos_profile_sensor_data)
         self._obstacle_pub = self.create_publisher(PointCloud2, self._obstacle_topic, qos_profile_sensor_data)
         self._small_drop_pub = self.create_publisher(PointCloud2, self._small_drop_topic, qos_profile_sensor_data)
+        self._probable_cliff_pub = self.create_publisher(
+            PointCloud2, self._probable_cliff_topic, qos_profile_sensor_data,
+        )
+        self._deep_drop_pub = self.create_publisher(PointCloud2, self._deep_drop_topic, qos_profile_sensor_data)
+        self._degraded_pub = self.create_publisher(PointCloud2, self._degraded_topic, qos_profile_sensor_data)
         self._counts_pub = self.create_publisher(String, self._counts_topic, 10)
 
         self._debug_pubs = {}
@@ -91,6 +97,10 @@ class LineSensorPublisher(Node):
                 'raw_small_drop': self.create_publisher(PointCloud2, self._raw_small_drop_topic, qos_profile_sensor_data),
                 'spatial_small_drop': self.create_publisher(PointCloud2, self._spatial_small_drop_topic, qos_profile_sensor_data),
                 'spray': self.create_publisher(PointCloud2, self._spray_topic, qos_profile_sensor_data),
+                'benign_null': self.create_publisher(PointCloud2, self._benign_null_topic, qos_profile_sensor_data),
+                'raw_marginal_obstacle': self.create_publisher(
+                    PointCloud2, self._raw_marginal_obstacle_topic, qos_profile_sensor_data,
+                ),
             }
 
         self._raw_range_pubs: dict[str, object] = {}
@@ -139,41 +149,7 @@ class LineSensorPublisher(Node):
         self._line_source = LineSensorSource(
             geometry=geometry,
             sensor_names=sensor_names,
-            config=LineSensorConfig(
-                line_obstacle_min_height_m=self._line_obstacle_min_height_m,
-                floor_band_m=self._floor_band_m,
-                cliff_min_drop_m=self._cliff_min_drop_m,
-                cliff_max_drop_m=self._cliff_max_drop_m,
-                line_min_run_bins=self._line_min_run_bins,
-                line_max_run_radial_span_m=self._line_max_run_radial_span_m,
-                line_point_noise_max_run_bins=self._line_point_noise_max_run_bins,
-                line_point_noise_xy_span_max_m=self._line_point_noise_xy_span_max_m,
-                line_point_noise_radial_span_max_m=self._line_point_noise_radial_span_max_m,
-                line_confirm_frames=self._line_confirm_frames,
-                line_fast_confirm_frames=self._line_fast_confirm_frames,
-                line_fast_confirm_range_m=self._line_fast_confirm_range_m,
-                line_window_frames=self._line_window_frames,
-                line_require_consecutive=self._line_require_consecutive,
-                line_spray_merge_gap_bins=self._line_spray_merge_gap_bins,
-                line_radial_streak_head_radius_max_m=self._line_radial_streak_head_radius_max_m,
-                line_radial_streak_span_min_m=self._line_radial_streak_span_min_m,
-                line_radial_streak_angular_spread_max_deg=self._line_radial_streak_angular_spread_max_deg,
-                line_radial_streak_aspect_ratio_min=self._line_radial_streak_aspect_ratio_min,
-                spray_min_run_bins=self._spray_min_run_bins,
-                spray_roughness_thresh_m=self._spray_roughness_thresh_m,
-                spray_max_run_bins=self._spray_max_run_bins,
-                spray_head_radius_max_m=self._spray_head_radius_max_m,
-                spray_radial_span_min_m=self._spray_radial_span_min_m,
-                spray_angular_spread_max_deg=self._spray_angular_spread_max_deg,
-                spray_aspect_ratio_min=self._spray_aspect_ratio_min,
-                spray_direction_cluster_gap_deg=self._spray_direction_cluster_gap_deg,
-                spray_monotonic_score_min=self._spray_monotonic_score_min,
-                spray_monotonic_tolerance_m=self._spray_monotonic_tolerance_m,
-                spray_short_run_bonus_max_bins=self._spray_short_run_bonus_max_bins,
-                spray_temporal_window_frames=self._spray_temporal_window_frames,
-                spray_temporal_stable_min_frames=self._spray_temporal_stable_min_frames,
-                spray_temporal_stable_fraction=self._spray_temporal_stable_fraction,
-            ),
+            config=self._filter_config,
             apply_tare=None if self._calibration is None else self._calibration.apply_tare,
         )
 
@@ -216,42 +192,20 @@ class LineSensorPublisher(Node):
         self.declare_parameter('raw_small_drop_topic', '/line_sensor/debug/raw_small_drop_points')
         self.declare_parameter('spatial_small_drop_topic', '/line_sensor/debug/spatial_small_drop_points')
         self.declare_parameter('spray_topic', '/line_sensor/debug/spray_points')
+        self.declare_parameter('probable_cliff_topic', '/line_sensor/probable_cliff_points')
+        self.declare_parameter('deep_drop_topic', '/line_sensor/deep_drop_points')
+        self.declare_parameter('degraded_topic', '/line_sensor/degraded_points')
+        self.declare_parameter('benign_null_topic', '/line_sensor/debug/benign_null_points')
+        self.declare_parameter(
+            'raw_marginal_obstacle_topic', '/line_sensor/debug/raw_marginal_obstacle_points',
+        )
 
         self.declare_parameter('obstacle_z', 0.02)
         self.declare_parameter('small_drop_z', -0.05)
-        self.declare_parameter('line_obstacle_min_height_m', 0.025)
-        self.declare_parameter('floor_band_m', 0.015)
-        self.declare_parameter('cliff_min_drop_m', 0.02)
-        self.declare_parameter('cliff_max_drop_m', 0.10)
-        self.declare_parameter('line_min_run_bins', 3)
-        self.declare_parameter('line_max_run_radial_span_m', 0.25)
-        self.declare_parameter('line_point_noise_max_run_bins', 12)
-        self.declare_parameter('line_point_noise_xy_span_max_m', 0.010)
-        self.declare_parameter('line_point_noise_radial_span_max_m', 0.010)
-        self.declare_parameter('line_confirm_frames', 3)
-        self.declare_parameter('line_fast_confirm_frames', 2)
-        self.declare_parameter('line_fast_confirm_range_m', 0.55)
-        self.declare_parameter('line_window_frames', 4)
-        self.declare_parameter('line_require_consecutive', True)
-        self.declare_parameter('line_spray_merge_gap_bins', 6)
-        self.declare_parameter('line_radial_streak_head_radius_max_m', 0.35)
-        self.declare_parameter('line_radial_streak_span_min_m', 0.04)
-        self.declare_parameter('line_radial_streak_angular_spread_max_deg', 20.0)
-        self.declare_parameter('line_radial_streak_aspect_ratio_min', 3.0)
-        self.declare_parameter('spray_min_run_bins', 3)
-        self.declare_parameter('spray_roughness_thresh_m', 0.03)
-        self.declare_parameter('spray_max_run_bins', 0)
-        self.declare_parameter('spray_head_radius_max_m', 0.30)
-        self.declare_parameter('spray_radial_span_min_m', 0.05)
-        self.declare_parameter('spray_angular_spread_max_deg', 15.0)
-        self.declare_parameter('spray_aspect_ratio_min', 5.0)
-        self.declare_parameter('spray_direction_cluster_gap_deg', 5.0)
-        self.declare_parameter('spray_monotonic_score_min', 0.70)
-        self.declare_parameter('spray_monotonic_tolerance_m', 0.005)
-        self.declare_parameter('spray_short_run_bonus_max_bins', 15)
-        self.declare_parameter('spray_temporal_window_frames', 5)
-        self.declare_parameter('spray_temporal_stable_min_frames', 2)
-        self.declare_parameter('spray_temporal_stable_fraction', 0.50)
+        self.declare_parameter('degraded_z', 0.0)
+
+        for f in dataclass_fields(LineSensorConfig):
+            self.declare_parameter(f.name, f.default)
 
     def _load_params(self) -> None:
         g = self.get_parameter
@@ -272,42 +226,29 @@ class LineSensorPublisher(Node):
         self._raw_small_drop_topic = str(g('raw_small_drop_topic').value)
         self._spatial_small_drop_topic = str(g('spatial_small_drop_topic').value)
         self._spray_topic = str(g('spray_topic').value)
+        self._probable_cliff_topic = str(g('probable_cliff_topic').value)
+        self._deep_drop_topic = str(g('deep_drop_topic').value)
+        self._degraded_topic = str(g('degraded_topic').value)
+        self._benign_null_topic = str(g('benign_null_topic').value)
+        self._raw_marginal_obstacle_topic = str(g('raw_marginal_obstacle_topic').value)
 
         self._obstacle_z = float(g('obstacle_z').value)
         self._small_drop_z = float(g('small_drop_z').value)
-        self._line_obstacle_min_height_m = float(g('line_obstacle_min_height_m').value)
-        self._floor_band_m = float(g('floor_band_m').value)
-        self._cliff_min_drop_m = float(g('cliff_min_drop_m').value)
-        self._cliff_max_drop_m = float(g('cliff_max_drop_m').value)
-        self._line_min_run_bins = int(g('line_min_run_bins').value)
-        self._line_max_run_radial_span_m = float(g('line_max_run_radial_span_m').value)
-        self._line_point_noise_max_run_bins = int(g('line_point_noise_max_run_bins').value)
-        self._line_point_noise_xy_span_max_m = float(g('line_point_noise_xy_span_max_m').value)
-        self._line_point_noise_radial_span_max_m = float(g('line_point_noise_radial_span_max_m').value)
-        self._line_confirm_frames = int(g('line_confirm_frames').value)
-        self._line_fast_confirm_frames = int(g('line_fast_confirm_frames').value)
-        self._line_fast_confirm_range_m = float(g('line_fast_confirm_range_m').value)
-        self._line_window_frames = int(g('line_window_frames').value)
-        self._line_require_consecutive = bool(g('line_require_consecutive').value)
-        self._line_spray_merge_gap_bins = int(g('line_spray_merge_gap_bins').value)
-        self._line_radial_streak_head_radius_max_m = float(g('line_radial_streak_head_radius_max_m').value)
-        self._line_radial_streak_span_min_m = float(g('line_radial_streak_span_min_m').value)
-        self._line_radial_streak_angular_spread_max_deg = float(g('line_radial_streak_angular_spread_max_deg').value)
-        self._line_radial_streak_aspect_ratio_min = float(g('line_radial_streak_aspect_ratio_min').value)
-        self._spray_min_run_bins = int(g('spray_min_run_bins').value)
-        self._spray_roughness_thresh_m = float(g('spray_roughness_thresh_m').value)
-        self._spray_max_run_bins = int(g('spray_max_run_bins').value)
-        self._spray_head_radius_max_m = float(g('spray_head_radius_max_m').value)
-        self._spray_radial_span_min_m = float(g('spray_radial_span_min_m').value)
-        self._spray_angular_spread_max_deg = float(g('spray_angular_spread_max_deg').value)
-        self._spray_aspect_ratio_min = float(g('spray_aspect_ratio_min').value)
-        self._spray_direction_cluster_gap_deg = float(g('spray_direction_cluster_gap_deg').value)
-        self._spray_monotonic_score_min = float(g('spray_monotonic_score_min').value)
-        self._spray_monotonic_tolerance_m = float(g('spray_monotonic_tolerance_m').value)
-        self._spray_short_run_bonus_max_bins = int(g('spray_short_run_bonus_max_bins').value)
-        self._spray_temporal_window_frames = int(g('spray_temporal_window_frames').value)
-        self._spray_temporal_stable_min_frames = int(g('spray_temporal_stable_min_frames').value)
-        self._spray_temporal_stable_fraction = float(g('spray_temporal_stable_fraction').value)
+        self._degraded_z = float(g('degraded_z').value)
+
+        self._filter_config = self._load_filter_config()
+
+    def _load_filter_config(self) -> LineSensorConfig:
+        """Read the LineSensorConfig-shaped parameters back into a config.
+
+        Each value is cast to the type of its dataclass default, so a YAML
+        override lands as the type the pipeline expects.
+        """
+        values = {}
+        for f in dataclass_fields(LineSensorConfig):
+            caster = type(f.default)
+            values[f.name] = caster(self.get_parameter(f.name).value)
+        return LineSensorConfig(**values)
 
     def _timer_callback(self) -> None:
         self._robot.pull_status()
@@ -339,6 +280,15 @@ class LineSensorPublisher(Node):
         self._points_pub.publish(numpy_to_pointcloud2(raw_points, header))
         self._obstacle_pub.publish(numpy_to_pointcloud2(xy_to_xyz(hits.obstacle_xy, self._obstacle_z), header))
         self._small_drop_pub.publish(numpy_to_pointcloud2(xy_to_xyz(hits.small_drop_xy, self._small_drop_z), header))
+        self._probable_cliff_pub.publish(
+            numpy_to_pointcloud2(xy_to_xyz(hits.probable_cliff_xy, self._small_drop_z), header),
+        )
+        self._deep_drop_pub.publish(
+            numpy_to_pointcloud2(xy_to_xyz(hits.deep_drop_xy, self._small_drop_z), header),
+        )
+        self._degraded_pub.publish(
+            numpy_to_pointcloud2(xy_to_xyz(hits.degraded_xy, self._degraded_z), header),
+        )
 
         if self._publish_debug:
             self._debug_pubs['raw_obstacle'].publish(
@@ -355,6 +305,12 @@ class LineSensorPublisher(Node):
             )
             self._debug_pubs['spray'].publish(
                 numpy_to_pointcloud2(xy_to_xyz(hits.raw_spray_xy, self._obstacle_z), header),
+            )
+            self._debug_pubs['benign_null'].publish(
+                numpy_to_pointcloud2(xy_to_xyz(hits.benign_null_xy, self._small_drop_z), header),
+            )
+            self._debug_pubs['raw_marginal_obstacle'].publish(
+                numpy_to_pointcloud2(xy_to_xyz(hits.raw_marginal_obstacle_xy, self._obstacle_z), header),
             )
 
         self._publish_counts(status, hits, raw_points, line_age_s, stale)
@@ -418,6 +374,11 @@ class LineSensorPublisher(Node):
             'spatial_small_drop': int(len(hits.spatial_small_drop_xy)),
             'small_drop': int(len(hits.small_drop_xy)),
             'spray': int(len(hits.raw_spray_xy)),
+            'raw_marginal_obstacle': int(len(hits.raw_marginal_obstacle_xy)),
+            'probable_cliff': int(len(hits.probable_cliff_xy)),
+            'benign_null': int(len(hits.benign_null_xy)),
+            'deep_drop': int(len(hits.deep_drop_xy)),
+            'degraded': int(len(hits.degraded_xy)),
             'frame_ids': frame_ids,
         }, sort_keys=True)
         self._counts_pub.publish(msg)
