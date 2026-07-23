@@ -11,7 +11,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import PointCloud2, PointField
-from std_msgs.msg import Header, String
+from std_msgs.msg import Float32MultiArray, Header, String
 
 from stretch4_body.robot.robot_client import RobotClient
 from stretch4_body.subsystem.line_sensor.line_sensor_utils import (
@@ -23,7 +23,9 @@ from stretch_core.line_sensor_filter import (
     LineSensorConfig,
     LineSensorHits,
     LineSensorSource,
+    as_range_array,
 )
+from stretch_core.line_sensor_raw_ranges import build_raw_ranges_multiarray
 
 
 STALE_RECONNECT_AFTER_S = 5.0
@@ -70,6 +72,7 @@ class LineSensorPublisher(Node):
         self._robot = None
         self._line_source = None
         self._calibration = None
+        self._sensor_names: list[str] = []
         self._last_stale_warn_time = 0.0
         self._stale_since_time = None
         self._last_reconnect_attempt_time = 0.0
@@ -90,10 +93,19 @@ class LineSensorPublisher(Node):
                 'spray': self.create_publisher(PointCloud2, self._spray_topic, qos_profile_sensor_data),
             }
 
+        self._raw_range_pubs: dict[str, object] = {}
+        if self._publish_raw_scans:
+            for sensor_name in self._sensor_names:
+                topic = f'{self._raw_scan_topic_prefix}/{sensor_name}/ranges'
+                self._raw_range_pubs[sensor_name] = self.create_publisher(
+                    Float32MultiArray, topic, qos_profile_sensor_data,
+                )
+
         self.create_timer(1.0 / max(self._publish_rate_hz, 0.1), self._timer_callback)
         self.get_logger().info(
             'line_sensor_publisher started '
-            f'points={self._points_topic} obstacle={self._obstacle_topic} small_drop={self._small_drop_topic}',
+            f'points={self._points_topic} obstacle={self._obstacle_topic} '
+            f'small_drop={self._small_drop_topic} raw_scans={self._publish_raw_scans}',
         )
 
     def _connect_robot_or_raise(self) -> None:
@@ -117,6 +129,7 @@ class LineSensorPublisher(Node):
     def _initialize_line_source(self, line_loop) -> None:
         sensor_names = list(line_loop.params['sensor_names'])
         geometry = LineSensorGeometry(line_loop.params.get('line_sensor_geometry', {}))
+        self._sensor_names = sensor_names
 
         self._calibration = None
         if self._use_tare:
@@ -191,6 +204,8 @@ class LineSensorPublisher(Node):
         self.declare_parameter('stale_timeout_s', 0.5)
         self.declare_parameter('use_tare', True)
         self.declare_parameter('publish_debug', True)
+        self.declare_parameter('publish_raw_scans', False)
+        self.declare_parameter('raw_scan_topic_prefix', '/line_sensor')
 
         self.declare_parameter('points_topic', '/line_sensor/points')
         self.declare_parameter('obstacle_topic', '/line_sensor/obstacle_points')
@@ -245,6 +260,8 @@ class LineSensorPublisher(Node):
         self._stale_timeout_s = float(g('stale_timeout_s').value)
         self._use_tare = bool(g('use_tare').value)
         self._publish_debug = bool(g('publish_debug').value)
+        self._publish_raw_scans = bool(g('publish_raw_scans').value)
+        self._raw_scan_topic_prefix = str(g('raw_scan_topic_prefix').value).rstrip('/')
 
         self._points_topic = str(g('points_topic').value)
         self._obstacle_topic = str(g('obstacle_topic').value)
@@ -306,6 +323,10 @@ class LineSensorPublisher(Node):
                 line_age_s = self._line_status_age_s(status)
                 stale = self._stale_timeout_s > 0.0 and line_age_s > self._stale_timeout_s
 
+        stamp = self.get_clock().now().to_msg()
+        if self._publish_raw_scans:
+            self._publish_raw_ranges_msg(status)
+
         if stale:
             raw_points = np.zeros((0, 3))
             hits = LineSensorHits()
@@ -314,7 +335,7 @@ class LineSensorPublisher(Node):
             raw_points = self._line_source.project_all(status)
             hits = self._line_source.process(status)
 
-        header = Header(stamp=self.get_clock().now().to_msg(), frame_id=self._base_frame)
+        header = Header(stamp=stamp, frame_id=self._base_frame)
         self._points_pub.publish(numpy_to_pointcloud2(raw_points, header))
         self._obstacle_pub.publish(numpy_to_pointcloud2(xy_to_xyz(hits.obstacle_xy, self._obstacle_z), header))
         self._small_drop_pub.publish(numpy_to_pointcloud2(xy_to_xyz(hits.small_drop_xy, self._small_drop_z), header))
@@ -337,6 +358,19 @@ class LineSensorPublisher(Node):
             )
 
         self._publish_counts(status, hits, raw_points, line_age_s, stale)
+
+    def _publish_raw_ranges_msg(self, status: dict) -> None:
+        for sensor_name in self._sensor_names:
+            pub = self._raw_range_pubs.get(sensor_name)
+            if pub is None:
+                continue
+            sensor_status = status.get(sensor_name, {})
+            if not isinstance(sensor_status, dict):
+                continue
+            ranges_arr = as_range_array(sensor_status.get('ranges'))
+            if ranges_arr.size == 0:
+                continue
+            pub.publish(build_raw_ranges_multiarray(ranges_arr))
 
     def _warn_stale_status(self, line_age_s: float) -> None:
         now = time.time()

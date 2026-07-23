@@ -6,6 +6,8 @@ line_sensor_publisher:
     stale_timeout_s: 0.5
     use_tare: true
     publish_debug: false
+    publish_raw_scans: false
+    raw_scan_topic_prefix: /line_sensor_raw
 
     # Published topics.
     points_topic: /line_sensor/points
