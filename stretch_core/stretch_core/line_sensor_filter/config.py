@@ -111,11 +111,7 @@ class LineSensorConfig:
     spray_cross_sensor_min_bins: int = 8
     spray_cross_sensor_near_range_m: float = 0.20
     # A near-field run is exempt from the cross-sensor gate when it looks
-    # like a solid object pressed against the base: at least this many
-    # contiguous bins (cup-slide: ~88-bin median arc; glossy phantom arcs
-    # are mostly 21-48) AND smooth bin-to-bin range profile (convex solid:
-    # ~2 mm std of diffs; wide gloss arcs: ~13 mm). Flicker quarantine
-    # still applies to exempt runs.
+    # like a solid object pressed against the base.
     spray_cross_sensor_exempt_run_bins: int = 60
     spray_cross_sensor_exempt_max_ragged_m: float = 0.006
     # When a sensor has at least this many quarantine-suspect bins, its

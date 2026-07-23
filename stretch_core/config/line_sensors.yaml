@@ -5,7 +5,7 @@ line_sensor_publisher:
     publish_rate_hz: 30.0
     stale_timeout_s: 0.5
     use_tare: true
-    publish_debug: false
+    publish_debug: true
     publish_raw_scans: false
     raw_scan_topic_prefix: /line_sensor_raw
 
@@ -35,4 +35,4 @@ line_sensor_publisher:
     # Filter tunables: defaults live in LineSensorConfig
     # (stretch_core/line_sensor_filter/config.py). Naming a field here
     # overrides it.
-    cliff_min_drop_m: 0.015
+    cliff_min_drop_m: 0.02
