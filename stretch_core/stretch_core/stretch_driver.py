@@ -472,8 +472,8 @@ class StretchDriver(Node):
             if cg.name == "arm_joint":
                 for link in ['arm_l4_joint', 'arm_l3_joint', 'arm_l2_joint', 'arm_l1_joint']:
                     joint_state.name.append(link)
-                    joint_state.position.append(pos/5.0)
-                    joint_state.velocity.append(vel/5.0)
+                    joint_state.position.append(pos/4.0)
+                    joint_state.velocity.append(vel/4.0)
                     joint_state.effort.append(eff)
             elif cg.name == "gripper_joint":
                 for link in ['gripper_finger_left_joint', 'gripper_finger_right_joint']:
