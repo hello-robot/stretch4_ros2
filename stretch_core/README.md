@@ -130,6 +130,23 @@ Main outputs:
 | `/line_sensor/obstacle_points` | Confirmed obstacles near the base |
 | `/line_sensor/small_drop_points` | Confirmed small cliff/drop hazards |
 
+With `publish_raw_scans:=true`, each sensor publishes a `std_msgs/Float32MultiArray`
+on `/line_sensor_raw/sensor_N/ranges` with the device's raw slant-range bins (meters).
+There is no tare, projection, FOV metadata, max-range gating, or hazard filtering —
+every bin value from `robot_server` is copied as-is (including no-return sentinels
+such as ~5.11 m). Use this for `ros2 bag` ground-truth recording.
+
+#### Raw range MultiArray layout
+
+| Field | Meaning |
+|-------|---------|
+| Topic | `/line_sensor/sensor_N/ranges` (`sensor_0` … typically `sensor_5`) |
+| Message | `std_msgs/msg/Float32MultiArray` |
+| `layout.dim[0].label` | `"bin"` |
+| `layout.dim[0].size` | Number of bins `N` (usually 320 for Pixart J3) |
+| `layout.dim[0].stride` | Same as `size` |
+| `data[i]` | Slant range of bin `i` in meters, device order (`i = 0 .. N-1`) |
+
 With `publish_debug:=true`, debug topics under `/line_sensor/debug/` expose the intermediate `raw_*`, `spatial_*`, and `spray` stages plus JSON counts on `/line_sensor/debug/source_counts`.
 
 Launch:

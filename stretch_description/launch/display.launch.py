@@ -9,6 +9,7 @@ from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 from stretch4_urdf import get_robot_params, get_urdf
 
+from hello_helpers.launch_utils import get_rviz_node
 
 def compile_robot_description(context, *args, **kwargs):
     """This OpaqueFunction allows the launch file to compile
@@ -71,13 +72,10 @@ def generate_launch_description():
         parameters=[{'zeros.lift_joint': 0.2, 'zeros.wrist_yaw_joint': 3.4}],
     )
 
-    rviz_node = Node(
-        package='rviz2',
-        executable='rviz2',
-        output='screen',
-        arguments=['-d', str(stretch_description_path / 'rviz' / 'stretch.rviz')]
-    )
 
     ld.add_action(joint_state_publisher_gui_node)
-    ld.add_action(rviz_node)
+
+    for action in get_rviz_node(str(stretch_description_path / 'rviz' / 'stretch.rviz')):
+        ld.add_action(action)
+        
     return ld

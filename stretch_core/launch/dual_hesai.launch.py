@@ -11,6 +11,8 @@ import yaml
 import tempfile
 from pathlib import Path
 
+from hello_helpers.launch_utils import get_rviz_node
+
 sys.path.insert(0, os.path.dirname(__file__))
 from self_filter_config import dual_lidar_self_filter_parameters, validate_tool_preset
 
@@ -71,25 +73,11 @@ def launch_setup(context, *args, **kwargs):
         condition=IfCondition(launch_filter_node),
     )
 
-    use_rviz = LaunchConfiguration('use_rviz')
     rviz_config_path = os.path.join(stretch_core, 'rviz', 'lidars.rviz')
-    rviz_node = Node(
-        package="rviz2",
-        executable="rviz2",
-        name="rviz2",
-        output="screen",
-        arguments=["-d", rviz_config_path],
-        condition=IfCondition(use_rviz),
-    )
-
-    os.environ.pop('QT_QPA_PLATFORM_PLUGIN_PATH', None)
-    os.environ.pop('QT_QPA_FONTDIR', None)
-    os.environ.pop('QT_PLUGIN_PATH', None)
-
     return [
         hesai_node,
         dual_lidar_filter_node,
-        rviz_node,
+        *get_rviz_node(rviz_config_path),
     ]
 
 
