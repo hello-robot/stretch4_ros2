@@ -1,0 +1,45 @@
+# examples of command line use
+# ros2 param load detect_aruco_node ./stretch_marker_dict.yaml
+# ros2 param list
+# ros2 param get detect_aruco_node aruco_marker_info.130.length_mm
+
+# Be careful with length_mm values. Stickers and printouts can vary
+# significantly from your expectations. You should measure them
+# directly. For example, in a prototype robot the stickers were closer
+# to 23mm wide than 24mm. This 1mm difference resulted in > 1cm of
+# error in the depths for the marker pose estimates when only using
+# RGB images.
+
+/**:
+  ros__parameters:
+    aruco_marker_info:
+      '43':
+        name: 'docking_station_right'
+        length_mm: 40.0
+        tag_dictionary: "DICT_6X6_50"
+        link: right_aruco_marker_link
+      '44':
+        name: 'docking_station_left'
+        length_mm: 40.0
+        tag_dictionary: "DICT_6X6_50"
+        link: left_aruco_marker_link
+      '45':
+        name: 'docking_station_apex'
+        length_mm: 40.0
+        tag_dictionary: "DICT_6X6_50"
+        link: apex_aruco_marker_link
+      '68':
+        name: 'wrist'
+        length_mm: 25.0
+        tag_dictionary: "DICT_6X6_100"
+        link: 'wrist_aruco_link'
+      '200':
+        name: 'fingertip_left'
+        length_mm: 14.0
+        tag_dictionary: "DICT_6X6_250"
+        link: 'aruco_fingertip_left_link'
+      '201':
+        name: 'fingertip_right'
+        length_mm: 14.0
+        tag_dictionary: "DICT_6X6_250"
+        link: 'aruco_fingertip_right_link'

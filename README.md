@@ -14,6 +14,7 @@ Stretch 4 ROS packages contain breaking changes from Stretch 3 and earlier hardw
 | [stretch\_description](stretch_description/)      | Visualize Stretch 4's URDF                                                                          |
 | [stretch\_nav2](stretch_nav2/)                    | Navigation stack built on Nav2                                                                      |
 | [stretch\_simulation](stretch_simulation/)        | Simulation of Stretch 4, built on [Stretch4 Mujoco](https://github.com/hello-robot/stretch4_mujoco) |
+| [stretch_tag_perception](stretch_python_bridge/README.md)     | Detect aruco tags with Stretch 4 |
 | [stretch\_python\_bridge](stretch_python_bridge/) | A high-level Python API that abstracts away rclpy                                                   |
 | [hello\_helpers](hello_helpers/)                  | Miscellaneous helper code used across the stretch\_ros2 repository                                  |
 
@@ -27,6 +28,7 @@ For license details for this repository, see the LICENSE files found in the dire
 | stretch\_description    | [BSD 3-Clause Clear License](https://choosealicense.com/licenses/bsd-3-clause-clear/) |
 | stretch\_nav2           | [Apache 2.0](http://www.apache.org/licenses/LICENSE-2.0)                              |
 | stretch\_simulation     | [Apache 2.0](http://www.apache.org/licenses/LICENSE-2.0)                              |
+| stretch_tag_perception   | [Apache 2.0](http://www.apache.org/licenses/LICENSE-2.0)                             |
 | stretch\_python\_bridge | [Apache 2.0](http://www.apache.org/licenses/LICENSE-2.0)                              |
 | hello\_helpers          | [Apache 2.0](http://www.apache.org/licenses/LICENSE-2.0)                              |
 
