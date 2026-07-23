@@ -13,6 +13,8 @@ from launch.conditions import IfCondition
 from stretch4_urdf import get_urdf
 from stretch4_mujoco import Stretch4MujocoSimulator
 
+from hello_helpers.launch_utils import get_rviz_node
+
 if system() == "Linux":
     # this fixes rviz launch issue
     os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"] = (
@@ -94,18 +96,6 @@ def launch(context):
         arguments=["--ros-args", "--log-level", "error"],
     )
 
-    rviz = Node(
-        package="rviz2",
-        executable="rviz2",
-        output="screen",
-        arguments=[
-                "-d",
-                str(stretch_simulation_path / "rviz" / "stretch_sim.rviz")
-        ],
-        parameters=[{"use_sim_time": True}],
-        condition=IfCondition(LaunchConfiguration("use_rviz")),
-    )
-
     stretch_sim = Node(
         package="stretch_simulation",
         executable="stretch_mujoco_driver",
@@ -120,7 +110,7 @@ def launch(context):
         on_exit=Shutdown(),
     )
 
-    return joint_state_publisher, robot_state_publisher, rviz, stretch_sim
+    return joint_state_publisher, robot_state_publisher, stretch_sim, *get_rviz_node( str(stretch_simulation_path / "rviz" / "stretch_sim.rviz"), rviz_params={"use_sim_time": True})
 
 
 def generate_launch_description():

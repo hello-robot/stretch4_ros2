@@ -122,6 +122,8 @@ def get_Idx(tool_name):
     """
     if tool_name == 'eoa_wrist_dw4_tool_sg4':
         return SE4_dw4_sg4_Idx
+    elif tool_name == 'eoa_wrist_dw4_tool_pg4':
+        return SE4_dw4_pg4_Idx
     elif tool_name == 'eoa_wrist_dw4_tool_nil':
         return eoa_wrist_dw4_tool_nil_Idx
     elif tool_name == 'eoa_wrist_dw4_tool_tablet_12in':
@@ -136,6 +138,18 @@ def get_Idx(tool_name):
         raise UnsupportedToolError('Undefined tool name in QposConversion.')
 
 class SE4_dw4_sg4_Idx:
+    LIFT = 1
+    ARM = 0
+    GRIPPER = 7
+    WRIST_ROLL = 4
+    WRIST_PITCH = 3
+    WRIST_YAW = 2
+    BASE_TRANSLATE = 5
+    BASE_ROTATE = 6
+
+    num_joints = 8
+
+class SE4_dw4_pg4_Idx:
     LIFT = 1
     ARM = 0
     GRIPPER = 7
