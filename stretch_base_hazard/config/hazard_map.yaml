@@ -8,6 +8,9 @@ hazard_map_node:
     transform_timeout_s: 0.05
     line_obstacle_topic: /line_sensor/obstacle_points
     line_small_drop_topic: /line_sensor/small_drop_points
+    line_deep_drop_topic: /line_sensor/deep_drop_points
+    line_probable_cliff_topic: /line_sensor/probable_cliff_points
+    line_degraded_topic: /line_sensor/degraded_points
     line_frame: ''
     line_topic_timeout_s: 0.5
     detector_rate_hz: 10.0
@@ -21,6 +24,11 @@ hazard_map_node:
     lidar_weight: 1.0
     occlusion_weight: 1.0
     line_weight: 5.0
+    # Evidence weight for degraded (lost line-sensor coverage) cells.
+    degraded_weight: 5.0   
+    use_lidar: true
+    # lidar can overwrite degraded data
+    degraded_deferred_to_lidar: true
     hazard_threshold: 5.0
 
     # Lidar floor processing. Feed a PointCloud2 that retains near-floor points.
@@ -46,5 +54,3 @@ hazard_map_node:
     obstacle_z: 0.02
     occlusion_z: 0.15
     publish_debug: false
-    debug_log_source_counts: false
-    debug_source_counts_period_s: 1.0

@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
 from dataclasses import dataclass, field
 import math
 from threading import Lock
@@ -12,19 +11,23 @@ import traceback
 from geometry_msgs.msg import TransformStamped
 from nav_msgs.msg import Odometry
 import numpy as np
+from rcl_interfaces.msg import SetParametersResult
 import rclpy
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import PointCloud2
-from std_msgs.msg import Header, String
+from std_msgs.msg import Header
 
 from stretch_base_hazard.layer_tags import (
     LAYER_LIDAR_CLIFF,
     LAYER_LIDAR_OBSTACLE,
     LAYER_LIDAR_OCCLUSION,
+    LAYER_LINE_DEEP_DROP,
+    LAYER_LINE_DEGRADED,
     LAYER_LINE_OBSTACLE,
+    LAYER_LINE_PROBABLE_CLIFF,
     LAYER_LINE_SMALL_DROP,
 )
 from stretch_base_hazard.lidar_detector import LidarDetector, LidarDetectorConfig, LidarHits
@@ -41,6 +44,9 @@ class LineTopicHits:
 
     obstacle_xy: np.ndarray = field(default_factory=lambda: np.zeros((0, 2)))
     small_drop_xy: np.ndarray = field(default_factory=lambda: np.zeros((0, 2)))
+    deep_drop_xy: np.ndarray = field(default_factory=lambda: np.zeros((0, 2)))
+    probable_cliff_xy: np.ndarray = field(default_factory=lambda: np.zeros((0, 2)))
+    degraded_xy: np.ndarray = field(default_factory=lambda: np.zeros((0, 2)))
 
 
 class HazardMapNode(Node):
@@ -89,31 +95,18 @@ class HazardMapNode(Node):
 
         self._pointcloud_lock = Lock()
         self._line_topic_lock = Lock()
-        self._debug_counts_lock = Lock()
         self._latest_lidar_msg: PointCloud2 | None = None
         self._latest_line_obstacle_msg: PointCloud2 | None = None
         self._latest_line_small_drop_msg: PointCloud2 | None = None
+        self._latest_line_deep_drop_msg: PointCloud2 | None = None
+        self._latest_line_probable_cliff_msg: PointCloud2 | None = None
+        self._latest_line_degraded_msg: PointCloud2 | None = None
         self._line_obstacle_stamp_ns: int | None = None
         self._line_small_drop_stamp_ns: int | None = None
+        self._line_deep_drop_stamp_ns: int | None = None
+        self._line_probable_cliff_stamp_ns: int | None = None
+        self._line_degraded_stamp_ns: int | None = None
         self._odom_pose: tuple[float, float, float] | None = None
-
-        self._latest_lidar_debug_counts = {
-            'obstacle': 0,
-            'cliff': 0,
-            'occlusion': 0,
-            'clear_floor': 0,
-            'ransac_floor': 0,
-        }
-        self._latest_line_debug_counts = {
-            'obstacle': 0,
-            'small_drop': 0,
-        }
-        self._latest_final_debug_counts = {
-            'obstacle': 0,
-            'cliff': 0,
-            'occluded': 0,
-            'all': 0,
-        }
 
         self._hazard_pub = self.create_publisher(PointCloud2, '/under_base_hazard/points', 10)
         self._cliff_pub = self.create_publisher(PointCloud2, '/under_base_hazard/cliff_points', 10)
@@ -123,6 +116,12 @@ class HazardMapNode(Node):
         self._occluded_pub = self.create_publisher(
             PointCloud2, '/under_base_hazard/occluded_points', 10,
         )
+        self._line_cliff_pub = self.create_publisher(
+            PointCloud2, '/under_base_hazard/line_cliff_points', 10,
+        )
+        self._degraded_pub = self.create_publisher(
+            PointCloud2, '/under_base_hazard/degraded_points', 10,
+        )
         self._debug_ransac_floor_pub = None
         self._debug_observed_floor_pub = None
         self._debug_lidar_obstacle_pub = None
@@ -130,7 +129,6 @@ class HazardMapNode(Node):
         self._debug_lidar_occlusion_pub = None
         self._debug_line_obstacle_pub = None
         self._debug_line_small_drop_pub = None
-        self._debug_source_counts_pub = None
         if self._publish_debug:
             self._debug_ransac_floor_pub = self.create_publisher(
                 PointCloud2, '/under_base_hazard/debug/ransac_floor_points', 10,
@@ -152,10 +150,6 @@ class HazardMapNode(Node):
             )
             self._debug_line_small_drop_pub = self.create_publisher(
                 PointCloud2, '/under_base_hazard/debug/line_small_drop_points', 10,
-            )
-        if self._publish_debug or self._debug_log_source_counts:
-            self._debug_source_counts_pub = self.create_publisher(
-                String, '/under_base_hazard/debug/source_counts', 10,
             )
 
         self._sub_group = MutuallyExclusiveCallbackGroup()
@@ -189,18 +183,36 @@ class HazardMapNode(Node):
             qos_profile_sensor_data,
             callback_group=self._sub_group,
         )
+        self.create_subscription(
+            PointCloud2,
+            self._line_deep_drop_topic,
+            self._on_line_deep_drop_pc,
+            qos_profile_sensor_data,
+            callback_group=self._sub_group,
+        )
+        self.create_subscription(
+            PointCloud2,
+            self._line_probable_cliff_topic,
+            self._on_line_probable_cliff_pc,
+            qos_profile_sensor_data,
+            callback_group=self._sub_group,
+        )
+        self.create_subscription(
+            PointCloud2,
+            self._line_degraded_topic,
+            self._on_line_degraded_pc,
+            qos_profile_sensor_data,
+            callback_group=self._sub_group,
+        )
+
+        self.add_on_set_parameters_callback(self._validate_parameters)
+        self.add_post_set_parameters_callback(self._apply_parameters)
 
         self.create_timer(
             1.0 / max(self._detector_rate_hz, 0.1),
             self._update_timer_callback,
             callback_group=self._update_group,
         )
-        if self._publish_debug or self._debug_log_source_counts:
-            self.create_timer(
-                max(self._debug_source_counts_period_s, 0.1),
-                self._debug_counts_timer_callback,
-                callback_group=self._update_group,
-            )
 
         self.get_logger().info(
             f'hazard_map_node started (detector={self._detector_rate_hz} Hz, '
@@ -215,6 +227,14 @@ class HazardMapNode(Node):
         self.declare_parameter('transform_timeout_s', 0.05)
         self.declare_parameter('line_obstacle_topic', '/line_sensor/obstacle_points')
         self.declare_parameter('line_small_drop_topic', '/line_sensor/small_drop_points')
+        self.declare_parameter('line_deep_drop_topic', '/line_sensor/deep_drop_points')
+        self.declare_parameter(
+            'line_probable_cliff_topic', '/line_sensor/probable_cliff_points',
+        )
+        self.declare_parameter('line_degraded_topic', '/line_sensor/degraded_points')
+        self.declare_parameter('degraded_weight', 5.0)
+        self.declare_parameter('use_lidar', True)
+        self.declare_parameter('degraded_deferred_to_lidar', True)
         self.declare_parameter('line_frame', '')
         self.declare_parameter('line_topic_timeout_s', 0.5)
 
@@ -249,8 +269,6 @@ class HazardMapNode(Node):
         self.declare_parameter('obstacle_z', 0.02)
         self.declare_parameter('occlusion_z', 0.15)
         self.declare_parameter('publish_debug', False)
-        self.declare_parameter('debug_log_source_counts', False)
-        self.declare_parameter('debug_source_counts_period_s', 1.0)
 
     def _load_params(self) -> None:
         g = self.get_parameter
@@ -261,6 +279,12 @@ class HazardMapNode(Node):
         self._transform_timeout_s = float(g('transform_timeout_s').value)
         self._line_obstacle_topic = g('line_obstacle_topic').value
         self._line_small_drop_topic = g('line_small_drop_topic').value
+        self._line_deep_drop_topic = g('line_deep_drop_topic').value
+        self._line_probable_cliff_topic = g('line_probable_cliff_topic').value
+        self._line_degraded_topic = g('line_degraded_topic').value
+        self._degraded_weight = float(g('degraded_weight').value)
+        self._use_lidar = bool(g('use_lidar').value)
+        self._degraded_deferred_to_lidar = bool(g('degraded_deferred_to_lidar').value)
         self._line_frame = g('line_frame').value
         self._line_topic_timeout_s = float(g('line_topic_timeout_s').value)
 
@@ -295,8 +319,6 @@ class HazardMapNode(Node):
         self._obstacle_z = float(g('obstacle_z').value)
         self._occlusion_z = float(g('occlusion_z').value)
         self._publish_debug = bool(g('publish_debug').value)
-        self._debug_log_source_counts = bool(g('debug_log_source_counts').value)
-        self._debug_source_counts_period_s = float(g('debug_source_counts_period_s').value)
 
     def _on_lidar_pc(self, msg: PointCloud2) -> None:
         with self._pointcloud_lock:
@@ -313,6 +335,41 @@ class HazardMapNode(Node):
         with self._line_topic_lock:
             self._latest_line_small_drop_msg = msg
             self._line_small_drop_stamp_ns = now_ns
+
+    def _on_line_deep_drop_pc(self, msg: PointCloud2) -> None:
+        now_ns = self.get_clock().now().nanoseconds
+        with self._line_topic_lock:
+            self._latest_line_deep_drop_msg = msg
+            self._line_deep_drop_stamp_ns = now_ns
+
+    def _on_line_probable_cliff_pc(self, msg: PointCloud2) -> None:
+        now_ns = self.get_clock().now().nanoseconds
+        with self._line_topic_lock:
+            self._latest_line_probable_cliff_msg = msg
+            self._line_probable_cliff_stamp_ns = now_ns
+
+    def _on_line_degraded_pc(self, msg: PointCloud2) -> None:
+        now_ns = self.get_clock().now().nanoseconds
+        with self._line_topic_lock:
+            self._latest_line_degraded_msg = msg
+            self._line_degraded_stamp_ns = now_ns
+
+    def _validate_parameters(self, params) -> SetParametersResult:
+        """Validate a proposed parameter set. Must not mutate node state.
+        """
+        return SetParametersResult(successful=True)
+
+    def _apply_parameters(self, params) -> None:
+        """Apply runtime parameter changes, after the set has been committed."""
+        for param in params:
+            if param.name == 'use_lidar':
+                self._use_lidar = bool(param.value)
+                self.get_logger().info(
+                    f'use_lidar set to {self._use_lidar}'
+                    + ('' if self._use_lidar else ' (lidar layers cleared)'),
+                )
+            elif param.name == 'degraded_deferred_to_lidar':
+                self._degraded_deferred_to_lidar = bool(param.value)
 
     def _on_odom(self, msg: Odometry) -> None:
         p = msg.pose.pose.position
@@ -361,6 +418,8 @@ class HazardMapNode(Node):
         return points
 
     def _process_lidar_snapshot(self) -> LidarHits:
+        if not self._use_lidar:
+            return LidarHits()
         with self._pointcloud_lock:
             msg = self._latest_lidar_msg
         points = self._pointcloud_xyz_in_base(msg, self._lidar_frame)
@@ -373,14 +432,23 @@ class HazardMapNode(Node):
         with self._line_topic_lock:
             obstacle_msg = self._latest_line_obstacle_msg
             small_drop_msg = self._latest_line_small_drop_msg
+            deep_drop_msg = self._latest_line_deep_drop_msg
+            probable_cliff_msg = self._latest_line_probable_cliff_msg
+            degraded_msg = self._latest_line_degraded_msg
             obstacle_stamp_ns = self._line_obstacle_stamp_ns
             small_drop_stamp_ns = self._line_small_drop_stamp_ns
+            deep_drop_stamp_ns = self._line_deep_drop_stamp_ns
+            probable_cliff_stamp_ns = self._line_probable_cliff_stamp_ns
+            degraded_stamp_ns = self._line_degraded_stamp_ns
 
-        obstacle_xy = self._line_topic_xy(obstacle_msg, obstacle_stamp_ns, now_ns)
-        small_drop_xy = self._line_topic_xy(small_drop_msg, small_drop_stamp_ns, now_ns)
         return LineTopicHits(
-            obstacle_xy=obstacle_xy,
-            small_drop_xy=small_drop_xy,
+            obstacle_xy=self._line_topic_xy(obstacle_msg, obstacle_stamp_ns, now_ns),
+            small_drop_xy=self._line_topic_xy(small_drop_msg, small_drop_stamp_ns, now_ns),
+            deep_drop_xy=self._line_topic_xy(deep_drop_msg, deep_drop_stamp_ns, now_ns),
+            probable_cliff_xy=self._line_topic_xy(
+                probable_cliff_msg, probable_cliff_stamp_ns, now_ns,
+            ),
+            degraded_xy=self._line_topic_xy(degraded_msg, degraded_stamp_ns, now_ns),
         )
 
     def _line_topic_xy(
@@ -431,9 +499,27 @@ class HazardMapNode(Node):
             self._occlusion_weight,
             LAYER_LIDAR_OCCLUSION,
         )
-        self._grid.clear_layers((LAYER_LINE_OBSTACLE, LAYER_LINE_SMALL_DROP))
+        if not self._use_lidar:
+            self._grid.clear_layers(
+                (LAYER_LIDAR_CLIFF, LAYER_LIDAR_OBSTACLE, LAYER_LIDAR_OCCLUSION),
+            )
+
+        self._grid.clear_layers((
+            LAYER_LINE_OBSTACLE,
+            LAYER_LINE_SMALL_DROP,
+            LAYER_LINE_DEEP_DROP,
+            LAYER_LINE_PROBABLE_CLIFF,
+            LAYER_LINE_DEGRADED,
+        ))
+        self._grid.accumulate(line_hits.degraded_xy, self._degraded_weight, LAYER_LINE_DEGRADED)
         self._grid.accumulate(line_hits.obstacle_xy, self._line_weight, LAYER_LINE_OBSTACLE)
         self._grid.accumulate(line_hits.small_drop_xy, self._line_weight, LAYER_LINE_SMALL_DROP)
+        self._grid.accumulate(line_hits.deep_drop_xy, self._line_weight, LAYER_LINE_DEEP_DROP)
+        self._grid.accumulate(
+            line_hits.probable_cliff_xy, self._line_weight, LAYER_LINE_PROBABLE_CLIFF,
+        )
+        if self._degraded_deferred_to_lidar and self._use_lidar:
+            self._grid.clear(lidar_hits.clear_floor_xy, layers=(LAYER_LINE_DEGRADED,))
 
     def _publish_lidar_debug(self, hits: LidarHits) -> None:
         stamp = self.get_clock().now().to_msg()
@@ -450,14 +536,6 @@ class HazardMapNode(Node):
         self._debug_lidar_occlusion_pub.publish(
             numpy_to_pointcloud2(self._xy_to_xyz(hits.occlusion_xy, self._occlusion_z), header),
         )
-        with self._debug_counts_lock:
-            self._latest_lidar_debug_counts = {
-                'obstacle': len(hits.obstacle_xy),
-                'cliff': len(hits.cliff_xy),
-                'occlusion': len(hits.occlusion_xy),
-                'clear_floor': len(hits.clear_floor_xy),
-                'ransac_floor': len(hits.ransac_floor_xyz),
-            }
 
     def _publish_line_debug(self, hits: LineTopicHits) -> None:
         stamp = self.get_clock().now().to_msg()
@@ -468,12 +546,6 @@ class HazardMapNode(Node):
         self._debug_line_small_drop_pub.publish(
             numpy_to_pointcloud2(self._xy_to_xyz(hits.small_drop_xy, self._cliff_z), header),
         )
-
-        with self._debug_counts_lock:
-            self._latest_line_debug_counts = {
-                'obstacle': len(hits.obstacle_xy),
-                'small_drop': len(hits.small_drop_xy),
-            }
 
     def _publish_hazards(self, observed_floor_xy: np.ndarray) -> None:
         out = self._extractor.extract(
@@ -491,22 +563,19 @@ class HazardMapNode(Node):
         self._cliff_pub.publish(numpy_to_pointcloud2(out.cliff_points, header))
         self._obstacle_pub.publish(numpy_to_pointcloud2(out.obstacle_points, header))
         self._occluded_pub.publish(numpy_to_pointcloud2(out.occluded_points, header))
+        self._line_cliff_pub.publish(numpy_to_pointcloud2(out.line_cliff_points, header))
+        self._degraded_pub.publish(numpy_to_pointcloud2(out.degraded_points, header))
         if self._publish_debug and self._debug_observed_floor_pub is not None:
             self._debug_observed_floor_pub.publish(
                 numpy_to_pointcloud2(self._xy_to_xyz(observed_floor_xy, 0.0), header),
             )
-        with self._debug_counts_lock:
-            self._latest_final_debug_counts = {
-                'obstacle': len(out.obstacle_points),
-                'cliff': len(out.cliff_points),
-                'occluded': len(out.occluded_points),
-                'all': len(out.all_points),
-            }
 
     def _hazard_output_odom_to_base(self, out: HazardOutput) -> HazardOutput:
         out.cliff_points = self._odom_xyz_to_base(out.cliff_points)
         out.obstacle_points = self._odom_xyz_to_base(out.obstacle_points)
         out.occluded_points = self._odom_xyz_to_base(out.occluded_points)
+        out.line_cliff_points = self._odom_xyz_to_base(out.line_cliff_points)
+        out.degraded_points = self._odom_xyz_to_base(out.degraded_points)
         out.all_points = self._odom_xyz_to_base(out.all_points)
         return out
 
@@ -517,33 +586,6 @@ class HazardMapNode(Node):
         out = points.copy()
         out[:, :2] = self._grid._odom_to_base(out[:, :2])
         return out
-
-    def _debug_counts_timer_callback(self) -> None:
-        with self._debug_counts_lock:
-            lidar = deepcopy(self._latest_lidar_debug_counts)
-            line = deepcopy(self._latest_line_debug_counts)
-            final = deepcopy(self._latest_final_debug_counts)
-        msg = String()
-        msg.data = (
-            'lidar '
-            f'obstacle={lidar["obstacle"]} '
-            f'cliff={lidar["cliff"]} '
-            f'occlusion={lidar["occlusion"]} '
-            f'clear_floor={lidar["clear_floor"]} '
-            f'ransac_floor={lidar["ransac_floor"]}; '
-            'line '
-            f'obstacle={line["obstacle"]} '
-            f'small_drop={line["small_drop"]}; '
-            'final '
-            f'obstacle={final["obstacle"]} '
-            f'cliff={final["cliff"]} '
-            f'occluded={final["occluded"]} '
-            f'all={final["all"]}'
-        )
-        if self._debug_source_counts_pub is not None:
-            self._debug_source_counts_pub.publish(msg)
-        if self._debug_log_source_counts:
-            self.get_logger().info(msg.data)
 
     @staticmethod
     def _xy_to_xyz(xy: np.ndarray, z: float) -> np.ndarray:

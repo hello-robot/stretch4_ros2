@@ -146,11 +146,17 @@ class LineSensorPublisher(Node):
             self._calibration = LineSensorCalibration(line_loop)
             self._calibration.load_latest_tare()
 
+        # Pass complete calibration metadata so the filter correctly ignores 
+        # invalid bins instead of trusting their return.
         self._line_source = LineSensorSource(
             geometry=geometry,
             sensor_names=sensor_names,
             config=self._filter_config,
             apply_tare=None if self._calibration is None else self._calibration.apply_tare,
+            bin_reliable=None if self._calibration is None else self._calibration.tare_valid_masks,
+            bin_null_rate=(
+                None if self._calibration is None else self._calibration.chronic_null_rates
+            ),
         )
 
     def _maybe_reconnect_stale_robot(self) -> bool:

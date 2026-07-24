@@ -26,6 +26,8 @@ from visualization_msgs.msg import Marker, MarkerArray
 class HazardPointCacheConfig:
     obstacle_points_topic: str = '/under_base_hazard/obstacle_points'
     cliff_points_topic: str = '/under_base_hazard/cliff_points'
+    line_cliff_points_topic: str = '/under_base_hazard/line_cliff_points'
+    degraded_points_topic: str = '/under_base_hazard/degraded_points'
     hazard_timeout_s: float = 0.5
     stop_linear_on_stale: bool = True
     filter_config: HazardVelFilterConfig = HazardVelFilterConfig()
@@ -54,6 +56,8 @@ class HazardPointCache:
         self._lock = Lock()
         self._obstacle_xy = np.zeros((0, 2), dtype=np.float64)
         self._cliff_xy = np.zeros((0, 2), dtype=np.float64)
+        self._line_cliff_xy = np.zeros((0, 2), dtype=np.float64)
+        self._degraded_xy = np.zeros((0, 2), dtype=np.float64)
         self._obstacle_stamp_ns: int | None = None
         self._cliff_stamp_ns: int | None = None
         self._obstacle_required = bool(config.obstacle_points_topic)
@@ -76,6 +80,22 @@ class HazardPointCache:
                 qos_profile_sensor_data,
             )
 
+        if config.line_cliff_points_topic:
+            node.create_subscription(
+                PointCloud2,
+                config.line_cliff_points_topic,
+                self._on_line_cliff_points,
+                qos_profile_sensor_data,
+            )
+
+        if config.degraded_points_topic:
+            node.create_subscription(
+                PointCloud2,
+                config.degraded_points_topic,
+                self._on_degraded_points,
+                qos_profile_sensor_data,
+            )
+
         if config.blocked_directions_topic and config.blocked_directions_publish_rate_hz > 0.0:
             self._blocked_directions_pub = node.create_publisher(
                 MarkerArray,
@@ -92,7 +112,7 @@ class HazardPointCache:
         return self._config
 
     def filter_velocity(self, vx: float, vy: float, wz: float) -> HazardVelocityDecision:
-        obstacle_xy, cliff_xy, stale = self.snapshot()
+        obstacle_xy, cliff_xy, line_cliff_xy, degraded_xy, stale = self.snapshot_all()
         if stale and self._config.stop_linear_on_stale:
             return HazardVelocityDecision(
                 HazardVelFilterResult(0.0, 0.0, float(wz)),
@@ -106,18 +126,29 @@ class HazardPointCache:
                 obstacle_xy,
                 cliff_xy,
                 self._config.filter_config,
+                line_cliff_xy=line_cliff_xy,
+                degraded_xy=degraded_xy,
             ),
             stale=stale,
         )
 
     def snapshot(self) -> tuple[np.ndarray, np.ndarray, bool]:
+        obstacle_xy, cliff_xy, _line_cliff_xy, _degraded_xy, stale = self.snapshot_all()
+        return obstacle_xy, cliff_xy, stale
+
+    def snapshot_all(
+        self,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, bool]:
+        """Latest obstacle, cliff, line-cliff and degraded clouds, plus staleness."""
         now_ns = self._node.get_clock().now().nanoseconds
         with self._lock:
             obstacle_xy = self._obstacle_xy.copy()
             cliff_xy = self._cliff_xy.copy()
+            line_cliff_xy = self._line_cliff_xy.copy()
+            degraded_xy = self._degraded_xy.copy()
             obstacle_stamp_ns = self._obstacle_stamp_ns
             cliff_stamp_ns = self._cliff_stamp_ns
-        return obstacle_xy, cliff_xy, self._is_stale(
+        return obstacle_xy, cliff_xy, line_cliff_xy, degraded_xy, self._is_stale(
             now_ns,
             obstacle_stamp_ns,
             cliff_stamp_ns,
@@ -127,7 +158,7 @@ class HazardPointCache:
         if self._blocked_directions_pub is None:
             return
 
-        obstacle_xy, cliff_xy, stale = self.snapshot()
+        obstacle_xy, cliff_xy, line_cliff_xy, _degraded_xy, stale = self.snapshot_all()
         marker_array = MarkerArray()
         stamp = self._node.get_clock().now().to_msg()
         marker_array.markers.append(self._delete_all_marker(stamp))
@@ -144,7 +175,7 @@ class HazardPointCache:
             ))
         else:
             obstacle_sectors, cliff_sectors = self._blocked_direction_sectors(
-                obstacle_xy, cliff_xy)
+                obstacle_xy, cliff_xy, line_cliff_xy)
             marker_array.markers.append(self._sector_marker(
                 stamp,
                 marker_id=3,
@@ -166,6 +197,7 @@ class HazardPointCache:
         self,
         obstacle_xy: np.ndarray,
         cliff_xy: np.ndarray,
+        line_cliff_xy: np.ndarray | None = None,
     ) -> tuple[list[tuple[float, float]], list[tuple[float, float]]]:
         bins = max(int(self._config.blocked_directions_bins), 8)
         step = 2.0 * math.pi / bins
@@ -181,8 +213,9 @@ class HazardPointCache:
                 obstacle_xy,
                 cliff_xy,
                 self._config.filter_config,
+                line_cliff_xy,
             )
-            if blockage.blocked_by_cliff:
+            if blockage.blocked_by_cliff or blockage.blocked_by_line_cliff:
                 cliff_sectors.append((start, end))
             elif blockage.blocked_by_obstacle:
                 obstacle_sectors.append((start, end))
@@ -231,6 +264,16 @@ class HazardPointCache:
 
     def _on_cliff_points(self, msg: PointCloud2) -> None:
         self._set_cliff_xy(_xy_from_pointcloud2(msg))
+
+    def _on_line_cliff_points(self, msg: PointCloud2) -> None:
+        xy = _xy_from_pointcloud2(msg)
+        with self._lock:
+            self._line_cliff_xy = xy
+
+    def _on_degraded_points(self, msg: PointCloud2) -> None:
+        xy = _xy_from_pointcloud2(msg)
+        with self._lock:
+            self._degraded_xy = xy
 
     def _set_obstacle_xy(self, xy: np.ndarray) -> None:
         now_ns = self._node.get_clock().now().nanoseconds
@@ -332,6 +375,8 @@ def _xy_from_pointcloud2(msg: PointCloud2) -> np.ndarray:
 def declare_hazard_filter_parameters(node: Node) -> None:
     node.declare_parameter('obstacle_points_topic', '/under_base_hazard/obstacle_points')
     node.declare_parameter('cliff_points_topic', '/under_base_hazard/cliff_points')
+    node.declare_parameter('line_cliff_points_topic', '/under_base_hazard/line_cliff_points')
+    node.declare_parameter('degraded_points_topic', '/under_base_hazard/degraded_points')
     node.declare_parameter('hazard_timeout_s', 0.5)
     node.declare_parameter('stop_linear_on_stale', True)
     node.declare_parameter('lookahead_m', 0.50)
@@ -344,6 +389,11 @@ def declare_hazard_filter_parameters(node: Node) -> None:
     node.declare_parameter('creep_linear_speed_mps', 0.05)
     node.declare_parameter('cliff_buffer_m', 0.20)
     node.declare_parameter('min_linear_speed_mps', 1e-4)
+    node.declare_parameter('line_cliff_block_half_angle_deg', 60.0)
+    node.declare_parameter('line_cliff_max_range_m', 1.0)
+    node.declare_parameter('degraded_lookahead_m', 0.50)
+    node.declare_parameter('degraded_buffer_m', 0.10)
+    node.declare_parameter('degraded_speed_scale', 0.5)
     node.declare_parameter('blocked_directions_topic', '/under_base_hazard/blocked_directions')
     node.declare_parameter('blocked_directions_frame', 'base_link')
     node.declare_parameter('blocked_directions_publish_rate_hz', 5.0)
@@ -359,6 +409,8 @@ def hazard_point_cache_config_from_params(node: Node) -> HazardPointCacheConfig:
     return HazardPointCacheConfig(
         obstacle_points_topic=str(get('obstacle_points_topic').value),
         cliff_points_topic=str(get('cliff_points_topic').value),
+        line_cliff_points_topic=str(get('line_cliff_points_topic').value),
+        degraded_points_topic=str(get('degraded_points_topic').value),
         hazard_timeout_s=float(get('hazard_timeout_s').value),
         stop_linear_on_stale=bool(get('stop_linear_on_stale').value),
         filter_config=HazardVelFilterConfig(
@@ -372,6 +424,13 @@ def hazard_point_cache_config_from_params(node: Node) -> HazardPointCacheConfig:
             creep_linear_speed_mps=float(get('creep_linear_speed_mps').value),
             cliff_buffer_m=float(get('cliff_buffer_m').value),
             min_linear_speed_mps=float(get('min_linear_speed_mps').value),
+            line_cliff_block_half_angle_deg=float(
+                get('line_cliff_block_half_angle_deg').value,
+            ),
+            line_cliff_max_range_m=float(get('line_cliff_max_range_m').value),
+            degraded_lookahead_m=float(get('degraded_lookahead_m').value),
+            degraded_buffer_m=float(get('degraded_buffer_m').value),
+            degraded_speed_scale=float(get('degraded_speed_scale').value),
         ),
         blocked_directions_topic=str(get('blocked_directions_topic').value),
         blocked_directions_frame=str(get('blocked_directions_frame').value),

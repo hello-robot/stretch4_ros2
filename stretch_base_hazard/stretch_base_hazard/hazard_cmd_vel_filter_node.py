@@ -66,12 +66,17 @@ class HazardCmdVelFilterNode(Node):
                 'are stale or missing',
                 throttle_duration_sec=1.0,
             )
-        elif result.blocked_by_obstacle or result.blocked_by_cliff:
+        elif (
+            result.blocked_by_obstacle
+            or result.blocked_by_cliff
+            or result.blocked_by_line_cliff
+        ):
             self.get_logger().warning(
                 'Blocking cmd_vel linear velocity '
                 f'vx={msg.linear.x:.3f} vy={msg.linear.y:.3f} wz={msg.angular.z:.3f}; '
                 f'obstacle_cells={result.blocking_obstacle_count} '
-                f'cliff_cells={result.blocking_cliff_count}',
+                f'cliff_cells={result.blocking_cliff_count} '
+                f'line_cliff_cells={result.line_cliff_count}',
                 throttle_duration_sec=0.5,
             )
         elif result.slowed_by_obstacle:
@@ -81,6 +86,14 @@ class HazardCmdVelFilterNode(Node):
                 f'vy={msg.linear.y:.3f}->{result.vy:.3f} '
                 f'scale={result.obstacle_speed_scale:.2f} '
                 f'soft_obstacle_cells={result.soft_obstacle_count}',
+                throttle_duration_sec=0.5,
+            )
+        elif result.slowed_by_degraded:
+            self.get_logger().warning(
+                'Slowing cmd_vel linear velocity for degraded line-sensor coverage '
+                f'vx={msg.linear.x:.3f}->{result.vx:.3f} '
+                f'vy={msg.linear.y:.3f}->{result.vy:.3f} '
+                f'degraded_cells={result.degraded_count}',
                 throttle_duration_sec=0.5,
             )
 

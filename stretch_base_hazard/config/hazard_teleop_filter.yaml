@@ -2,6 +2,10 @@ hazard_gamepad_teleop:
   ros__parameters:
     obstacle_points_topic: /under_base_hazard/obstacle_points
     cliff_points_topic: /under_base_hazard/cliff_points
+    # Line-sensor cliff evidence (small drop, deep drop, probable cliff).
+    line_cliff_points_topic: /under_base_hazard/line_cliff_points
+    # Degraded line-sensor coverage; slows the base
+    degraded_points_topic: /under_base_hazard/degraded_points
     hazard_timeout_s: 0.5
     stop_linear_on_stale: true
     lookahead_m: 0.50
@@ -14,6 +18,11 @@ hazard_gamepad_teleop:
     creep_linear_speed_mps: 0.05
     cliff_buffer_m: 0.20
     min_linear_speed_mps: 0.0001
+    line_cliff_block_half_angle_deg: 60.0 # angle blocked when cliff form line sensors is detected
+    line_cliff_max_range_m: 1.0
+    degraded_lookahead_m: 0.50 
+    degraded_buffer_m: 0.10
+    degraded_speed_scale: 0.5 # heading into degraded cells scales speed without blocking
     blocked_directions_topic: /under_base_hazard/blocked_directions
     blocked_directions_frame: base_link
     blocked_directions_publish_rate_hz: 5.0
@@ -29,6 +38,10 @@ hazard_cmd_vel_filter_node:
     cmd_vel_out_topic: cmd_vel
     obstacle_points_topic: /under_base_hazard/obstacle_points
     cliff_points_topic: /under_base_hazard/cliff_points
+    # Line-sensor cliff evidence (small drop, deep drop, probable cliff).
+    line_cliff_points_topic: /under_base_hazard/line_cliff_points
+    # Degraded line-sensor coverage; slows the base, never blocks.
+    degraded_points_topic: /under_base_hazard/degraded_points
     hazard_timeout_s: 0.5
     stop_linear_on_stale: true
     lookahead_m: 0.50
@@ -41,6 +54,11 @@ hazard_cmd_vel_filter_node:
     creep_linear_speed_mps: 0.05
     cliff_buffer_m: 0.20
     min_linear_speed_mps: 0.0001
+    line_cliff_block_half_angle_deg: 60.0 # angle blocked when cliff form line sensors is detected
+    line_cliff_max_range_m: 1.0
+    degraded_lookahead_m: 0.50 
+    degraded_buffer_m: 0.10
+    degraded_speed_scale: 0.5 # heading into degraded cells scales speed without blocking
     blocked_directions_topic: /under_base_hazard/blocked_directions
     blocked_directions_frame: base_link
     blocked_directions_publish_rate_hz: 5.0

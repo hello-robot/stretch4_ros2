@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import numpy as np
@@ -21,6 +22,11 @@ class HazardVelFilterConfig:
     creep_linear_speed_mps: float = 0.05
     cliff_buffer_m: float = 0.20
     min_linear_speed_mps: float = 1e-4
+    line_cliff_block_half_angle_deg: float = 60.0
+    line_cliff_max_range_m: float = 1.0
+    degraded_lookahead_m: float = 0.50
+    degraded_buffer_m: float = 0.10
+    degraded_speed_scale: float = 0.5
 
 
 @dataclass(frozen=True)
@@ -37,6 +43,10 @@ class HazardVelFilterResult:
     soft_obstacle_count: int = 0
     blocking_cliff_count: int = 0
     obstacle_speed_scale: float = 1.0
+    blocked_by_line_cliff: bool = False
+    line_cliff_count: int = 0
+    slowed_by_degraded: bool = False
+    degraded_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -50,6 +60,10 @@ class HazardHeadingBlockage:
     soft_obstacle_count: int = 0
     blocking_cliff_count: int = 0
     obstacle_speed_scale: float = 1.0
+    blocked_by_line_cliff: bool = False
+    line_cliff_count: int = 0
+    slowed_by_degraded: bool = False
+    degraded_count: int = 0
 
 
 def filter_hazard_velocity(
@@ -59,6 +73,8 @@ def filter_hazard_velocity(
     obstacle_xy: np.ndarray,
     cliff_xy: np.ndarray,
     config: HazardVelFilterConfig | None = None,
+    line_cliff_xy: np.ndarray | None = None,
+    degraded_xy: np.ndarray | None = None,
 ) -> HazardVelFilterResult:
     """
     Remove commanded linear motion that points into known hazards.
@@ -74,9 +90,15 @@ def filter_hazard_velocity(
         return HazardVelFilterResult(float(vx), float(vy), float(wz))
 
     heading = linear / speed
-    blockage = classify_hazard_heading(heading, obstacle_xy, cliff_xy, cfg)
+    blockage = classify_hazard_heading(
+        heading, obstacle_xy, cliff_xy, cfg, line_cliff_xy, degraded_xy,
+    )
 
-    if blockage.blocked_by_obstacle or blockage.blocked_by_cliff:
+    if (
+        blockage.blocked_by_obstacle
+        or blockage.blocked_by_cliff
+        or blockage.blocked_by_line_cliff
+    ):
         linear = linear - float(np.dot(linear, heading)) * heading
         linear[np.abs(linear) <= cfg.min_linear_speed_mps] = 0.0
     elif blockage.slowed_by_obstacle:
@@ -87,6 +109,11 @@ def filter_hazard_velocity(
             creep_speed = float(cfg.creep_linear_speed_mps)
             if slowed_speed > creep_speed:
                 linear = linear * (creep_speed / slowed_speed)
+        linear[np.abs(linear) <= cfg.min_linear_speed_mps] = 0.0
+    elif blockage.slowed_by_degraded:
+        # Reduced confidence, not a hazard: Scale speed down.
+        scale = min(max(float(cfg.degraded_speed_scale), 0.0), 1.0)
+        linear = linear * scale
         linear[np.abs(linear) <= cfg.min_linear_speed_mps] = 0.0
 
     return HazardVelFilterResult(
@@ -100,6 +127,10 @@ def filter_hazard_velocity(
         soft_obstacle_count=blockage.soft_obstacle_count,
         blocking_cliff_count=blockage.blocking_cliff_count,
         obstacle_speed_scale=blockage.obstacle_speed_scale,
+        blocked_by_line_cliff=blockage.blocked_by_line_cliff,
+        line_cliff_count=blockage.line_cliff_count,
+        slowed_by_degraded=blockage.slowed_by_degraded,
+        degraded_count=blockage.degraded_count,
     )
 
 
@@ -108,6 +139,8 @@ def classify_hazard_heading(
     obstacle_xy: np.ndarray,
     cliff_xy: np.ndarray,
     config: HazardVelFilterConfig | None = None,
+    line_cliff_xy: np.ndarray | None = None,
+    degraded_xy: np.ndarray | None = None,
 ) -> HazardHeadingBlockage:
     """Classify whether translation along a heading would be blocked."""
     cfg = config or HazardVelFilterConfig()
@@ -137,6 +170,22 @@ def classify_hazard_heading(
         lookahead_m=cfg.cliff_lookahead_m,
         lateral_limit_m=cfg.footprint_m + cfg.cliff_buffer_m,
     )
+    line_cliff_count = 0
+    if line_cliff_xy is not None and len(line_cliff_xy):
+        line_cliff_count = _count_bearing_blockers(
+            line_cliff_xy,
+            heading,
+            half_angle_deg=cfg.line_cliff_block_half_angle_deg,
+            max_range_m=cfg.line_cliff_max_range_m,
+        )
+    degraded_count = 0
+    if degraded_xy is not None and len(degraded_xy):
+        degraded_count = _count_blockers(
+            degraded_xy,
+            heading,
+            lookahead_m=cfg.degraded_lookahead_m,
+            lateral_limit_m=cfg.footprint_m + cfg.degraded_buffer_m,
+        )
     return HazardHeadingBlockage(
         blocked_by_obstacle=obstacle_clearance['hard_count'] > 0,
         slowed_by_obstacle=(
@@ -148,6 +197,10 @@ def classify_hazard_heading(
         soft_obstacle_count=obstacle_clearance['soft_count'],
         blocking_cliff_count=cliff_count,
         obstacle_speed_scale=obstacle_clearance['speed_scale'],
+        blocked_by_line_cliff=line_cliff_count > 0,
+        line_cliff_count=line_cliff_count,
+        slowed_by_degraded=degraded_count > 0,
+        degraded_count=degraded_count,
     )
 
 
@@ -218,6 +271,36 @@ def _count_blockers(
         & (lateral <= max(float(lateral_limit_m), 0.0))
     )
     return int(np.count_nonzero(blocking))
+
+
+def _count_bearing_blockers(
+    points_xy: np.ndarray,
+    heading: np.ndarray,
+    *,
+    half_angle_deg: float,
+    max_range_m: float,
+) -> int:
+    """
+    Count points whose bearing falls within half_angle_deg of the heading.
+    heading is not part of the test. Used with line-sensor cliff evidence to stop directly without usign a lookahead distance.
+    """
+    points = _as_xy(points_xy)
+    if len(points) == 0:
+        return 0
+
+    ranges = np.linalg.norm(points, axis=1)
+    finite = np.isfinite(points).all(axis=1)
+    # Points at the origin have no meaningful bearing.
+    usable = finite & (ranges > 0.0)
+    if max_range_m > 0.0:
+        usable &= ranges <= float(max_range_m)
+    if not np.any(usable):
+        return 0
+
+    safe_ranges = np.where(ranges > 0.0, ranges, 1.0)
+    cos_to_heading = (points @ heading) / safe_ranges
+    half_angle = math.radians(min(max(float(half_angle_deg), 0.0), 180.0))
+    return int(np.count_nonzero(usable & (cos_to_heading >= math.cos(half_angle))))
 
 
 def _as_xy(points_xy: np.ndarray) -> np.ndarray:

@@ -11,8 +11,27 @@ from stretch_base_hazard.layer_tags import (
     LAYER_LIDAR_CLIFF,
     LAYER_LIDAR_OBSTACLE,
     LAYER_LIDAR_OCCLUSION,
+    LAYER_LINE_DEEP_DROP,
+    LAYER_LINE_DEGRADED,
     LAYER_LINE_OBSTACLE,
+    LAYER_LINE_PROBABLE_CLIFF,
     LAYER_LINE_SMALL_DROP,
+    LAYER_UNKNOWN,
+    LINE_CLIFF_LAYERS,
+)
+
+# Order used to label cells that morphology invented.
+# Least severe first: a later match overwrites an earlier one, so the most
+# severe neighbouring class wins the cell.
+LAYER_FILL_PRIORITY = (
+    LAYER_LINE_DEGRADED,
+    LAYER_LIDAR_OCCLUSION,
+    LAYER_LIDAR_OBSTACLE,
+    LAYER_LINE_OBSTACLE,
+    LAYER_LIDAR_CLIFF,
+    LAYER_LINE_SMALL_DROP,
+    LAYER_LINE_DEEP_DROP,
+    LAYER_LINE_PROBABLE_CLIFF,
 )
 
 
@@ -37,6 +56,8 @@ class HazardOutput:
     cliff_points: np.ndarray
     obstacle_points: np.ndarray
     occluded_points: np.ndarray
+    line_cliff_points: np.ndarray = None
+    degraded_points: np.ndarray = None
 
 
 def _connected_components(mask: np.ndarray) -> list[np.ndarray]:
@@ -72,6 +93,8 @@ class HazardExtractor:
                 cliff_points=np.zeros((0, 3)),
                 obstacle_points=np.zeros((0, 3)),
                 occluded_points=np.zeros((0, 3)),
+                line_cliff_points=np.zeros((0, 3)),
+                degraded_points=np.zeros((0, 3)),
             )
 
         structure = ndimage.generate_binary_structure(2, 1)
@@ -92,7 +115,11 @@ class HazardExtractor:
                 cliff_points=np.zeros((0, 3)),
                 obstacle_points=np.zeros((0, 3)),
                 occluded_points=np.zeros((0, 3)),
+                line_cliff_points=np.zeros((0, 3)),
+                degraded_points=np.zeros((0, 3)),
             )
+
+        layers = _fill_invented_cells(layers, filtered, structure, cfg.dilation_cells)
 
         idx = np.argwhere(filtered)
         rows = idx[:, 0]
@@ -101,26 +128,66 @@ class HazardExtractor:
         y = origin_y + rows.astype(np.float64) * resolution
         cell_layers = layers[rows, cols]
 
-        cliff_mask = np.isin(cell_layers, [LAYER_LIDAR_CLIFF, LAYER_LINE_SMALL_DROP])
+        cliff_mask = cell_layers == LAYER_LIDAR_CLIFF
+        line_cliff_mask = np.isin(cell_layers, list(LINE_CLIFF_LAYERS))
         obstacle_mask = np.isin(cell_layers, [LAYER_LIDAR_OBSTACLE, LAYER_LINE_OBSTACLE])
         occluded_mask = cell_layers == LAYER_LIDAR_OCCLUSION
-        other_mask = ~(cliff_mask | obstacle_mask | occluded_mask)
+        degraded_mask = cell_layers == LAYER_LINE_DEGRADED
+        other_mask = ~(
+            cliff_mask | line_cliff_mask | obstacle_mask | occluded_mask | degraded_mask
+        )
         obstacle_mask |= other_mask
 
         cliff_pts = _xy_to_xyz(x[cliff_mask], y[cliff_mask], cfg.cliff_z)
+        line_cliff_pts = _xy_to_xyz(x[line_cliff_mask], y[line_cliff_mask], cfg.cliff_z)
         obstacle_pts = _xy_to_xyz(x[obstacle_mask], y[obstacle_mask], cfg.obstacle_z)
         occluded_pts = _xy_to_xyz(x[occluded_mask], y[occluded_mask], cfg.occlusion_z)
+        degraded_pts = _xy_to_xyz(x[degraded_mask], y[degraded_mask], cfg.occlusion_z)
 
-        all_pts = np.vstack([
-            p for p in (cliff_pts, obstacle_pts, occluded_pts) if len(p) > 0
-        ]) if (len(cliff_pts) + len(obstacle_pts) + len(occluded_pts)) > 0 else np.zeros((0, 3))
+        parts = (cliff_pts, line_cliff_pts, obstacle_pts, occluded_pts, degraded_pts)
+        non_empty = [p for p in parts if len(p) > 0]
+        all_pts = np.vstack(non_empty) if non_empty else np.zeros((0, 3))
 
         return HazardOutput(
             all_points=all_pts,
             cliff_points=cliff_pts,
             obstacle_points=obstacle_pts,
             occluded_points=occluded_pts,
+            line_cliff_points=line_cliff_pts,
+            degraded_points=degraded_pts,
         )
+
+
+def _fill_invented_cells(
+    layers: np.ndarray,
+    filtered: np.ndarray,
+    structure: np.ndarray,
+    dilation_cells: int,
+) -> np.ndarray:
+    """
+    Label hazard cells that dilation invented. Each invented cell instead inherits the tag of the
+    blob it grew from, most severe neighbour winning.
+    """
+    if dilation_cells <= 0:
+        return layers
+    unknown = filtered & (layers == LAYER_UNKNOWN)
+    if not np.any(unknown):
+        return layers
+
+    resolved = np.full(layers.shape, LAYER_UNKNOWN, dtype=layers.dtype)
+    for tag in LAYER_FILL_PRIORITY:
+        source = layers == tag
+        if not np.any(source):
+            continue
+        grown = ndimage.binary_dilation(
+            source, structure=structure, iterations=dilation_cells,
+        )
+        resolved[unknown & grown] = tag
+
+    out = layers.copy()
+    take = unknown & (resolved != LAYER_UNKNOWN)
+    out[take] = resolved[take]
+    return out
 
 
 def _xy_to_xyz(x: np.ndarray, y: np.ndarray, z: float) -> np.ndarray:
