@@ -76,14 +76,15 @@ DEFAULT_SIM_TOOL = "eoa_wrist_dw4_tool_sg4"
 
 
 class StretchMujocoDriver(Stretch4ROSDriver):
-    body_joints = ["lift",
-                   "arm", #joint state pub splits arm into 4; should we do that here
-                   "wrist_yaw",
-                   "wrist_pitch",
-                   "wrist_roll",
-                   #"gripper", #does gripper even work as a joint?
-                   "gripper_right_finger",
-                   "gripper_left_finger"]
+    command_joints = ["lift",
+                      "arm",
+                      "wrist_yaw",
+                      "wrist_pitch",
+                      "wrist_roll",
+                      "gripper", 
+                      #"gripper_right_finger",
+                      #"gripper_left_finger",
+                      ]
     
     def __init__(self):
         super().__init__('stretch_mujoco_driver')
@@ -163,18 +164,25 @@ class StretchMujocoDriver(Stretch4ROSDriver):
         use_mujoco_viewer = self.get_parameter('use_mujoco_viewer').value
         self.sim.start(headless=not use_mujoco_viewer)
         self.setup_cam_pubs()
-        #self.last_control_loop_time = None
-        #self.movement_mode = None
-        #self.target_vel = None
 
         limits = self.sim.pull_joint_limits()
-        for joint in self.body_joints:
+
+        # hacky workaround for mismatched representations in sim vs real
+        if "gripper" in self.command_joints and Actuators["gripper"] not in limits:
+            if Actuators["gripper_right_finger"] in limits and Actuators["gripper_left_finger"] in limits:
+                 (rll, rul) = limits[Actuators["gripper_right_finger"]]
+                 (lll, lul) = limits[Actuators["gripper_left_finger"]]
+                 limits[Actuators["gripper"]] = (np.float64(rll+lll), np.float64(rul+lul))
+            
+        for joint in self.command_joints:
             (ll,ul) = limits[Actuators[joint]]
             results = self.set_parameters([Parameter(f"joint_limit.{joint}.upper", Parameter.Type.DOUBLE, ul),
                                  Parameter(f"joint_limit.{joint}.lower", Parameter.Type.DOUBLE, ll)])
             success = list(map(lambda x: x.successful, results))
             reasons = list(map(lambda x: x.reason, results))
             self.logger.info(f"Setting joint limits for joint {joint} as ({ll},{ul}).  Success: {success}, reasons: {reasons}")
+        # Add a check timer to detect when the simulator is closed
+        self.sim_check_timer = self.create_timer(0.1, self.check_sim_status, callback_group=self.main_group)
         self.start()
         
     def setup_cam_pubs(self):
@@ -337,13 +345,47 @@ class StretchMujocoDriver(Stretch4ROSDriver):
         return goal
         
     def set_base_velocity(self, x, y, theta):
-        self.sim.set_base_velocity(x, y, theta)
+        self.logger.error(f"Setting base velocity to {x},{y},{theta}") 
+        self.sim.base.set_velocity(x, y, theta)
 
-    def set_joint_position(self, joint, target):
-        self.sim.move_to(joint,target)
+    def set_joint_position(self, joint, target):   
+        subsys = None
+        
+        if hasattr(self.sim, joint):
+            subsys = getattr(self.sim, joint)
+
+        if hasattr(self.sim, "end_of_arm"):
+            if hasattr(self.sim.end_of_arm, joint):
+                subsys = getattr(self.sim.end_of_arm, joint)
+
+        if hasattr(self.sim, "head"):
+            if hasattr(self.sim.head, joint):
+                subsys = getattr(self.sim.head, joint)
+
+        if subsys is None:
+            raise NotImplementedError(f"Joint {joint} not found in simulator object -- does this joint exist?")
+
+        subsys.move_to(target)
 
     def set_joint_velocity(self, joint, target):
-        raise NotImplementedError("Velocity control not yet implemented in sim")
+            
+        subsys = None
+        
+        if hasattr(self.sim, joint):
+            subsys = getattr(self.sim, joint)
+
+        if hasattr(self.sim, "end_of_arm"):
+            if hasattr(self.sim.end_of_arm, joint):
+                subsys = getattr(self.sim.end_of_arm, joint)
+
+        if hasattr(self.sim, "head"):
+            if hasattr(self.sim.head, joint):
+                subsys = getattr(self.sim.head, joint)
+
+        if subsys is None:
+            raise NotImplementedError(f"Joint {joint} not found in simulator object -- does this joint exist?")
+
+        subsys.set_velocity(target)
     
 
     def publish_child_info(self):
@@ -427,6 +469,7 @@ class StretchMujocoDriver(Stretch4ROSDriver):
 
         
     def stop_the_robot_callback(self, request, response):
+        #TODO: fix this with new API
         with self.robot_stop_lock:
             self.sim.move_by(Actuators.base_translate, 0.0)
             self.sim.move_by(Actuators.base_rotate, 0.0)
@@ -594,28 +637,37 @@ class StretchMujocoDriver(Stretch4ROSDriver):
     def handle_mode_change(self, mode):
         # called after set parameter check automatically
         pass
-    
-    def change_mode(self, mode):
-        mode_param = Parameter("mode",Parameter.Type.STRING,mode)
-        result = self.set_parameters([mode_param])[0]
-        return result.successful
         
-    def setup_trajectory_action(self):
-        #TODO: trajectory action server not implemented for mujoco
-        pass
 
+    def check_sim_status(self):
+        if not self.sim.is_running():
+            self.logger.info("MuJoCo simulator has stopped. Shutting down node...")
+            if rclpy.ok():
+                rclpy.shutdown()
 
     def push_robot_command(self):
         return
 
-    def robot_mode(self):
-        return self.get_parameter('mode').value
     
     def get_robot_status(self):
         robot_status = self.sim.pull_status()
         self.logger.debug(robot_status.sim_to_real_time_ratio_msg)
         return robot_status
-        
+
+    def command_joint_pose_from_joint_state(self, command_joint, joint_state):
+        #I think this has to be hard-coded for now
+        match command_joint:
+            case "arm":
+                poses = []
+                subjoints = [f"{command_joint}_l{i}_joint" for i in [1,2,3,4]]
+                for j in subjoints:
+                    poses.append(joint_state.position[joint_state.name.index[j]])
+                return sum(poses)
+            case _:
+                joint_name = command_joint+"_joint"
+                return joint_state.position[joint_state.name.index[joint_name]]
+
+                
     def get_odom(self, robot_status, status_time) -> Odometry:
         # obtain odometry
         # assign relevant base status to variables
@@ -880,6 +932,9 @@ class StretchMujocoDriver(Stretch4ROSDriver):
         safety_diagnostics.header.stamp = status_time
         
         return safety_diagnostics
+
+
+
 
 name_to_dtypes = {
     "rgb8":    (np.uint8,  3),
@@ -1183,21 +1238,23 @@ def get_camera_frame(camera: StretchCameras):
 
                 
 def main():
-    rclpy.init()
-
-    node = StretchMujocoDriver()
-
     try:
-        while rclpy.ok() and node.sim.is_running():
-            rclpy.spin_once(node)
-
+        rclpy.init()
+        node = StretchMujocoDriver()
+        executor = rclpy.executors.MultiThreadedExecutor(num_threads=5)
+        executor.add_node(node)
+        try:
+            executor.spin()
+        finally:
+            print("Stopping Stretch Mujoco Driver")
+            node.sim.stop()
+            executor.shutdown()
+            node.destroy_node()
     except KeyboardInterrupt:
         print("Detecting KeyboardInterrupt")
     finally:
-        print("Stopping Stretch Mujoco Driver")
-        node.sim.stop()
-        node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == "__main__":

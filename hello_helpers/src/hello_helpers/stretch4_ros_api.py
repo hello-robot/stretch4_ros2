@@ -2,7 +2,14 @@
 
 from abc import ABC, abstractmethod
 from typing import Any
+import threading
 from threading import Lock
+import time
+
+from rclpy.action import ActionServer, CancelResponse, GoalResponse
+from rclpy.action.server import ServerGoalHandle
+from control_msgs.action import FollowJointTrajectory
+from trajectory_msgs.msg import JointTrajectoryPoint
 
 import rclpy
 from rclpy.duration import Duration
@@ -26,7 +33,7 @@ from tf2_ros.static_transform_broadcaster import StaticTransformBroadcaster
 
 
 class Stretch4ROSDriver(Node, ABC):
-    body_joints = None
+    command_joints = None
     joint_modes = ["position","velocity"]
 
     def __init__(self,name):
@@ -55,6 +62,7 @@ class Stretch4ROSDriver(Node, ABC):
         self._setup_common_pubs()
         self._setup_common_subs()
         self._setup_common_srvs()
+        self._setup_common_actions()
 
         self.last_published_value={}
         
@@ -95,12 +103,10 @@ class Stretch4ROSDriver(Node, ABC):
         self.add_post_set_parameters_callback(self.parameter_update_callback)
 
         self.last_position_target = {}
-        self.last_known_state = {}
+        self.last_known_state = None
         self.position_tolerance = self.get_parameter('position_tolerance').value
 
-        self.trajectory_server = self.setup_trajectory_action()
-        if self.trajectory_server is None:
-            self.logger.error("setup_trajectory_action failed to return JointTrajectoryAction. Proceeding without trajectory action server.")
+        self.trajectory_command_active = threading.Event()
         
     def start(self): #called by subclasses once setup for control loop is done
         self.control_timer = self.create_timer(
@@ -124,7 +130,7 @@ class Stretch4ROSDriver(Node, ABC):
             description='Joint properties',
         )
         
-        for joint in self.body_joints:
+        for joint in self.command_joints:
             self.declare_parameter(f"joint_acceleration.{joint}",None, desc)
             self.declare_parameter(f"joint_limit.{joint}.upper",None, desc)
             self.declare_parameter(f"joint_limit.{joint}.lower",None, desc)
@@ -174,7 +180,7 @@ class Stretch4ROSDriver(Node, ABC):
         self.latched_publishers.append((self.homed_pub, self.get_homed))
 
         self.mode_pub = self.create_publisher(String, 'mode', latching_qos)
-        self.latched_publishers.append((self.mode_pub, self.get_mode))
+        # handle mode separately; do not add to arrays of regular publishers
         
         self.tool_pub = self.create_publisher(String, 'tool', latching_qos)
         self.latched_publishers.append((self.tool_pub, self.get_tool))
@@ -207,6 +213,7 @@ class Stretch4ROSDriver(Node, ABC):
     def _setup_common_subs(self):
         # Subscribers
         self.create_subscription(Twist, "cmd_vel", self.base_twist_callback, 1, callback_group=self.main_group)
+        
         self.create_subscription(JointState, "joint_velocity_cmd", self.velocity_cmd_callback, 1, callback_group=self.main_group)
         
         self.create_subscription(JointState, "joint_position_cmd", self.position_cmd_callback, 1, callback_group=self.main_group)
@@ -240,9 +247,8 @@ class Stretch4ROSDriver(Node, ABC):
             callback_group=self.main_group
         )    
 
-    def setup_common_actions(self):
-        pass
-        #self.joint_trajectory_action = JointTrajectoryAction(self)
+    def _setup_common_actions(self):
+        self.trajectory_server = StretchTrajectoryActionServer(self)
 
     @abstractmethod
     def check_child_param(self, parameter: Parameter) -> tuple[bool,String]:
@@ -258,21 +264,36 @@ class Stretch4ROSDriver(Node, ABC):
     def handle_mode_change(self, mode):
         pass
 
+    # This function is provided as a convenience to access the current mode.
+    # Mode must be a parameter so that internal and external access in ROS remain
+    # synchronized
+    def robot_mode(self):
+        return self.get_parameter('mode').value
+    
+    # This function is provided as a convenience to handle the case
+    # where something happens outside the robot and the mode needs to change
+    # if require_success = True, this function will throw an error if the
+    # mode change fails.  Otherwise it will return a boolean with whether the
+    # mode change succeeded.
+    def change_mode(self, mode, require_success = False):
+        mode_param = Parameter("mode",Parameter.Type.STRING,mode)
+        result = self.set_parameters([mode_param])[0]
+        if not result.successful and require_success:
+            raise RuntimeError(f"Failed to change mode parameter to {mode} when strict success checking is enabled. Reason: {result.reason}")
+        return result.successful
+    
     def update_parameter(self, parameter: Parameter):
         #This function only gets called if all requested parameter updates are
-        #validated; no need to check
+        #validated; no need to check, and no need to handle any parameters that
+        #don't require additional processing. Note that at this point the value of
+        # the parameter that will return from get_parameter has already changed.
         match parameter.name:
             case "mode":
                 self.handle_mode_change(parameter.value)
-            case "action_timeout":
-                action_timeout = parameter.value
-                self.logger.info(f"Changed to action timeout = {action_timeout} s")
             case "velocity_timeout":
                 velocity_timeout = parameter.value
                 self.logger.info(f"Changed to velocity timeout = {velocity_timeout} s")
-            case "position_tolerance":
-                self.logger.info(f"Changed position tolerance to {self.position_tolerance}")
-            case n if n in [f"joint_mode.{joint}" for joint in self.body_joints]:
+            case n if n in [f"joint_mode.{joint}" for joint in self.command_joints]:
                 self.change_joint_mode(n.split(".")[1], parameter.value)
 
     def change_joint_mode(self, joint, mode):
@@ -302,21 +323,15 @@ class Stretch4ROSDriver(Node, ABC):
                 found=True
                 if parameter.value < 0.0:
                     reason="Timeout cannot be less than 0.0."
-            case "default_jog_duration":
-                found=True
-                if parameter.value < 0.0:
-                    reason="Jog duration cannot be less than 0.0."
-            case "position_tolerance":
-                found=True
-                if parameter.value < 0.0:
-                    reason="Position tolerance cannot be less than 0.0"
-            case n if n in [f"joint_mode.{joint}" for joint in self.body_joints]:
+            case n if n in [f"joint_mode.{joint}" for joint in self.command_joints]:
                 found = True
                 if parameter.value not in self.joint_modes:
                     reason=f"Joint mode must be in {self.joint_modes}." 
-            case n if n in [f"joint_limit.{joint}.upper" for joint in self.body_joints]:
+            case n if n in [f"joint_limit.{joint}.upper" for joint in self.command_joints]:
                 found = True
-            case n if n in [f"joint_limit.{joint}.lower" for joint in self.body_joints]:
+            case n if n in [f"joint_limit.{joint}.lower" for joint in self.command_joints]:
+                found = True
+            case n if "trajectory_server." in n:
                 found = True
             case _:
                 reason=f"Parameter {parameter.name} not mutable or not found."
@@ -366,22 +381,38 @@ class Stretch4ROSDriver(Node, ABC):
             return
             
         for i in range(len(target.name)):
-            self._check_and_set_vel(target.name[i],target.velocity[i])
+            self.check_and_set_vel(target.name[i],target.velocity[i])
 
     @abstractmethod
     def set_joint_velocity(self, joint, target):
         pass
 
-    def _check_and_set_vel(self, joint_name, goal):
+    def check_and_set_vel(self, joint_name, goal):
+        if (self.trajectory_server is not None and 
+            self.trajectory_server.active_joints is not None and 
+            joint_name in self.trajectory_server.active_joints and 
+            not self.trajectory_command_active.is_set()):
+            self.trajectory_server.direct_command_preempted = True
+
         mode = self.get_parameter(f"joint_mode.{joint_name}").value
+        succeeded = False
         if mode != "velocity":
             self.logger.warn(f"Cannot send velocity command to joint {joint_name} while in {mode} mode (must be in 'velocity' mode).")
         else:
             self.set_joint_velocity(joint_name, goal)
+            succeeded = True
+        return succeeded
         
         
-    def _check_and_set_pos(self, joint_name, goal):
+    def check_and_set_pos(self, joint_name, goal):
+        if (self.trajectory_server is not None and 
+            self.trajectory_server.active_joints is not None and 
+            joint_name in self.trajectory_server.active_joints and 
+            not self.trajectory_command_active.is_set()):
+            self.trajectory_server.direct_command_preempted = True
+
         mode = self.get_parameter(f"joint_mode.{joint_name}").value
+        succeeded = False
         if mode != "position":
             self.logger.warn(f"Cannot send position command to joint {joint_name} while in {mode} mode (must be in 'position' mode).")
         else:
@@ -393,9 +424,10 @@ class Stretch4ROSDriver(Node, ABC):
                 # TODO: maybe one last check that the robot's mode hasn't changed
                 self.last_position_target[joint_name]=goal
                 self.set_joint_position(joint_name, goal)
+                succeeded = True
             else:
                 self.logger.warn(f"Cannot send position command to joint {joint_name}: goal pose {goal} outside of joint limits ({ll},{ul}).")
-    
+        return succeeded
     
     def position_cmd_callback(self, target: JointState):
         self.logger.info(f"Got position command request: names: {target.name} velocities: {target.velocity} position: {target.position} (NB: velocity not used in velocity command!)")
@@ -405,7 +437,7 @@ class Stretch4ROSDriver(Node, ABC):
             return
             
         for i in range(len(target.name)):
-            self._check_and_set_pos(target.name[i],target.position[i])
+            self.check_and_set_pos(target.name[i],target.position[i])
 
     @abstractmethod
     def set_joint_position(self, joint, target):
@@ -427,11 +459,11 @@ class Stretch4ROSDriver(Node, ABC):
                 case "position":
                     if len(goal.position) < len(goal.name):
                         self.logger.error(f"Joystick command mapping for position has length {len(goal.position)} (expected length {len(goal.name)} to set target for joint {joint_name} in position control mode)")
-                    self._check_and_set_pos(joint_name, goal.position[i])
+                    self.check_and_set_pos(joint_name, goal.position[i])
                 case "velocity":
                     if len(goal.velocity) < len(goal.name):
                         self.logger.error(f"Joystick command mapping for velocity has length {len(goal.velocity)} (expected length {len(goal.name)} to set target for joint {joint_name} in veloctiy control mode)")
-                    self._check_and_set_vel(joint_name, goal.velocity[i])
+                    self.check_and_set_vel(joint_name, goal.velocity[i])
                 case _:
                     self.logger.warn(f"Joint in unsupported mode {joint_mode}.  Joint must be in position or velocity mode to accept joystick control.  Skipping this joint.")
             
@@ -504,6 +536,14 @@ class Stretch4ROSDriver(Node, ABC):
         joint_state = self.get_joint_state(status, current_time)
         self.last_known_state = dict(zip(joint_state.name, joint_state.position))
         self.joint_state_pub.publish(joint_state)
+
+        mode = self.get_mode(status, current_time)
+        if mode != self.robot_mode():
+            # this will raise a RuntimeError if the mode change fails
+            # so the driver will crash rather than running with the mode
+            # parameter not matching the true robot mode
+            self.change_mode(mode, require_success=True)
+            self.mode_pub.publish(mode)
         
         for (pub, msg_cb) in self.latched_publishers:
             message = msg_cb(status, current_time)
@@ -521,12 +561,7 @@ class Stretch4ROSDriver(Node, ABC):
         
         self.publish_child_info()
         self.push_robot_command()
-        
-        pass
 
-    @abstractmethod
-    def setup_trajectory_action(self):
-        pass
 
     @abstractmethod
     def push_robot_command(self):
@@ -564,6 +599,12 @@ class Stretch4ROSDriver(Node, ABC):
     def get_joint_state(self, robot_status, status_time) -> JointState:
         pass
 
+    #this function is needed because the published joint state splits up the
+    #arm and uses different names than the joint names used to send commands
+    @abstractmethod
+    def command_joint_pose_from_joint_state(self, command_joint, joint_state):
+        pass
+
     @abstractmethod                                    
     def get_battery(self, robot_status, status_time) -> BatteryState:
         pass
@@ -584,3 +625,302 @@ class Stretch4ROSDriver(Node, ABC):
     def get_safety_diagnostics(self, robot_status, status_time) -> DiagnosticArray:
         pass
     
+
+class StretchTrajectoryActionServer:
+    def __init__(self, driver: Stretch4ROSDriver):
+        # Store the reference to the parent node
+        self.driver = driver
+
+        self.active_joints = None
+        self.direct_command_preempted = False
+
+        self.param_prefix = "trajectory_server"
+        self.declare_params()
+
+        self.modes = ["pid_normal",
+                      "pid_correction",
+                      "target_priority",
+                      "time_priority"]
+        # Modes are as follows:
+        
+        # pid_normal = do PID control; requires kp, ki, kd to be set; takes
+        # positions & sends velocity
+        
+        # pid_correction -> adds a pid correction term based on error at time
+        # t; requires kp,ki,kd.  correction term is added on top of
+        # next position or velocity command, and otherwise works like
+        # time_priority mode
+
+        # target_priority = hit every position (or velocity) on the list;
+        # requires timeout. No guarantee of hitting x(t) at time t,
+        # but will not move to next point until x(t) is hit within a threshold
+
+        # time_priority = send position (or veloctiy) request for x(t) at
+        # time t, regardless
+        # of whether you reach that point.  No guarantee of hitting x(t) at
+        # time t, and no guarantee of hitting x(t) at all. takes optional
+        # offset parameter that adjusts target for all times by offset 
+        
+
+        
+        self._action_server = ActionServer(
+            self.driver, # Bind the action server to the parent node
+            FollowJointTrajectory,
+            'follow_joint_trajectory',
+            execute_callback=self.execute_callback,
+            goal_callback=self.goal_callback,
+            cancel_callback=self.cancel_callback,
+            callback_group=self.driver.main_group
+        )
+        self.driver.get_logger().info('FollowJointTrajectory Action Server has been initialized.')
+
+    def declare_params(self):
+        def add_param(name,value):
+            self.driver.declare_parameter(f"{self.param_prefix}.{name}", value)
+
+        add_param("mode", "target_priority")
+        add_param("strict_mode", True)
+        add_param("timeout", 5.0)
+        add_param("kp", 0.0)
+        add_param("ki", 0.0)
+        add_param("kd", 0.0)
+        add_param("offset", 0.0)
+        add_param("threshold", 0.05)
+        add_param("loop_rate", 100.0)
+
+    def get_param(self, short_name):
+        return self.driver.get_parameter(f"{self.param_prefix}.{short_name}").value
+
+    def goal_callback(self, goal_request):
+        """Accept or reject a new goal request."""
+        self.driver.get_logger().info('Received goal request.')
+        # You can add logic here to reject invalid trajectories before execution
+        return GoalResponse.ACCEPT
+
+    def cancel_callback(self, cancel_request):
+        """Accept or reject a request to cancel the current goal."""
+        self.driver.get_logger().info('Received cancel request.')
+        return CancelResponse.ACCEPT
+
+    def execute_callback(self, goal_handle):
+        """Execute the trajectory."""
+        mode = self.get_param("mode")
+        if mode not in self.modes:
+            self.driver.get_logger().error(f"Invalid trajectory server mode: {mode}. Must be one of {self.modes}")
+            result = FollowJointTrajectory.Result()
+            result.error_code = FollowJointTrajectory.Result.INVALID_GOAL
+            result.error_string = f"Invalid trajectory server mode: {mode}"
+            goal_handle.abort()
+            return result
+
+        self.driver.get_logger().info(f'Executing trajectory in {mode} mode (mode cannot be changed during execution)')
+
+        trajectory = goal_handle.request.trajectory
+        joint_names = trajectory.joint_names
+        points = trajectory.points
+
+        # Set active joints for direct command checking
+        self.active_joints = set(joint_names)
+        self.direct_command_preempted = False
+
+        # Parameters
+        strict_mode = self.get_param("strict_mode")
+        timeout = self.get_param("timeout")
+        kp = self.get_param("kp")
+        ki = self.get_param("ki")
+        kd = self.get_param("kd")
+        offset = self.get_param("offset")
+        threshold = self.get_param("threshold")
+        loop_rate = self.get_param("loop_rate")
+        
+        sleep_duration = 1.0 / loop_rate
+
+        # Initialize PID states
+        integrals = {name: 0.0 for name in joint_names}
+        last_errors = {name: None for name in joint_names}
+
+        # Initialize Feedback and Result messages
+        feedback_msg = FollowJointTrajectory.Feedback()
+        feedback_msg.joint_names = joint_names
+        feedback_msg.actual = JointTrajectoryPoint()
+        
+        result = FollowJointTrajectory.Result()
+
+        start_time = self.driver.get_clock().now()
+        last_pid_time = self.driver.get_clock().now()
+
+        for i, point in enumerate(points):
+            target_time_sec = point.time_from_start.sec + point.time_from_start.nanosec * 1e-9
+            waypoint_start_time = self.driver.get_clock().now()
+
+            while True:
+                # 1. Check for interrupts / cancellation requests
+                if goal_handle.is_cancel_requested:
+                    self.active_joints = None
+                    goal_handle.canceled()
+                    self.driver.get_logger().warn('Goal was canceled by the client.')
+                    result.error_code = FollowJointTrajectory.Result.PATH_TOLERANCE_VIOLATED
+                    result.error_string = "Canceled"
+                    return result
+
+                # Check robot mode
+                if self.driver.robot_mode() != "active":
+                    self.active_joints = None
+                    self.driver.get_logger().warn(f"Goal canceled because robot mode is {self.driver.robot_mode()} (must be 'active').")
+                    goal_handle.abort()
+                    result.error_code = FollowJointTrajectory.Result.INVALID_GOAL
+                    result.error_string = f"Robot mode changed to {self.driver.robot_mode()}"
+                    return result
+
+                # Check direct joint command preemption
+                if self.direct_command_preempted:
+                    self.active_joints = None
+                    self.driver.get_logger().warn("Goal canceled because a direct command was sent to one of the commanded joints.")
+                    goal_handle.abort()
+                    result.error_code = FollowJointTrajectory.Result.PATH_TOLERANCE_VIOLATED
+                    result.error_string = "Direct command preempted trajectory"
+                    return result
+
+                # 2. Command robot based on mode
+                command_failed = False
+                now = self.driver.get_clock().now()
+                dt = (now - last_pid_time).nanoseconds * 1e-9
+                last_pid_time = now
+
+                # Determine if target point specifies positions or velocities
+                use_pos = len(point.positions) > 0
+                use_vel = len(point.velocities) > 0 and not use_pos
+                
+                for j, joint_name in enumerate(joint_names):
+                    if mode == "pid_normal":
+                        # Requires positions, computes and sends velocity
+                        if not use_pos:
+                            self.driver.get_logger().warn(f"pid_normal mode requires position targets but none were provided for joint {joint_name}")
+                            continue
+                        
+                        current_pos = 0.0
+                        if self.driver.last_known_state is not None:
+                            current_pos = self.driver.last_known_state.get(joint_name, 0.0)
+
+                        error = point.positions[j] - current_pos
+                        integrals[joint_name] += error * dt
+                        
+                        derivative = 0.0
+                        if last_errors[joint_name] is not None and dt > 0:
+                            derivative = (error - last_errors[joint_name]) / dt
+                        last_errors[joint_name] = error
+
+                        vel_cmd = kp * error + ki * integrals[joint_name] + kd * derivative
+
+                        # Send velocity command
+                        self.driver.trajectory_command_active.set()
+                        try:
+                            succeeded = self.driver.check_and_set_vel(joint_name, vel_cmd)
+                        finally:
+                            self.driver.trajectory_command_active.clear()
+
+                        if not succeeded:
+                            command_failed = True
+
+                    elif mode == "pid_correction":
+                        # Adds PID correction based on error at time t added on top of position or velocity command
+                        current_pos = 0.0
+                        if self.driver.last_known_state is not None:
+                            current_pos = self.driver.last_known_state.get(joint_name, 0.0)
+
+                        target_pos = point.positions[j] if len(point.positions) > j else current_pos
+                        error = target_pos - current_pos
+                        integrals[joint_name] += error * dt
+                        
+                        derivative = 0.0
+                        if last_errors[joint_name] is not None and dt > 0:
+                            derivative = (error - last_errors[joint_name]) / dt
+                        last_errors[joint_name] = error
+
+                        correction = kp * error + ki * integrals[joint_name] + kd * derivative
+
+                        self.driver.trajectory_command_active.set()
+                        try:
+                            if use_pos:
+                                succeeded = self.driver.check_and_set_pos(joint_name, point.positions[j] + offset + correction)
+                            elif use_vel:
+                                succeeded = self.driver.check_and_set_vel(joint_name, point.velocities[j] + offset + correction)
+                            else:
+                                succeeded = True
+                        finally:
+                            self.driver.trajectory_command_active.clear()
+
+                        if not succeeded:
+                            command_failed = True
+
+                    else: # target_priority or time_priority
+                        self.driver.trajectory_command_active.set()
+                        try:
+                            if use_pos:
+                                succeeded = self.driver.check_and_set_pos(joint_name, point.positions[j] + offset)
+                            elif use_vel:
+                                succeeded = self.driver.check_and_set_vel(joint_name, point.velocities[j] + offset)
+                            else:
+                                succeeded = True
+                        finally:
+                            self.driver.trajectory_command_active.clear()
+
+                        if not succeeded:
+                            command_failed = True
+
+                if command_failed and strict_mode:
+                    self.active_joints = None
+                    self.driver.get_logger().warn("Goal canceled because sending command to a joint failed under strict_mode.")
+                    goal_handle.abort()
+                    result.error_code = FollowJointTrajectory.Result.PATH_TOLERANCE_VIOLATED
+                    result.error_string = "Joint command failed in strict mode"
+                    return result
+
+                # 3. Publish Feedback (echo actual position from driver if available, or point targets)
+                actual_positions = []
+                for joint_name in joint_names:
+                    if self.driver.last_known_state is not None:
+                        actual_positions.append(self.driver.last_known_state.get(joint_name, 0.0))
+                    else:
+                        actual_positions.append(0.0)
+
+                feedback_msg.actual.positions = actual_positions
+                feedback_msg.actual.time_from_start = point.time_from_start
+                goal_handle.publish_feedback(feedback_msg)
+
+                # 4. Check timing and waypoint completion
+                now = self.driver.get_clock().now()
+                elapsed_sec = (now - start_time).nanoseconds * 1e-9
+                waypoint_elapsed_sec = (now - waypoint_start_time).nanoseconds * 1e-9
+
+                if mode == "target_priority":
+                    # Check if all position joint targets are hit within threshold
+                    reached_all = True
+                    for j, joint_name in enumerate(joint_names):
+                        if use_pos:
+                            current_pos = 0.0
+                            if self.driver.last_known_state is not None:
+                                current_pos = self.driver.last_known_state.get(joint_name, 0.0)
+                            if abs(current_pos - (point.positions[j] + offset)) > threshold:
+                                reached_all = False
+                                break
+                    
+                    if (elapsed_sec >= target_time_sec and reached_all) or (waypoint_elapsed_sec >= timeout):
+                        break
+                else:
+                    # For all other modes (time_priority, pid_normal, pid_correction), we just wait until time_from_start is reached
+                    if elapsed_sec >= target_time_sec:
+                        break
+
+                time.sleep(sleep_duration)
+
+        # Clear active joints upon completion
+        self.active_joints = None
+
+        # Successful Completion
+        goal_handle.succeed()
+        result.error_code = FollowJointTrajectory.Result.SUCCESSFUL
+        result.error_string = "Completed trajectory successfully"
+        self.driver.get_logger().info('Goal succeeded.')
+        
+        return result
