@@ -27,7 +27,7 @@ hits.obstacle_xy, hits.deep_drop_xy, hits.degraded_xy   # (N, 2) arrays
 | `shape.py` | Reject spray / streaks / noise by shape | `ShapeGate` |
 | `confirm.py` | Require a hazard to persist | `bin_confirmed()` |
 | `nulls.py` | Read the *silences* → cliffs & degraded | `NullEvidenceDetector` |
-| `arrays.py` | Tiny shared numpy helpers | `as_range_array()`, `runs()` |
+| `arrays.py` | Shared numpy helpers | `as_range_array()`, `runs()` |
 
 Three layers:
 
@@ -38,7 +38,7 @@ Three layers:
   alongside. Each is one step in a returning bin's life (or, for `nulls`, the
   bins that never returned).
 - **Orchestrator** — `source`. Holds the per-frame memory and calls the stages
-  in order. If you only read one file, read this one.
+  in order.
 
 ---
 
@@ -67,8 +67,7 @@ geometry questions every stage asks, and caches the parts that don't depend on
 the live ranges:
 
 - `project(sensor_idx, ranges)` — the (x, y, z) of every bin.
-- `local_contrast(z, ranges)` — z minus the rolling median of its neighbours,
-  so a whole-array floor shift can't masquerade as an object.
+- `local_contrast(z, ranges)` — z minus the rolling median of its neighbours.
 - `floor_intersections`, `bin_bearings`, `sensor_origin`, `radial_metrics` —
   where a ray meets the floor, its world bearing, the sensor mount point, and
   the shape descriptors of a run of bins.
@@ -82,8 +81,8 @@ Nothing here decides "hazard" — it only measures.
 `process()` reads as the pipeline. Each stage is a single call:
 
 ```
-Stage 1  classify        for every returning bin → BinClass        classify.py
-Stage 2  gloss quarantine drop phantom near-field arcs (context)    gloss.py
+Stage 1  classify         for every returning bin → BinClass         classify.py
+Stage 2  gloss quarantine drop phantom near-field arcs               gloss.py
 Stage 3  shape gate       group into runs, drop spray/streaks/noise  shape.py
 Stage 4  confirm          require persistence across frames          confirm.py
 Stage 5  null evidence    read no-return bins → cliffs / degraded    nulls.py   (parallel)
@@ -183,6 +182,7 @@ robot to slow down as a precaution but does not stop it.
 The remaining `raw_*`, `spatial_*`, `benign_null_xy` fields are debug views of
 the intermediate stages.
 
+#### Warning: When dealing with drop-offs, do not rely on the reported distance. The measured distance corresponds to where the sensor detects the floor beyond the drop, not where the drop begins. As a result, unlike obstacles, you should not leave a safety margin or continue moving after first detecting a drop. Instead, stop immediately when a drop is detected.
 ---
 
 ## Where each knob lives
@@ -194,17 +194,3 @@ named after the field, so a knob is reachable from `config/line_sensors.yaml`
 the moment it exists here.
 
 ---
-
-## The public API
-
-Import only these from `stretch_core.line_sensor_filter`:
-
-- `LineSensorSource` — build once, `.process(status)` per frame.
-- `LineSensorConfig` — the tunables.
-- `LineSensorHits` — the result.
-- `BinClass` — the per-bin labels, if you need them.
-- `as_range_array` — coerce a raw ranges payload to float64.
-
-`Projector`, `ShapeGate`, `FlipTracker`, `NullEvidenceDetector` and the
-per-stage functions are internal — reach for them only when working inside the
-package.
