@@ -46,6 +46,15 @@ class LineSensorConfig:
     shadow_adjacency_bins: int = 3
     cliff_adjacent_drop_bins: int = 6
     cliff_bearing_adjacency_deg: float = 15.0
+   
+    use_far_sentinel_void: bool = True
+    # A null run is void-typed when at least this fraction of its bins carry a
+    # far sentinel.
+    void_far_sentinel_min_fraction: float = 0.02
+    void_far_sentinel_min_bins: int = 3
+    # Null runs on other sensors whose bearings fall inside a
+    # void's bearing span (plus this margin) are cliff-typed too.
+    void_bearing_adjacency_deg: float = 20.0
     # Deep drops: returning bins deeper than cliff_max_drop classify as
     # DEEP_DROP (by checking deviation) and publish on the deep-drop output alongside cliff-typed null runs.
     use_deep_drop: bool = True

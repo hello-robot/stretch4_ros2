@@ -144,12 +144,27 @@ the frame history for that streak. Survivors are the **promoted** hazards.
 ## Reading the silences — `nulls.py`
 
 Everything above is about bins that *return*. `NullEvidenceDetector.detect()`
-handles the bins that don't — the no-return codes. A trusted null run is typed
-by context: shadowed by an obstacle or suppressed by a near bright return
-(benign), next to a drop (a **probable cliff** → deep-drop output), or plain
-dark floor. Trusted nulls that stay unexplained measure lost coverage and, once
-a smoothed & hysteretic fraction crosses the threshold, publish as **degraded**
-(slow down, don't stop).
+handles the bins that don't. A null run counts as evidence only where the bins
+are expected to return on clear floor, only if it is long enough, and only if
+the same region was mostly null in the previous frame. The surviving runs are
+then classified in order.
+
+A run containing the far-return sentinel (`5.09`) is classified as a
+**probable cliff**. Any run on another sensor whose bearings fall within that
+void's angular span is also classified as a **probable cliff**, since a ledge
+is continuous across the floor plane and does not stop at a sensor boundary.
+
+A run adjacent to an obstacle is classified as an **occlusion shadow**, while a
+run on a sensor reporting a strong nearby return is classified as a
+**suppressed exposure**. Both are **benign**.
+
+A run adjacent to a drop bin, or aligned with one on another sensor, is also
+classified as a **probable cliff**.
+
+Anything left is treated as **dark floor**: benign but unexplained. If the
+smoothed, hysteretic fraction of unexplained nulls exceeds the configured
+threshold, that sensor is marked as **degraded**. A degraded sensor causes the
+robot to slow down as a precaution but does not stop it.
 
 ---
 
