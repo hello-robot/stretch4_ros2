@@ -51,11 +51,12 @@ Top-level launch files live directly under `launch/` — these are the ones you 
 |-------------|---------|
 | `offline_mapping.launch.py` | Build a map with SLAM |
 | `navigation_mppi.launch.py` | Navigate on a saved map (main entry point) |
-| `navigation_mppi_filter.launch.py` | Navigate with binary-filter adaptive params |
+| `navigation_mppi_nav2_filters.launch.py` | Navigate with the keepout and/or speed costmap filters |
+| `navigation_mppi_binary_filter.launch.py` | Navigate with binary-filter adaptive params |
 | `binary_filter_launch.py` | Start the binary costmap filter servers |
 | `global_plan_demo.launch.py` | Standalone global planner demo |
 
-Supporting launch files that are included by the above live under `launch/include/` (`nav_core`, `bringup`, `navigation_launch`, `slam_toolbox`). You normally do not run these directly.
+Supporting launch files that are included by the above live under `launch/include/` (`nav_core`, `bringup`, `navigation_launch`, `nav2_filters`, `slam_toolbox`). You normally do not run these directly.
 
 ### Launch ordering
 
@@ -138,14 +139,14 @@ ros2 launch stretch_nav2 binary_filter_launch.py
 2. Launch navigation with the filter configuration:
 
 ```bash
-ros2 launch stretch_nav2 navigation_mppi_filter.launch.py
+ros2 launch stretch_nav2 navigation_mppi_binary_filter.launch.py
 ```
 
-Alternative for running the navigation_mppi_filter:
+Alternative for running the navigation_mppi_binary_filter:
 
 ```bash
 ros2 launch stretch_nav2 navigation_mppi.launch.py \
-  params_file:=/home/hello-robot/ament_ws/src/stretch4_ros2/stretch_nav2/config/nav2_params_mppi_filter.yaml
+  params_file:=/home/hello-robot/ament_ws/src/stretch4_ros2/stretch_nav2/config/nav2_params_mppi_binary_filter.yaml
 
 ros2 run stretch_nav2 binary_filter_switch.py
 ```
@@ -175,10 +176,72 @@ The application used is Gimp https://www.gimp.org/downloads/.
 
 2. Make sure your global or local costmap includes the filter under the filters: parameter.
 
-Other useful filters include keepout zones and speed limits. For tutorials on these, see:
+### 5) Keepout and Speed Filters (`nav2_filters`)
+
+Two Nav2 costmap filters, driven by mask images you paint over your map:
+
+- **Keepout filter** — marks regions the planner must not route through. Applied to both the
+  global and local costmaps.
+- **Speed filter** — marks regions with a speed limit. Applied to the global costmap only.
+
+Both live in one launch file and are selected with launch arguments, so you can run either
+one or both together.
+
+#### Launching
+
+Both filters (the default):
+
+```bash
+ros2 launch stretch_nav2 navigation_mppi_nav2_filters.launch.py \
+  map:=/path/to/map.yaml \
+  keepout_mask:=/path/to/keepout_mask.yaml \
+  speed_mask:=/path/to/speed_mask.yaml
+```
+
+Keepout only — no `speed_mask` needed:
+
+```bash
+ros2 launch stretch_nav2 navigation_mppi_nav2_filters.launch.py \
+  map:=/path/to/map.yaml \
+  keepout_mask:=/path/to/keepout_mask.yaml \
+  enable_speed:=false
+```
+
+Speed only — no `keepout_mask` needed:
+
+```bash
+ros2 launch stretch_nav2 navigation_mppi_nav2_filters.launch.py \
+  map:=/path/to/map.yaml \
+  speed_mask:=/path/to/speed_mask.yaml \
+  enable_keepout:=false
+```
+
+Setting both `enable_keepout:=false` and `enable_speed:=false` starts no filter servers and
+skips the overlay entirely, leaving you with plain `navigation_mppi` behaviour.
+
+#### Arguments
+
+| Argument | Default | Purpose |
+|----------|---------|---------|
+| `map` | *(required)* | Occupancy map yaml |
+| `enable_keepout` | `true` | Start the keepout mask/info servers and enable the plugin |
+| `enable_speed` | `true` | Start the speed mask/info servers and enable the plugin |
+| `keepout_mask` | `''` | Keepout mask yaml. **Required when `enable_keepout` is true** |
+| `speed_mask` | `''` | Speed mask yaml. **Required when `enable_speed` is true** |
+| `tool_preset` | `auto` | Mounted tool for the lidar self-filter: `auto`, `sg4`, `pg4`, `tablet`, `nil` |
+| `use_rviz` | `true` | Start RViz |
+| `use_composition` | `True` | Run Nav2 composed. Set `False` to debug individual nodes |
+
+Enabling a filter without giving it a mask fails fast at launch:
+
+```
+RuntimeError: enable_keepout=true but keepout_mask is empty
+```
+
+Resources for [Keepout and Speed Filters]
+
 https://docs.nav2.org/tutorials/docs/navigation2_with_speed_filter.html
 https://docs.nav2.org/tutorials/docs/navigation2_with_keepout_filter.html
-
 ---
 
 ## Things to Note and Design Decisions

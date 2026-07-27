@@ -22,7 +22,7 @@ def _bool_cfg(context, name, default=True):
 def _filter_overlay_with_flags(enable_keepout: bool, enable_speed: bool) -> str:
     """Load keepout/speed overlay and set each filter's enabled flag."""
     pkg = get_package_share_directory('stretch_nav2')
-    base_path = os.path.join(pkg, 'config', 'nav2_params_keepout_speed.yaml')
+    base_path = os.path.join(pkg, 'config', 'nav2_params_nav2_filters.yaml')
     with open(base_path, 'r', encoding='utf-8') as f:
         data = yaml.safe_load(f)
 
@@ -85,7 +85,7 @@ def _launch_setup(context, *args, **kwargs):
     if enable_keepout or enable_speed:
         actions.append(IncludeLaunchDescription(
             PathJoinSubstitution([
-                stretch_navigation_path, 'launch', 'include', 'keepout_speed_filters.launch.py'
+                stretch_navigation_path, 'launch', 'include', 'nav2_filters.launch.py'
             ]),
             launch_arguments={
                 'keepout_mask': LaunchConfiguration('keepout_mask'),

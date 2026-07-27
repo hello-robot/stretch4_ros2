@@ -70,13 +70,13 @@ public:
     configureScanProjection(scan_angle_increment_deg_);
     setupPublishers();
 
-    if (pub_self_filter_markers_) {
-      pub_markers_ = create_publisher<visualization_msgs::msg::MarkerArray>(
-        self_filter_markers_topic_, rclcpp::QoS(1).reliable());
-    }
+    setupMarkerPublisher();
 
+    // on_set only validates; post_set is what applies a change to the node.
     param_callback_handle_ = add_on_set_parameters_callback(
-      std::bind(&DualLidarLaserScanNode::onParameterChange, this, std::placeholders::_1));
+      std::bind(&DualLidarLaserScanNode::validateParameters, this, std::placeholders::_1));
+    post_param_callback_handle_ = add_post_set_parameters_callback(
+      std::bind(&DualLidarLaserScanNode::applyParameters, this, std::placeholders::_1));
   }
 
   bool lookupStaticTransforms()
@@ -225,11 +225,29 @@ private:
     }
   }
 
+  void setupMarkerPublisher()
+  {
+    if (pub_self_filter_markers_) {
+      pub_markers_ = create_publisher<visualization_msgs::msg::MarkerArray>(
+        self_filter_markers_topic_, rclcpp::QoS(1).reliable());
+      RCLCPP_INFO(
+        get_logger(), "Self-filter markers publishing on %s",
+        self_filter_markers_topic_.c_str());
+    } else {
+      pub_markers_.reset();
+      RCLCPP_INFO(get_logger(), "Self-filter markers disabled");
+    }
+  }
+
+  static bool isValidScanAngleIncrement(double angle_increment_deg)
+  {
+    return std::isfinite(angle_increment_deg) && angle_increment_deg > 0.0 &&
+           angle_increment_deg <= 5.0;
+  }
+
   bool configureScanProjection(double angle_increment_deg)
   {
-    if (!std::isfinite(angle_increment_deg) || angle_increment_deg <= 0.0 ||
-      angle_increment_deg > 5.0)
-    {
+    if (!isValidScanAngleIncrement(angle_increment_deg)) {
       return false;
     }
 
@@ -369,7 +387,8 @@ private:
     }
 
     auto scan = std::make_shared<sensor_msgs::msg::LaserScan>();
-    scan->header.stamp = now();
+    // scan->header.stamp = now();
+    scan->header.stamp = output_header.stamp;
     scan->header.frame_id = "laser";
     scan->angle_min = scan_cfg_.angle_min;
     scan->angle_max = scan_cfg_.angle_max;
@@ -380,22 +399,187 @@ private:
     pub_->publish(*scan);
   }
 
-  rcl_interfaces::msg::SetParametersResult onParameterChange(
-    const std::vector<rclcpp::Parameter> & parameters)
+  static bool isSelfFilterGeometryParameter(const std::string & name)
+  {
+    return name == "frame_id" || name == "arm_line_start_frame" ||
+           name == "arm_line_start_height_frame" || name == "arm_line_end_frame" ||
+           name == "self_filter_box_frames" || name == "self_filter_box_names" ||
+           name == "self_filter_box_groups" || name == "self_filter_box_origin_x" ||
+           name == "self_filter_box_origin_y" || name == "self_filter_box_origin_z" ||
+           name == "self_filter_box_rpy_roll" || name == "self_filter_box_rpy_pitch" ||
+           name == "self_filter_box_rpy_yaw" || name == "self_filter_box_half_extents_x" ||
+           name == "self_filter_box_half_extents_y" || name == "self_filter_box_half_extents_z";
+  }
+
+  static bool isLidarInputParameter(const std::string & name)
+  {
+    return name == "lidar1_topic" || name == "lidar2_topic" ||
+           name == "lidar1_frame" || name == "lidar2_frame";
+  }
+
+  static rcl_interfaces::msg::SetParametersResult accept()
   {
     rcl_interfaces::msg::SetParametersResult result;
     result.successful = true;
     result.reason = "success";
+    return result;
+  }
 
+  // Every rejection names the parameter, echoes the value that was sent and
+  // states the constraint, so `ros2 param set` prints something actionable.
+  template<typename T>
+  static rcl_interfaces::msg::SetParametersResult reject(
+    const std::string & name, const T & value, const std::string & requirement)
+  {
+    rcl_interfaces::msg::SetParametersResult result;
+    result.successful = false;
+    std::ostringstream oss;
+    oss << name << " = " << value << " is invalid: " << requirement << '.';
+    result.reason = oss.str();
+    return result;
+  }
+
+  static rcl_interfaces::msg::SetParametersResult rejectImmutable(
+    const std::string & name, const std::string & why)
+  {
+    rcl_interfaces::msg::SetParametersResult result;
+    result.successful = false;
+    result.reason = name + " cannot be changed at runtime: " + why;
+    return result;
+  }
+
+  double valueAfterSet(
+    const std::vector<rclcpp::Parameter> & parameters,
+    const std::string & name) const
+  {
+    for (const auto & param : parameters) {
+      if (param.get_name() == name) {
+        return param.as_double();
+      }
+    }
+    return get_parameter(name).as_double();
+  }
+
+  rcl_interfaces::msg::SetParametersResult validateParameters(
+    const std::vector<rclcpp::Parameter> & parameters)
+  {
+    try {
+      for (const auto & param : parameters) {
+        const auto & name = param.get_name();
+
+        if (isSelfFilterGeometryParameter(name)) {
+          return rejectImmutable(
+            name, "the self-filter geometry is generated from the URDF when the node "
+            "launches. Restart the node with the new value");
+        }
+
+        if (isLidarInputParameter(name)) {
+          return rejectImmutable(
+            name, "This cant be modified at runtime, change the launch file or parameter YAML and restart the node");
+        }
+
+        if (name == "filter_type") {
+          const auto value = param.as_string();
+          try {
+            (void)stretch_core::stagesFromFilterType(value);
+          } catch (const std::exception &) {
+            return reject(
+              name, value,
+              "must be one of: region, sor, sor_ransac, self, none, custom");
+          }
+        } else if (name == "scan_angle_increment_deg") {
+          const double value = param.as_double();
+          if (!isValidScanAngleIncrement(value)) {
+            return reject(name, value, "must be a finite value in (0, 5] degrees");
+          }
+        } else if (name == "angle") {
+          const double value = param.as_double();
+          if (!std::isfinite(value) || value <= 0.0 || value > 90.0) {
+            return reject(
+              name, value,
+              "the floor-plane angle tolerance must be a finite value in (0, 90] degrees");
+          }
+        } else if (name == "leaf_size" || name == "sor_stddev" || name == "range_max" ||
+          name == "plane_fitting_threshold" || name == "speckle_range_tolerance")
+        {
+          const double value = param.as_double();
+          if (!std::isfinite(value) || value <= 0.0) {
+            return reject(name, value, "must be a finite value greater than 0");
+          }
+        } else if (name == "dist_rob" || name == "base_radius") {
+          const double value = param.as_double();
+          if (!std::isfinite(value) || value < 0.0) {
+            return reject(name, value, "must be a finite value of 0 or more");
+          }
+        } else if (name == "sor_mean_k" || name == "speckle_min_points" ||
+          name == "speckle_neighbor_window")
+        {
+          const int64_t value = param.as_int();
+          if (value < 1) {
+            return reject(name, value, "must be 1 or more");
+          }
+        } else if (name == "speckle_min_neighbors") {
+          const int64_t value = param.as_int();
+          if (value < 0) {
+            return reject(name, value, "must be 0 or more");
+          }
+        } else if (name == "output_topic" || name == "pointcloud_topic" ||
+          name == "self_filter_markers_topic")
+        {
+          const auto value = param.as_string();
+          if (value.empty()) {
+            return reject(
+              name, "''", "a publisher cannot be created on an empty topic name");
+          }
+        }
+
+        if (name == "z_min" || name == "z_max") {
+          const double z_min = valueAfterSet(parameters, "z_min");
+          const double z_max = valueAfterSet(parameters, "z_max");
+          if (!std::isfinite(z_min) || !std::isfinite(z_max) || z_min >= z_max) {
+            return reject(
+              name, param.as_double(),
+              "the region filter needs z_min < z_max (this set would give z_min=" +
+              std::to_string(z_min) + ", z_max=" + std::to_string(z_max) + ")");
+          }
+        } else if (name == "floor_detect_z_min" || name == "floor_detect_z_max") {
+          const double lo = valueAfterSet(parameters, "floor_detect_z_min");
+          const double hi = valueAfterSet(parameters, "floor_detect_z_max");
+          if (!std::isfinite(lo) || !std::isfinite(hi) || lo >= hi) {
+            return reject(
+              name, param.as_double(),
+              "floor detection needs floor_detect_z_min < floor_detect_z_max (this set "
+              "would give " + std::to_string(lo) + " and " + std::to_string(hi) + ")");
+          }
+        }
+
+        // Anything without a check above is accepted. Rejecting unrecognised
+        // names would block other callbacks from handling them.
+      }
+    } catch (const std::exception & ex) {
+      rcl_interfaces::msg::SetParametersResult result;
+      result.successful = false;
+      result.reason = std::string("could not validate the requested parameters: ") + ex.what();
+      return result;
+    }
+    return accept();
+  }
+
+  void applyParameters(const std::vector<rclcpp::Parameter> & parameters)
+  {
     for (const auto & param : parameters) {
       const auto & name = param.get_name();
+
+      RCLCPP_INFO(
+        get_logger(), "Parameter %s set to %s", name.c_str(),
+        param.value_to_string().c_str());
+
       if (name == "filter_type") {
         filter_type_ = param.as_string();
         try {
           configurePipeline();
         } catch (const std::exception & ex) {
-          result.successful = false;
-          result.reason = ex.what();
+          RCLCPP_ERROR(get_logger(), "Failed to apply filter_type: %s", ex.what());
         }
       } else if (name == "enable_self_robot_filter") {
         enable_self_robot_filter_ = param.as_bool();
@@ -420,21 +604,7 @@ private:
         scan_cfg_.range_max = pipeline_config_.region.range_max;
         pipeline_.setConfig(pipeline_config_);
       } else if (name == "scan_angle_increment_deg") {
-        if (!configureScanProjection(param.as_double())) {
-          result.successful = false;
-          result.reason = "scan_angle_increment_deg must be > 0 and <= 5 degrees";
-        }
-      } else if (name == "frame_id" || name == "arm_line_start_frame" ||
-        name == "arm_line_start_height_frame" || name == "arm_line_end_frame" ||
-        name == "self_filter_box_frames" || name == "self_filter_box_names" ||
-        name == "self_filter_box_groups" || name == "self_filter_box_origin_x" ||
-        name == "self_filter_box_origin_y" || name == "self_filter_box_origin_z" ||
-        name == "self_filter_box_rpy_roll" || name == "self_filter_box_rpy_pitch" ||
-        name == "self_filter_box_rpy_yaw" || name == "self_filter_box_half_extents_x" ||
-        name == "self_filter_box_half_extents_y" || name == "self_filter_box_half_extents_z")
-      {
-        result.successful = false;
-        result.reason = "URDF self-filter geometry cannot be changed at runtime.";
+        configureScanProjection(param.as_double());
       } else if (name == "base_radius") {
         self_filter_config_.base_radius = static_cast<float>(param.as_double());
         self_filter_.setConfig(self_filter_config_);
@@ -443,17 +613,33 @@ private:
         self_filter_reload_pending_ = true;
       } else if (name == "pub_self_filter_markers") {
         pub_self_filter_markers_ = param.as_bool();
-        if (pub_self_filter_markers_) {
-          pub_markers_ = create_publisher<visualization_msgs::msg::MarkerArray>(
-            self_filter_markers_topic_, rclcpp::QoS(1).reliable());
-        } else {
-          pub_markers_.reset();
-        }
-      } else if (name == "dist_rob" || name == "leaf_size" || name == "sor_mean_k" ||
-        name == "sor_stddev" || name == "plane_fitting_threshold" || name == "angle" ||
-        name == "floor_detect_z_min" || name == "floor_detect_z_max")
-      {
-        loadParameters();
+        setupMarkerPublisher();
+      } else if (name == "self_filter_markers_topic") {
+        self_filter_markers_topic_ = param.as_string();
+        setupMarkerPublisher();
+      } else if (name == "dist_rob") {
+        pipeline_config_.sor.dist_rob = param.as_double();
+        pipeline_.setConfig(pipeline_config_);
+      } else if (name == "leaf_size") {
+        pipeline_config_.sor.leaf_size = param.as_double();
+        pipeline_.setConfig(pipeline_config_);
+      } else if (name == "sor_mean_k") {
+        pipeline_config_.sor.sor_mean_k = static_cast<int>(param.as_int());
+        pipeline_.setConfig(pipeline_config_);
+      } else if (name == "sor_stddev") {
+        pipeline_config_.sor.sor_stddev = param.as_double();
+        pipeline_.setConfig(pipeline_config_);
+      } else if (name == "plane_fitting_threshold") {
+        pipeline_config_.floor.plane_fitting_threshold = param.as_double();
+        pipeline_.setConfig(pipeline_config_);
+      } else if (name == "angle") {
+        pipeline_config_.floor.angle_deg = param.as_double();
+        pipeline_.setConfig(pipeline_config_);
+      } else if (name == "floor_detect_z_min") {
+        pipeline_config_.floor.floor_detect_z_min = static_cast<float>(param.as_double());
+        pipeline_.setConfig(pipeline_config_);
+      } else if (name == "floor_detect_z_max") {
+        pipeline_config_.floor.floor_detect_z_max = static_cast<float>(param.as_double());
         pipeline_.setConfig(pipeline_config_);
       } else if (name == "speckle_filter_enabled") {
         pipeline_config_.speckle_filter_enabled = param.as_bool();
@@ -483,11 +669,11 @@ private:
         scan_topic_ = param.as_string();
         pub_ = create_publisher<sensor_msgs::msg::LaserScan>(scan_topic_, rclcpp::SensorDataQoS());
       } else {
-        result.successful = false;
-        result.reason = "Unknown parameter";
+        RCLCPP_WARN(
+          get_logger(),
+          "%s was set but this node has no runtime handler for it.", name.c_str());
       }
     }
-    return result;
   }
 
   stretch_core::DualLidarPipeline pipeline_;
@@ -503,6 +689,7 @@ private:
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr sub2_;
   rclcpp::TimerBase::SharedPtr timer_;
   OnSetParametersCallbackHandle::SharedPtr param_callback_handle_;
+  rclcpp::node_interfaces::PostSetParametersCallbackHandle::SharedPtr post_param_callback_handle_;
   rclcpp::Publisher<sensor_msgs::msg::LaserScan>::SharedPtr pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_cloud_;
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pub_markers_;

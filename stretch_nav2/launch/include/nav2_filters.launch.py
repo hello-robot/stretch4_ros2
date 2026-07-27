@@ -33,7 +33,7 @@ def _launch_setup(context, *args, **kwargs):
 
     configured_params = RewrittenYaml(
         source_file=params_file if params_file else os.path.join(
-            pkg, 'config', 'keepout_speed_filter_servers.yaml'),
+            pkg, 'config', 'nav2_filter_servers.yaml'),
         root_key='',
         param_rewrites={'use_sim_time': LaunchConfiguration('use_sim_time')},
         convert_types=True,
@@ -108,7 +108,7 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument(
             'filter_params_file',
-            default_value=os.path.join(pkg, 'config', 'keepout_speed_filter_servers.yaml'),
+            default_value=os.path.join(pkg, 'config', 'nav2_filter_servers.yaml'),
         ),
         DeclareLaunchArgument(
             'keepout_mask',
