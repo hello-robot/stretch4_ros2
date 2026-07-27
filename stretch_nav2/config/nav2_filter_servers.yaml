@@ -31,5 +31,5 @@ speed_costmap_filter_info_server:
     filter_info_topic: /speed_costmap_filter_info
     mask_topic: /speed_filter_mask
     # speed = base + multiplier * OccupancyGrid_value
-    base: 0.0
-    multiplier: 0.05
+    base: 100.0
+    multiplier: -1.0
