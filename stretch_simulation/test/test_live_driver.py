@@ -20,6 +20,7 @@ python3 test_live_driver.py
 
 import sys
 import time
+import math
 import rclpy
 from rclpy.node import Node
 from rclpy.parameter import Parameter
@@ -29,10 +30,11 @@ from rcl_interfaces.srv import GetParameters, SetParameters
 from rcl_interfaces.msg import Parameter as ParameterMsg, ParameterType, ParameterValue
 from std_srvs.srv import Trigger, SetBool
 from geometry_msgs.msg import Twist
-from sensor_msgs.msg import JointState, Joy
+from sensor_msgs.msg import JointState, Joy, Imu, BatteryState
 from nav_msgs.msg import Odometry
 from control_msgs.action import FollowJointTrajectory
 from trajectory_msgs.msg import JointTrajectoryPoint
+from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus
 
 # Terminal Colors for Professional Output
 GREEN = "\033[92m"
@@ -54,7 +56,12 @@ def print_robot_behavior(behavior_desc):
 
 class StretchLiveDriverTester(Node):
     def __init__(self):
-        super().__init__('stretch_live_driver_tester')
+        super().__init__(
+            'stretch_live_driver_tester',
+            parameter_overrides=[
+                Parameter('use_sim_time', Parameter.Type.BOOL, True)
+            ]
+        )
         self.get_logger().info("Initializing Live Driver Integration Test Client...")
 
         # Setup service clients to communicate with StretchMujocoDriver
@@ -66,7 +73,7 @@ class StretchLiveDriverTester(Node):
         self.runstop_cli = self.create_client(SetBool, '/runstop_the_robot')
 
         # Setup publishers for command inputs
-        self.cmd_vel_pub = self.create_publisher(Twist, '/stretch/cmd_vel', 10)
+        self.cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', 10)
         self.position_cmd_pub = self.create_publisher(JointState, '/joint_position_cmd', 10)
         self.velocity_cmd_pub = self.create_publisher(JointState, '/joint_velocity_cmd', 10)
         self.joy_pub = self.create_publisher(Joy, '/joy', 10)
@@ -155,6 +162,101 @@ class StretchLiveDriverTester(Node):
         rclpy.spin_until_future_complete(self, future)
         print(f"{GREEN}✓ Restored parameter 'mode' back to 'active'{RESET}")
 
+        # Test C: Set joint_limit.lift.velocity to a valid value (0.05)
+        req_set_limit = SetParameters.Request()
+        p_limit = ParameterMsg()
+        p_limit.name = 'joint_limit.lift.velocity'
+        p_limit.value.type = ParameterType.PARAMETER_DOUBLE
+        p_limit.value.double_value = 0.05
+        req_set_limit.parameters = [p_limit]
+        future_limit = self.param_set_cli.call_async(req_set_limit)
+        rclpy.spin_until_future_complete(self, future_limit)
+        res_limit = future_limit.result()
+        assert res_limit is not None and res_limit.results[0].successful, "Failed to set joint_limit.lift.velocity to a valid positive value"
+        print(f"{GREEN}✓ Successfully set parameter 'joint_limit.lift.velocity' to 0.05{RESET}")
+
+        # Test D: Set joint_limit.lift.velocity to an invalid negative value (-0.05) -> should fail
+        p_limit.value.double_value = -0.05
+        future_limit_neg = self.param_set_cli.call_async(req_set_limit)
+        rclpy.spin_until_future_complete(self, future_limit_neg)
+        res_limit_neg = future_limit_neg.result()
+        assert res_limit_neg is not None and not res_limit_neg.results[0].successful, "Unexpectedly allowed setting negative joint velocity limit"
+        print(f"{GREEN}✓ Successfully rejected negative value for 'joint_limit.lift.velocity'{RESET}")
+
+        # Test E: Reset joint_limit.lift.velocity to None/large to not affect other tests
+        p_limit.value.double_value = 999.0
+        future_limit_reset = self.param_set_cli.call_async(req_set_limit)
+        rclpy.spin_until_future_complete(self, future_limit_reset)
+        print(f"{GREEN}✓ Reset parameter 'joint_limit.lift.velocity' back to default large value{RESET}")
+
+        # Test F: Set read-only 'control_loop_rate' -> should fail
+        req_set_ro = SetParameters.Request()
+        p_ro = ParameterMsg()
+        p_ro.name = 'control_loop_rate'
+        p_ro.value.type = ParameterType.PARAMETER_INTEGER
+        p_ro.value.integer_value = 200
+        req_set_ro.parameters = [p_ro]
+        future_ro = self.param_set_cli.call_async(req_set_ro)
+        rclpy.spin_until_future_complete(self, future_ro)
+        res_ro = future_ro.result()
+        assert res_ro is not None and not res_ro.results[0].successful, "Unexpectedly allowed changing read-only parameter 'control_loop_rate'"
+        print(f"{GREEN}✓ Successfully rejected changing read-only parameter 'control_loop_rate'{RESET}")
+
+        # Test G: Set valid gamepad.dt (0.05)
+        req_set_gp = SetParameters.Request()
+        p_gp_dt = ParameterMsg()
+        p_gp_dt.name = 'gamepad.dt'
+        p_gp_dt.value.type = ParameterType.PARAMETER_DOUBLE
+        p_gp_dt.value.double_value = 0.05
+        req_set_gp.parameters = [p_gp_dt]
+        future_gp_dt = self.param_set_cli.call_async(req_set_gp)
+        rclpy.spin_until_future_complete(self, future_gp_dt)
+        res_gp_dt = future_gp_dt.result()
+        assert res_gp_dt is not None and res_gp_dt.results[0].successful, "Failed to set valid gamepad.dt"
+        print(f"{GREEN}✓ Successfully set parameter 'gamepad.dt' to 0.05{RESET}")
+
+        # Test H: Set invalid gamepad.dt (-0.05) -> should fail
+        p_gp_dt.value.double_value = -0.05
+        future_gp_dt_neg = self.param_set_cli.call_async(req_set_gp)
+        rclpy.spin_until_future_complete(self, future_gp_dt_neg)
+        res_gp_dt_neg = future_gp_dt_neg.result()
+        assert res_gp_dt_neg is not None and not res_gp_dt_neg.results[0].successful, "Unexpectedly allowed negative gamepad.dt"
+        print(f"{GREEN}✓ Successfully rejected negative value for 'gamepad.dt'{RESET}")
+
+        # Test I: Set valid gamepad.max_vel.lift (0.3)
+        req_set_gp_vel = SetParameters.Request()
+        p_gp_vel = ParameterMsg()
+        p_gp_vel.name = 'gamepad.max_vel.lift'
+        p_gp_vel.value.type = ParameterType.PARAMETER_DOUBLE
+        p_gp_vel.value.double_value = 0.3
+        req_set_gp_vel.parameters = [p_gp_vel]
+        future_gp_vel = self.param_set_cli.call_async(req_set_gp_vel)
+        rclpy.spin_until_future_complete(self, future_gp_vel)
+        res_gp_vel = future_gp_vel.result()
+        assert res_gp_vel is not None and res_gp_vel.results[0].successful, "Failed to set valid gamepad.max_vel.lift"
+        print(f"{GREEN}✓ Successfully set parameter 'gamepad.max_vel.lift' to 0.3{RESET}")
+
+        # Test J: Set valid gamepad.deadzone.lift (0.02)
+        req_set_gp_dz = SetParameters.Request()
+        p_gp_dz = ParameterMsg()
+        p_gp_dz.name = 'gamepad.deadzone.lift'
+        p_gp_dz.value.type = ParameterType.PARAMETER_DOUBLE
+        p_gp_dz.value.double_value = 0.02
+        req_set_gp_dz.parameters = [p_gp_dz]
+        future_gp_dz = self.param_set_cli.call_async(req_set_gp_dz)
+        rclpy.spin_until_future_complete(self, future_gp_dz)
+        res_gp_dz = future_gp_dz.result()
+        assert res_gp_dz is not None and res_gp_dz.results[0].successful, "Failed to set valid gamepad.deadzone.lift"
+        print(f"{GREEN}✓ Successfully set parameter 'gamepad.deadzone.lift' to 0.02{RESET}")
+
+        # Test K: Set invalid gamepad.deadzone.lift (1.5) -> should fail
+        p_gp_dz.value.double_value = 1.5
+        future_gp_dz_inv = self.param_set_cli.call_async(req_set_gp_dz)
+        rclpy.spin_until_future_complete(self, future_gp_dz_inv)
+        res_gp_dz_inv = future_gp_dz_inv.result()
+        assert res_gp_dz_inv is not None and not res_gp_dz_inv.results[0].successful, "Unexpectedly allowed invalid gamepad.deadzone.lift"
+        print(f"{GREEN}✓ Successfully rejected invalid value for 'gamepad.deadzone.lift'{RESET}")
+
     # =========================================================================
     # 2. HOMING & STOWING SERVICE INTERFACES
     # =========================================================================
@@ -169,7 +271,7 @@ class StretchLiveDriverTester(Node):
         res = future.result()
         assert res.success, "Stowing service call reported failure!"
         print(f"{GREEN}✓ Service '/stow_the_robot' successfully completed!{RESET}")
-        time.sleep(2.5)  # Allow time for stowing motion to complete visually
+        self.ros_sleep(2.5)  # Allow time for stowing motion to complete visually
 
         # Test B: Home the Robot
         print_robot_behavior("The simulated robot's lift, arm, and wrist joints should now home back to their extended/calibrated starting positions.")
@@ -178,7 +280,7 @@ class StretchLiveDriverTester(Node):
         res = future.result()
         assert res.success, "Homing service call reported failure!"
         print(f"{GREEN}✓ Service '/home_the_robot' successfully completed!{RESET}")
-        time.sleep(2.5)
+        self.ros_sleep(2.5)
 
     # =========================================================================
     # 3. POSITION CONTROL COMMANDS
@@ -195,17 +297,15 @@ class StretchLiveDriverTester(Node):
         # Publish command multiple times to ensure subscriber receives it
         for _ in range(5):
             self.position_cmd_pub.publish(js)
-            time.sleep(0.1)
+            self.ros_sleep(0.1)
         
         print(f"{GREEN}✓ Published position goal of 0.5 meters to lift joint.{RESET}")
         print(f"{YELLOW}Waiting for joint state telemetry to reflect target movement...{RESET}")
         
         # Wait and verify joint state updates
-        start_time = time.time()
+        start_time = self.get_clock().now()
         success = False
-        while time.time() - start_time < 8.0:
-            rclpy.spin_once(self, timeout_sec=0.1)
-            print(" ")
+        while (self.get_clock().now() - start_time).nanoseconds * 1e-9 < 8.0:
             if self.latest_joint_state is not None:
                 idx = self.latest_joint_state.name.index("lift_joint")
                 pos = self.latest_joint_state.position[idx]
@@ -213,11 +313,43 @@ class StretchLiveDriverTester(Node):
                 if abs(pos - 0.5) < 0.15:
                     success = True
                     break
-            time.sleep(0.2)
+            self.ros_sleep(0.2)
         
         print()  # newline
         assert success, "Robot joint did not reach target position in simulation!"
         print(f"{GREEN}✓ Lift joint successfully reached target halfway position in simulation!{RESET}")
+        self.ros_sleep(2.0)
+
+        # Test Gripper Position Commands and Left/Right Finger States
+        print_robot_behavior("The simulated gripper should set to a few values, and we will verify the left and right finger joints sum up to the commanded value.")
+        for target_gripper_val in [0.1, 0.25]:
+            js = JointState()
+            js.name = ["stretch_gripper"]
+            js.position = [target_gripper_val]
+            
+            for _ in range(5):
+                self.position_cmd_pub.publish(js)
+                self.ros_sleep(0.1)
+                
+            print(f"{YELLOW}Published gripper target of {target_gripper_val} meters. Waiting to verify...{RESET}")
+            start_time = self.get_clock().now()
+            success = False
+            while (self.get_clock().now() - start_time).nanoseconds * 1e-9 < 5.0:
+                if self.latest_joint_state is not None:
+                    idx_l = self.latest_joint_state.name.index("gripper_finger_left_joint")
+                    idx_r = self.latest_joint_state.name.index("gripper_finger_right_joint")
+                    left_pos = self.latest_joint_state.position[idx_l]
+                    right_pos = self.latest_joint_state.position[idx_r]
+                    sum_pos = left_pos + right_pos
+                    print(f"  Left finger: {left_pos:.4f} m, Right finger: {right_pos:.4f} m, Sum: {sum_pos:.4f} m", end="\r")
+                    if abs(sum_pos - target_gripper_val) < 0.05:
+                        success = True
+                        break
+                self.ros_sleep(0.2)
+            print()
+            assert success, f"Gripper did not reach the target value of {target_gripper_val}!"
+            print(f"{GREEN}✓ Gripper successfully reached {target_gripper_val} with correct joint summing!{RESET}")
+            self.ros_sleep(1.0)
 
     # =========================================================================
     # 4. VELOCITY BASE COMMANDS
@@ -232,23 +364,115 @@ class StretchLiveDriverTester(Node):
         
         # Stage 1: Forward turning arc for 6 seconds
         print(f"{YELLOW}Publishing forward arc velocity commands (6.0 seconds)...{RESET}")
-        for _ in range(60):
+        start_time = self.get_clock().now()
+        while (self.get_clock().now() - start_time).nanoseconds * 1e-9 < 6.0:
             self.cmd_vel_pub.publish(twist)
-            rclpy.spin_once(self, timeout_sec=0.1)
+            self.ros_sleep(0.1)
             
         # Stage 2: Reverse right curve for 6 seconds to show complex maneuvering
         print(f"{YELLOW}Publishing reverse curve velocity commands (6.0 seconds)...{RESET}")
         twist.linear.x = -0.12    # Reverse at 0.12 m/s
         twist.angular.z = -0.3    # Turn opposite direction at -0.3 rad/s
-        for _ in range(60):
+        start_time = self.get_clock().now()
+        while (self.get_clock().now() - start_time).nanoseconds * 1e-9 < 6.0:
             self.cmd_vel_pub.publish(twist)
-            rclpy.spin_once(self, timeout_sec=0.1)
+            self.ros_sleep(0.1)
         
         # Command a halt
         twist.linear.x = 0.0
         twist.angular.z = 0.0
         self.cmd_vel_pub.publish(twist)
         print(f"{GREEN}✓ Base complex driving maneuver and deceleration halt completed successfully!{RESET}")
+
+    # =========================================================================
+    # 4b. JOINT VELOCITY COMMANDS
+    # =========================================================================
+    def test_joint_velocity_commands(self):
+        print_header("4b. SUBSCRIBER: JOINT VELOCITY COMMANDS (/joint_velocity_cmd)")
+        print_robot_behavior("The simulated robot's joints should move via velocity commands, then halt.")
+
+        # Ensure we have joint states
+        self.ros_sleep(1.0)
+        assert self.latest_joint_state is not None, "No JointState received yet!"
+
+        def get_joint_pos(joint_name):
+            if joint_name == "arm":
+                arm_positions = [self.latest_joint_state.position[self.latest_joint_state.name.index(link)] for link in ['arm_l1_joint', 'arm_l2_joint', 'arm_l3_joint', 'arm_l4_joint']]
+                return sum(arm_positions)
+            elif joint_name == "stretch_gripper":
+                idx_l = self.latest_joint_state.name.index("gripper_finger_left_joint")
+                idx_r = self.latest_joint_state.name.index("gripper_finger_right_joint")
+                return self.latest_joint_state.position[idx_l] + self.latest_joint_state.position[idx_r]
+            else:
+                actual_name = "lift_joint" if joint_name == "lift" else f"{joint_name}_joint"
+                idx = self.latest_joint_state.name.index(actual_name)
+                return self.latest_joint_state.position[idx]
+
+        joints_to_test = [
+            # (joint_name, test_vel, duration, threshold, check_positive)
+            ("lift", 0.08, 2.0, 0.05, True),
+            ("arm", 0.05, 2.0, 0.03, True),
+            ("wrist_yaw", 0.15, 1.5, 0.05, False),
+            ("wrist_pitch", 0.15, 1.5, 0.05, False),
+            ("wrist_roll", 0.15, 1.5, 0.05, False),
+            ("stretch_gripper", 0.1, 1.5, 0.02, False),
+        ]
+
+        for joint_name, test_vel, duration, threshold, check_positive in joints_to_test:
+            start_pos = get_joint_pos(joint_name)
+            print(f"{YELLOW}Testing {joint_name} velocity control. Starting position: {start_pos:.4f}{RESET}")
+
+            # Set joint_mode.<joint> to velocity
+            req_set = SetParameters.Request()
+            p_mode = ParameterMsg()
+            p_mode.name = f'joint_mode.{joint_name}'
+            p_mode.value.type = ParameterType.PARAMETER_STRING
+            p_mode.value.string_value = 'velocity'
+            req_set.parameters = [p_mode]
+            future = self.param_set_cli.call_async(req_set)
+            rclpy.spin_until_future_complete(self, future)
+            assert future.result().results[0].successful, f"Failed to set {joint_name} joint mode to velocity"
+            print(f"{GREEN}✓ Successfully set joint_mode.{joint_name} to 'velocity'{RESET}")
+
+            # Construct velocity command
+            js = JointState()
+            js.name = [joint_name]
+            js.velocity = [float(test_vel)]
+            
+            # Publish velocity commands
+            print(f"{YELLOW}Publishing velocity commands ({test_vel:.3f} rad/s or m/s) to {joint_name} for {duration:.1f} seconds...{RESET}")
+            start_time = self.get_clock().now()
+            while (self.get_clock().now() - start_time).nanoseconds * 1e-9 < duration:
+                self.velocity_cmd_pub.publish(js)
+                self.ros_sleep(0.1)
+
+            # Stop joint movement
+            print(f"{YELLOW}Halting joint {joint_name}...{RESET}")
+            js.velocity = [0.0]
+            for _ in range(5):
+                self.velocity_cmd_pub.publish(js)
+                self.ros_sleep(0.1)
+
+            # Restore joint mode to position
+            p_mode.value.string_value = 'position'
+            future = self.param_set_cli.call_async(req_set)
+            rclpy.spin_until_future_complete(self, future)
+            assert future.result().results[0].successful, f"Failed to restore {joint_name} joint mode to position"
+            print(f"{GREEN}✓ Restored joint_mode.{joint_name} back to 'position'{RESET}")
+
+            # Verify that the position has changed
+            self.ros_sleep(1.0)
+            end_pos = get_joint_pos(joint_name)
+            diff = end_pos - start_pos
+            print(f"{GREEN}✓ Final {joint_name} position: {end_pos:.4f} (moved {diff:+.4f}){RESET}")
+            
+            if check_positive:
+                assert diff > threshold, f"{joint_name} joint did not move in positive direction as expected! Moved: {diff:+.4f}"
+            else:
+                assert abs(diff) > threshold, f"{joint_name} joint did not move as expected! Absolute move: {abs(diff):.4f}"
+
+            # Brief sleep between joints to let things settle
+            self.ros_sleep(0.5)
 
     # =========================================================================
     # 5. JOYSTICK TELEOP COMMANDS
@@ -273,9 +497,10 @@ class StretchLiveDriverTester(Node):
         joy.buttons = [1, 0]  # Simulates holding button 0 (lift up)
         
         print(f"{YELLOW}Publishing virtual gamepad button presses...{RESET}")
-        for _ in range(15):
+        start_time = self.get_clock().now()
+        while (self.get_clock().now() - start_time).nanoseconds * 1e-9 < 1.5:
             self.joy_pub.publish(joy)
-            rclpy.spin_once(self, timeout_sec=0.1)
+            self.ros_sleep(0.1)
 
         # Release buttons
         joy.buttons = [0, 0]
@@ -310,13 +535,13 @@ class StretchLiveDriverTester(Node):
         js.position = [0.9]  # Command lift to go high up
         for _ in range(5):
             self.position_cmd_pub.publish(js)
-            time.sleep(0.1)
+            self.ros_sleep(0.1)
         
         print(f"{YELLOW}Verification: Waiting to confirm no physical movement occurs...{RESET}")
-        time.sleep(1.5)
+        self.ros_sleep(1.5)
         
         # Verify lift did not move to 0.9 (should still be near 0.5)
-        rclpy.spin_once(self, timeout_sec=0.1)
+        self.ros_sleep(0.1)
         if self.latest_joint_state is not None:
             idx = self.latest_joint_state.name.index("lift_joint")
             pos = self.latest_joint_state.position[idx]
@@ -405,7 +630,7 @@ class StretchLiveDriverTester(Node):
         
         assert result.result.error_code == FollowJointTrajectory.Result.SUCCESSFUL, f"Goal failed with error: {result.result.error_code}"
         print(f"{GREEN}✓ time_priority test passed successfully!{RESET}")
-        time.sleep(1.0)
+        self.ros_sleep(1.0)
 
         # -------------------------------------------------------------
         # Test B: target_priority mode (with feedback verification)
@@ -430,81 +655,78 @@ class StretchLiveDriverTester(Node):
         assert result.result.error_code == FollowJointTrajectory.Result.SUCCESSFUL, f"Goal failed: {result.result.error_code}"
         
         # Verify lift position is indeed near 0.6
-        for _ in range(10):
-            rclpy.spin_once(self, timeout_sec=0.1)
+        self.ros_sleep(1.0)
         if self.latest_joint_state is not None:
             idx = self.latest_joint_state.name.index("lift_joint")
             pos = self.latest_joint_state.position[idx]
             print(f"  Final position: {pos:.3f} m")
         print(f"{GREEN}✓ target_priority test passed successfully!{RESET}")
-        time.sleep(1.0)
+        self.ros_sleep(1.0)
 
         # -------------------------------------------------------------
-        # Test C: pid_normal mode (calculates and sends velocities) - BYPASSED (Velocity control not implemented)
+        # Test C: pid_normal mode (calculates and sends velocities)
         # -------------------------------------------------------------
-        # print(f"\n{BOLD}{CYAN}Test C: 'pid_normal' Mode{RESET}")
-        # assert set_traj_param("mode", "pid_normal", ParameterType.PARAMETER_STRING), "Failed to set mode"
-        # assert set_traj_param("kp", 2.0, ParameterType.PARAMETER_DOUBLE), "Failed to set kp"
-        # assert set_traj_param("ki", 0.05, ParameterType.PARAMETER_DOUBLE), "Failed to set ki"
-        # assert set_traj_param("kd", 0.1, ParameterType.PARAMETER_DOUBLE), "Failed to set kd"
+        print(f"\n{BOLD}{CYAN}Test C: 'pid_normal' Mode{RESET}")
+        assert set_traj_param("mode", "pid_normal", ParameterType.PARAMETER_STRING), "Failed to set mode"
+        assert set_traj_param("kp", 2.0, ParameterType.PARAMETER_DOUBLE), "Failed to set kp"
+        assert set_traj_param("ki", 0.05, ParameterType.PARAMETER_DOUBLE), "Failed to set ki"
+        assert set_traj_param("kd", 0.1, ParameterType.PARAMETER_DOUBLE), "Failed to set kd"
 
-        # # Change joint mode of lift to velocity first because pid_normal outputs velocities
-        # p_mode.value.string_value = 'velocity'
-        # future = self.param_set_cli.call_async(req_set)
-        # rclpy.spin_until_future_complete(self, future)
+        # Change joint mode of lift to velocity first because pid_normal outputs velocities
+        p_mode.value.string_value = 'velocity'
+        future = self.param_set_cli.call_async(req_set)
+        rclpy.spin_until_future_complete(self, future)
 
-        # goal_c = make_lift_goal(0.4, 2.0)
-        # print(f"{YELLOW}Sending goal to move lift to 0.4m using pid_normal PID control...{RESET}")
+        goal_c = make_lift_goal(0.4, 2.0)
+        print(f"{YELLOW}Sending goal to move lift to 0.4m using pid_normal PID control...{RESET}")
         
-        # send_goal_future = self.trajectory_client.send_goal_async(goal_c)
-        # rclpy.spin_until_future_complete(self, send_goal_future)
-        # goal_handle = send_goal_future.result()
-        # assert goal_handle.accepted, "Goal was rejected!"
+        send_goal_future = self.trajectory_client.send_goal_async(goal_c)
+        rclpy.spin_until_future_complete(self, send_goal_future)
+        goal_handle = send_goal_future.result()
+        assert goal_handle.accepted, "Goal was rejected!"
         
-        # get_result_future = goal_handle.get_result_async()
-        # rclpy.spin_until_future_complete(self, get_result_future)
-        # result = get_result_future.result()
+        get_result_future = goal_handle.get_result_async()
+        rclpy.spin_until_future_complete(self, get_result_future)
+        result = get_result_future.result()
         
-        # assert result.result.error_code == FollowJointTrajectory.Result.SUCCESSFUL, f"Goal failed: {result.result.error_code}"
+        assert result.result.error_code == FollowJointTrajectory.Result.SUCCESSFUL, f"Goal failed: {result.result.error_code}"
         
-        # # Verify position is near 0.4
-        # for _ in range(10):
-        #     rclpy.spin_once(self, timeout_sec=0.1)
-        # if self.latest_joint_state is not None:
-        #     idx = self.latest_joint_state.name.index("lift_joint")
-        #     pos = self.latest_joint_state.position[idx]
-        #     print(f"  Final position: {pos:.3f} m")
-        #     assert abs(pos - 0.4) < 0.1, f"PID failed to regulate to target position! Expected 0.4, got {pos}"
-        # print(f"{GREEN}✓ pid_normal test passed successfully!{RESET}")
-        # time.sleep(1.0)
+        # Verify position is near 0.4
+        self.ros_sleep(1.0)
+        if self.latest_joint_state is not None:
+            idx = self.latest_joint_state.name.index("lift_joint")
+            pos = self.latest_joint_state.position[idx]
+            print(f"  Final position: {pos:.3f} m")
+            assert abs(pos - 0.4) < 0.1, f"PID failed to regulate to target position! Expected 0.4, got {pos}"
+        print(f"{GREEN}✓ pid_normal test passed successfully!{RESET}")
+        self.ros_sleep(1.0)
 
         # -------------------------------------------------------------
-        # Test D: pid_correction mode - BYPASSED (Velocity control not implemented)
+        # Test D: pid_correction mode
         # -------------------------------------------------------------
-        # print(f"\n{BOLD}{CYAN}Test D: 'pid_correction' Mode{RESET}")
-        # assert set_traj_param("mode", "pid_correction", ParameterType.PARAMETER_STRING), "Failed to set mode"
+        print(f"\n{BOLD}{CYAN}Test D: 'pid_correction' Mode{RESET}")
+        assert set_traj_param("mode", "pid_correction", ParameterType.PARAMETER_STRING), "Failed to set mode"
         
-        # # Restore lift joint mode to position since pid_correction adds correction on top of position commands
-        # p_mode.value.string_value = 'position'
-        # future = self.param_set_cli.call_async(req_set)
-        # rclpy.spin_until_future_complete(self, future)
+        # Restore lift joint mode to position since pid_correction adds correction on top of position commands
+        p_mode.value.string_value = 'position'
+        future = self.param_set_cli.call_async(req_set)
+        rclpy.spin_until_future_complete(self, future)
 
-        # goal_d = make_lift_goal(0.5, 2.0)
-        # print(f"{YELLOW}Sending goal to move lift to 0.5m using pid_correction...{RESET}")
+        goal_d = make_lift_goal(0.5, 2.0)
+        print(f"{YELLOW}Sending goal to move lift to 0.5m using pid_correction...{RESET}")
         
-        # send_goal_future = self.trajectory_client.send_goal_async(goal_d)
-        # rclpy.spin_until_future_complete(self, send_goal_future)
-        # goal_handle = send_goal_future.result()
-        # assert goal_handle.accepted, "Goal was rejected!"
+        send_goal_future = self.trajectory_client.send_goal_async(goal_d)
+        rclpy.spin_until_future_complete(self, send_goal_future)
+        goal_handle = send_goal_future.result()
+        assert goal_handle.accepted, "Goal was rejected!"
         
-        # get_result_future = goal_handle.get_result_async()
-        # rclpy.spin_until_future_complete(self, get_result_future)
-        # result = get_result_future.result()
+        get_result_future = goal_handle.get_result_async()
+        rclpy.spin_until_future_complete(self, get_result_future)
+        result = get_result_future.result()
         
-        # assert result.result.error_code == FollowJointTrajectory.Result.SUCCESSFUL, f"Goal failed: {result.result.error_code}"
-        # print(f"{GREEN}✓ pid_correction test passed successfully!{RESET}")
-        # time.sleep(1.0)
-        time.sleep(1.0)
+        assert result.result.error_code == FollowJointTrajectory.Result.SUCCESSFUL, f"Goal failed: {result.result.error_code}"
+        print(f"{GREEN}✓ pid_correction test passed successfully!{RESET}")
+        self.ros_sleep(2.0)
 
         # -------------------------------------------------------------
         # Test E: Interruption via direct joint commands (preemption)
@@ -538,7 +760,7 @@ class StretchLiveDriverTester(Node):
         # Ensure that the server returned failure/aborted (not SUCCESSFUL) because of preemption
         assert result.result.error_code != FollowJointTrajectory.Result.SUCCESSFUL, "Goal succeeded but was expected to be aborted due to preemption!"
         print(f"{GREEN}✓ Preemption via direct command test passed successfully (goal was aborted as expected)!{RESET}")
-        time.sleep(1.0)
+        self.ros_sleep(1.0)
 
         # -------------------------------------------------------------
         # Test F: Interruption via robot mode change
@@ -579,7 +801,7 @@ class StretchLiveDriverTester(Node):
         p_mode_teleop.value.string_value = 'active'
         future_mode_restore = self.param_set_cli.call_async(req_set_mode)
         rclpy.spin_until_future_complete(self, future_mode_restore)
-        time.sleep(1.0)
+        self.ros_sleep(1.0)
 
         # -------------------------------------------------------------
         # Test G: Multi-joint & Long Duration Circle Tracing Trajectory
@@ -603,7 +825,6 @@ class StretchLiveDriverTester(Node):
         goal_g.trajectory.joint_names = ["wrist_pitch", "wrist_yaw", "wrist_roll", "stretch_gripper"]
         
         # Create 40 waypoints over 8.0 seconds to trace a circle
-        import math
         num_points = 40
         total_time = 8.0
         for idx in range(1, num_points + 1):
@@ -636,7 +857,7 @@ class StretchLiveDriverTester(Node):
         
         assert result.result.error_code == FollowJointTrajectory.Result.SUCCESSFUL, f"Circle tracing failed: {result.result.error_code}"
         print(f"{GREEN}✓ Multi-joint circle-tracing trajectory completed successfully!{RESET}")
-        time.sleep(1.0)
+        self.ros_sleep(1.0)
 
     def test_trajectory_diagnostics(self):
         print_header("8. TRAJECTORY AND JOINT POSITION DIAGNOSTICS")
@@ -674,7 +895,7 @@ class StretchLiveDriverTester(Node):
             ("wrist_yaw", 1.0),
             ("wrist_pitch", 0.2),
             ("wrist_roll", 0.5),
-            ("stretch_gripper", 40),
+            ("stretch_gripper", 0.5),
             ("arm", 0.3)
         ]
 
@@ -686,9 +907,7 @@ class StretchLiveDriverTester(Node):
             self.position_cmd_pub.publish(js)
             
             # Wait and spin
-            time.sleep(1.5)
-            for _ in range(10):
-                rclpy.spin_once(self, timeout_sec=0.1)
+            self.ros_sleep(2.5)
                 
             # Get actual position from /joint_states
             actual_joint_name = "lift_joint" if joint == "lift" else f"{joint}_joint"
@@ -771,9 +990,7 @@ class StretchLiveDriverTester(Node):
                 rclpy.spin_until_future_complete(self, get_result_future)
                 
                 # Sleep and spin to let telemetry settle
-                time.sleep(1.0)
-                for _ in range(10):
-                    rclpy.spin_once(self, timeout_sec=0.1)
+                self.ros_sleep(2.0)
                 
                 actual_joint_name = "lift_joint" if joint == "lift" else f"{joint}_joint"
                 if joint == "stretch_gripper":
@@ -796,6 +1013,130 @@ class StretchLiveDriverTester(Node):
             print(f"{r['Interface']:<20} | {r['Joint']:<10} | {r['Target']:<8.2f} | {r['Actual']:<8.4f} | {r['Error']:<+8.4f} | {r['Ratio']:<6.4f}")
         print(f"{BOLD}{GREEN}{'='*80}{RESET}")
 
+    def test_imu_and_sensors(self):
+        print_header("9. IMU AND SENSORS TELEMETRY")
+        print_robot_behavior("Subscribing to /imu_mobile_base and asserting valid orientation quaternion and angular velocity.")
+
+        imu_received = []
+
+        def imu_cb(msg: Imu):
+            imu_received.append(msg)
+
+        imu_sub = self.create_subscription(Imu, '/imu_mobile_base', imu_cb, 10)
+
+        # Spin to receive some IMU messages
+        self.ros_sleep(3.0)
+
+        self.destroy_subscription(imu_sub)
+
+        assert len(imu_received) > 0, "No IMU messages received on /imu_mobile_base!"
+        
+        # Verify that orientation quaternion is valid
+        latest_imu = imu_received[-1]
+        w = latest_imu.orientation.w
+        x = latest_imu.orientation.x
+        y = latest_imu.orientation.y
+        z = latest_imu.orientation.z
+        
+        norm = (w**2 + x**2 + y**2 + z**2) ** 0.5
+        print(f"{YELLOW}IMU orientation quaternion: [{w:.4f}, {x:.4f}, {y:.4f}, {z:.4f}] (norm: {norm:.4f}){RESET}")
+        
+        # Norm should be close to 1.0 (unit quaternion)
+        assert abs(norm - 1.0) < 0.05, f"IMU orientation is not a valid unit quaternion! (norm: {norm})"
+        print(f"{GREEN}✓ Successfully verified IMU orientation is a valid unit quaternion!{RESET}")
+
+    def test_stop_the_robot_service(self):
+        print_header("10. STOP THE ROBOT SERVICE")
+        print_robot_behavior("1. Command the lift to move up.\n"
+                            "2. Call /stop_the_robot service.\n"
+                            "3. Assert service returns success and robot halts.")
+
+        # Command lift upward via velocity
+        js_vel = JointState()
+        js_vel.name = ["lift"]
+        js_vel.velocity = [0.1]
+        self.velocity_cmd_pub.publish(js_vel)
+        self.ros_sleep(1.0) # Let it move a bit
+
+        # Call stop_the_robot
+        req = Trigger.Request()
+        future = self.stop_cli.call_async(req)
+        rclpy.spin_until_future_complete(self, future)
+        res = future.result()
+        assert res.success, "stop_the_robot service failed!"
+        print(f"{GREEN}✓ stop_the_robot service returned success: {res.message}{RESET}")
+
+        # Wait a moment and check that velocity is indeed zero
+        self.ros_sleep(1.1)
+        if self.latest_joint_state is not None:
+            idx = self.latest_joint_state.name.index("lift_joint")
+            vel = self.latest_joint_state.velocity[idx]
+            print(f"  Lift velocity after stop: {vel:.4f} m/s")
+            assert abs(vel) < 0.05, f"Lift velocity {vel} is not close to zero after stop!"
+            print(f"{GREEN}✓ Successfully verified lift joint has stopped!{RESET}")
+
+    def test_diagnostics_and_battery(self):
+        print_header("11. SYSTEM DIAGNOSTICS & BATTERY TELEMETRY")
+        print_robot_behavior("1. Subscribe to /battery_state, /diagnostics, joint_states_diagnostics, and server_lease_holder.\n"
+                            "2. Wait for messages on all topics and assert valid contents.")
+
+        battery_msg = None
+        diagnostics_msg = None
+        joint_diag_msg = None
+        lease_msg = None
+
+        def battery_cb(msg):
+            nonlocal battery_msg
+            battery_msg = msg
+
+        def diag_cb(msg):
+            nonlocal diagnostics_msg
+            diagnostics_msg = msg
+
+        def joint_diag_cb(msg):
+            nonlocal joint_diag_msg
+            joint_diag_msg = msg
+
+        def lease_cb(msg):
+            nonlocal lease_msg
+            lease_msg = msg
+
+        battery_sub = self.create_subscription(BatteryState, '/battery_state', battery_cb, 10)
+        diag_sub = self.create_subscription(DiagnosticArray, '/diagnostics', diag_cb, 10)
+        joint_diag_sub = self.create_subscription(DiagnosticArray, 'joint_states_diagnostics', joint_diag_cb, 10)
+        lease_sub = self.create_subscription(DiagnosticStatus, 'server_lease_holder', lease_cb, 10)
+
+        # Spin to receive messages
+        start_time = self.get_clock().now()
+        while (self.get_clock().now() - start_time).nanoseconds * 1e-9 < 5.0:
+            self.ros_sleep(0.1)
+            if battery_msg and diagnostics_msg and joint_diag_msg and lease_msg:
+                break
+
+        # Destroy temporary subscriptions
+        self.destroy_subscription(battery_sub)
+        self.destroy_subscription(diag_sub)
+        self.destroy_subscription(joint_diag_sub)
+        self.destroy_subscription(lease_sub)
+
+        # Assertions
+        assert battery_msg is not None, "Failed to receive /battery_state message!"
+        assert battery_msg.present, "Battery state should report present = True!"
+        assert abs(battery_msg.voltage - 13.2) < 0.1, f"Expected simulated voltage 13.2V, got {battery_msg.voltage}V!"
+        print(f"{GREEN}✓ Successfully verified /battery_state voltage: {battery_msg.voltage}V, technology: {battery_msg.power_supply_technology}{RESET}")
+
+        assert diagnostics_msg is not None, "Failed to receive /diagnostics message!"
+        assert len(diagnostics_msg.status) > 0, "Diagnostics status array is empty!"
+        print(f"{GREEN}✓ Successfully verified /diagnostics array size: {len(diagnostics_msg.status)}{RESET}")
+
+        assert joint_diag_msg is not None, "Failed to receive joint_states_diagnostics message!"
+        assert len(joint_diag_msg.status) > 0, "Joint states diagnostics status array is empty!"
+        print(f"{GREEN}✓ Successfully verified joint_states_diagnostics status size: {len(joint_diag_msg.status)}{RESET}")
+
+        assert lease_msg is not None, "Failed to receive server_lease_holder message!"
+        assert lease_msg.name.endswith("server_lease_holder"), f"Unexpected lease holder name {lease_msg.name}!"
+        print(f"{GREEN}✓ Successfully verified server_lease_holder diagnostics name: {lease_msg.name}{RESET}")
+
 def main():
     rclpy.init()
     tester = StretchLiveDriverTester()
@@ -808,22 +1149,30 @@ def main():
 
     try:
         # Run entire integration test suite
-        '''tester.test_parameters()
-        time.sleep(3.0)
+        tester.test_parameters()
+        tester.ros_sleep(3.0)
         tester.test_homing_and_stowing()
-        time.sleep(3.0)
+        tester.ros_sleep(3.0)
         tester.test_position_commands()
-        time.sleep(3.0)
+        tester.ros_sleep(3.0)
         tester.test_velocity_commands()
-        time.sleep(3.0)
+        tester.ros_sleep(3.0)
+        tester.test_joint_velocity_commands()
+        tester.ros_sleep(3.0)
         tester.test_runstop_safety()
-        time.sleep(3.0)
+        tester.ros_sleep(3.0)
         tester.test_joy_commands()
-        time.sleep(3.0)
+        tester.ros_sleep(3.0)
         tester.test_trajectory_action()
-        time.sleep(3.0)'''
+        tester.ros_sleep(3.0)
         tester.test_trajectory_diagnostics()
-        time.sleep(3.0)
+        tester.ros_sleep(3.0)
+        tester.test_imu_and_sensors()
+        tester.ros_sleep(3.0)
+        tester.test_stop_the_robot_service()
+        tester.ros_sleep(3.0)
+        tester.test_diagnostics_and_battery()
+        tester.ros_sleep(3.0)
         
         print(f"\n{BOLD}{GREEN}{'='*80}{RESET}")
         print(f"{BOLD}{GREEN}ALL LIVE INTEGRATION TESTS PASSED SUCCESSFULLY!{RESET}")
