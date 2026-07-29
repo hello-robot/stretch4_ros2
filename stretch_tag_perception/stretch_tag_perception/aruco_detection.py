@@ -18,17 +18,13 @@ from rclpy.duration import Duration
 from rclpy.node import Node
 from rclpy.parameter import Parameter
 from rclpy.qos import qos_profile_sensor_data
+from scipy.spatial.transform import Rotation
 from sensor_msgs.msg import CameraInfo, Image
+from stretch4_body.subsystem.cameras.cv_utils import solve_pnp
+from stretch4_body.subsystem.cameras.enums.distortion_models import DistortionModels
 from tf2_ros.transform_broadcaster import TransformBroadcaster
 from vision_msgs.msg import Detection3D, Detection3DArray, ObjectHypothesisWithPose
 from visualization_msgs.msg import Marker, MarkerArray
-
-
-from stretch4_body.subsystem.cameras.cv_utils import solve_pnp
-
-from stretch4_body.subsystem.cameras.enums.distortion_models import DistortionModels
-
-from scipy.spatial.transform import Rotation
 
 logger = rclpy.logging.get_logger('aruco_detection')
 
@@ -236,6 +232,7 @@ class ArucoMarker:
         detection = Detection3D()
         detection.header.frame_id = self.frame_id
         detection.header.stamp = self.stamp
+        detection.id = str(self.aruco_id)
 
         hypothesis = ObjectHypothesisWithPose()
         hypothesis.hypothesis.class_id = str(self.aruco_id)
@@ -419,7 +416,8 @@ class ArucoMarkerCollection:
         for marker in self.collection:
             if marker.frame_number == self.frame_number:
                 ros_marker = marker.get_ros_marker()
-                marker_array.markers.append(ros_marker)
+                if ros_marker:
+                    marker_array.markers.append(ros_marker)
         for marker in self.temp_markers:
             ros_marker = marker.get_ros_marker()
             if ros_marker:
@@ -481,7 +479,14 @@ class DetectArucoNode(Node):
 
         self.cv_bridge = CvBridge()
         self.all_points = []
-        self.show_debug_images = True
+
+        if not self.has_parameter('show_debug_images'):
+            self.declare_parameter('show_debug_images', False)
+        show_debug_param = self.get_parameter('show_debug_images').value
+        if isinstance(show_debug_param, str):
+            self.show_debug_images = show_debug_param.strip().lower() in ('true', '1')
+        else:
+            self.show_debug_images = bool(show_debug_param)
         self.publish_marker_point_clouds = False
         
         self.latest_images = {}
@@ -549,11 +554,18 @@ class DetectArucoNode(Node):
 
         if not self.has_parameter('publish_markers'):
             self.declare_parameter('publish_markers', False)
-        self.publish_markers = self.get_parameter('publish_markers').value
-        self.publish_markers = self.publish_markers == "true" or self.publish_markers == True
+        pub_markers_param = self.get_parameter('publish_markers').value
+        if isinstance(pub_markers_param, str):
+            self.publish_markers = pub_markers_param.strip().lower() in ('true', '1')
+        else:
+            self.publish_markers = bool(pub_markers_param)
 
-        self.visualize_markers_pub = self.create_publisher(MarkerArray, '/aruco/marker_array', 1)
-        self.visualize_detections_pub = self.create_publisher(Detection3DArray, '/aruco/detections', 1)
+        if self.publish_markers:
+            self.visualize_markers_pub = self.create_publisher(MarkerArray, '/aruco/marker_array', 1)
+        else:
+            self.visualize_markers_pub = None
+
+        self.aruco_detections_pub = self.create_publisher(Detection3DArray, '/aruco/detections', 1)
 
         self.tf_broadcaster = TransformBroadcaster(self)
 
@@ -611,13 +623,13 @@ class DetectArucoNode(Node):
         collection.update(rgb_image, camera_matrix, camera_dist_coeffs, distortion_model, rgb_image_timestamp)
 
         detection_array = collection.to_ros_msg()
-        self.visualize_detections_pub.publish(detection_array)
+        self.aruco_detections_pub.publish(detection_array)
 
         # Create TF frames for each of the markers. Only broadcast
         # each marker a single time after it has been updated.
         collection.broadcast_tf(self.tf_broadcaster)
         
-        if self.publish_markers:
+        if self.publish_markers and self.visualize_markers_pub is not None:
             marker_array = collection.get_ros_marker_array()
             self.visualize_markers_pub.publish(marker_array)
 

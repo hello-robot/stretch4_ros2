@@ -33,7 +33,11 @@ def launch_setup(context, *args, **kwargs):
                 parameters=[
                     stretch_marker_dict,
                     additional_marker_dict,
-                    {'cameras': LaunchConfiguration("cameras")}
+                    {
+                        'cameras': LaunchConfiguration("cameras"),
+                        'show_debug_images': LaunchConfiguration("show_debug_images"),
+                        'publish_markers': LaunchConfiguration("publish_markers")
+                    }
                 ],
             )
         ]
@@ -52,14 +56,19 @@ def generate_launch_description():
             description="Camera(s) to use for detection (comma-separated list of: left, right, center, or 'all')."
         ),
         DeclareLaunchArgument(
-        "use_rviz",
-        default_value="false",
-        description="If true, launch Rviz2 automatically.",
-    ),
-        # DeclareLaunchArgument(
-        #     "publish_markers",
-        #     default_value="false",
-        #     description="Publish the markers topic. If you do not publish this, the detections will still be available via TF."
-        # ),
+            "show_debug_images",
+            default_value="false",
+            description="Whether to show debug images for detected Aruco markers."
+        ),
+        DeclareLaunchArgument(
+            "use_rviz",
+            default_value="false",
+            description="If true, launch Rviz2 automatically.",
+        ),
+        DeclareLaunchArgument(
+            "publish_markers",
+            default_value="false",
+            description="Publish the markers topic. If you do not publish this, the detections will still be available via TF."
+        ),
         OpaqueFunction(function=launch_setup)
     ])
