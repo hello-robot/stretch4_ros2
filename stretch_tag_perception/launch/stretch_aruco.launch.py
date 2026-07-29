@@ -1,10 +1,12 @@
 import os
+
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, OpaqueFunction
-from launch_ros.actions import Node
-from launch.substitutions import LaunchConfiguration
 from launch.conditions import IfCondition
+from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import Node
+
 
 def launch_setup(context, *args, **kwargs): 
 
@@ -15,7 +17,7 @@ def launch_setup(context, *args, **kwargs):
     stretch_marker_dict = os.path.join(get_package_share_directory('stretch_tag_perception'), 'config', 'stretch_marker_dict.yaml')
     
     use_rviz = LaunchConfiguration('use_rviz')
-    rviz_config_path = os.path.join(get_package_share_directory('stretch_tag_perception'), 'rviz', 'wrist_tag.rviz')
+    rviz_config_path = os.path.join(get_package_share_directory('stretch_tag_perception'), 'rviz', 'tag_perception.rviz')
     rviz_node = Node(
         package="rviz2",
         executable="rviz2",
@@ -39,7 +41,8 @@ def launch_setup(context, *args, **kwargs):
                         'publish_markers': LaunchConfiguration("publish_markers")
                     }
                 ],
-            )
+            ), 
+        rviz_node,
         ]
 
 

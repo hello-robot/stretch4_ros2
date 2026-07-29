@@ -616,8 +616,7 @@ class DetectArucoNode(Node):
             logger.error(error)
             return
 
-        logger.info(f"{self.camera_infos[camera_name]=}")
-        camera_matrix, camera_dist_coeffs, frame_id,distortion_model = self.camera_infos[camera_name]
+        camera_matrix, camera_dist_coeffs, frame_id, distortion_model = self.camera_infos[camera_name]
         collection = self.aruco_marker_collections[camera_name]
 
         collection.update(rgb_image, camera_matrix, camera_dist_coeffs, distortion_model, rgb_image_timestamp)
