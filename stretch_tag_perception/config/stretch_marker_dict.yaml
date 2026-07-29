@@ -43,3 +43,8 @@
         length_mm: 14.0
         tag_dictionary: "DICT_6X6_250"
         link: 'aruco_fingertip_right_link'
+      '999':
+        name: 'localization_marker'
+        length_mm: 150.0
+        tag_dictionary: "DICT_6X6_1000"
+        link: 'localization_aruco_marker_link'
