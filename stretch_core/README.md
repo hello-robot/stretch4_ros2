@@ -20,8 +20,7 @@ ros2 run stretch_core dual_lidar_pointcloud_merger --ros-args \
 
 ## Dual Hesai LaserScan filtering
 
-The `dual_lidar_laserscan` node (`pointcloud_to_laserscan`) fuses the left and right Hesai point clouds, runs a configurable filter pipeline, and always publishes `/scan_filtered` (`LaserScan`) in `base_footprint`.
-
+The `dual_lidar_laserscan` node (`pointcloud_to_laserscan`) fuses the left and right Hesai point clouds, runs a configurable filter pipeline, and publishes `/scan_filtered` (`LaserScan`) in `base_footprint`. The scan is only published while synchronized pairs arrive from **both** lidars: if either lidar stops (or their stamps drift more than 0.2 s apart), `/scan_filtered` goes silent and the node reports the stale input on `/diagnostics`.
 - `pub_pointcloud` - optional debug output: publish a filtered merged xyz cloud on `pointcloud_topic` (default `/lidar_pointcloud`, off by default)
 
 ### Filter presets

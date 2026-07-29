@@ -23,6 +23,7 @@ find_package(tf2_geometry_msgs REQUIRED)
 find_package(tf2_eigen REQUIRED)
 find_package(tf2_sensor_msgs REQUIRED)
 find_package(message_filters REQUIRED)
+find_package(diagnostic_msgs REQUIRED)
 find_package(PCL REQUIRED)
 find_package(pcl_conversions REQUIRED)
 find_package(visualization_msgs REQUIRED)
@@ -54,7 +55,7 @@ set(lidar_filter_lib_sources
 add_executable(dual_lidar_laserscan
   src/dual_lidar_laserscan_node.cpp
   ${lidar_filter_lib_sources})
-ament_target_dependencies(dual_lidar_laserscan ${lidar_filter_dependencies} pcl_conversions)
+ament_target_dependencies(dual_lidar_laserscan ${lidar_filter_dependencies} pcl_conversions diagnostic_msgs)
 target_include_directories(dual_lidar_laserscan PUBLIC
   ${EIGEN3_INCLUDE_DIRS}
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
