@@ -6,10 +6,17 @@
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
 #include <tf2_eigen/tf2_eigen.hpp>
+#include <diagnostic_msgs/msg/diagnostic_array.hpp>
+#include <message_filters/subscriber.hpp>
+#include <message_filters/sync_policies/approximate_time.hpp>
+#include <message_filters/synchronizer.hpp>
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
+#include <functional>
+#include <memory>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -71,6 +78,7 @@ public:
     setupPublishers();
 
     setupMarkerPublisher();
+    setupDiagnostics();
 
     // on_set only validates; post_set is what applies a change to the node.
     param_callback_handle_ = add_on_set_parameters_callback(
@@ -93,7 +101,6 @@ public:
         target_frame_, lidar2_frame_, tf2::TimePointZero);
       tf_lidar1_ = tf2::transformToEigen(tf1.transform).matrix().cast<float>();
       tf_lidar2_ = tf2::transformToEigen(tf2.transform).matrix().cast<float>();
-      tf_available_ = true;
       RCLCPP_INFO(get_logger(), "Transforms cached.");
       return true;
     } catch (const tf2::TransformException & ex) {
@@ -104,17 +111,25 @@ public:
 
   void activateSubscription()
   {
-    rclcpp::QoS qos(rclcpp::KeepLast(1));
-    qos.reliable();
-    sub1_ = create_subscription<sensor_msgs::msg::PointCloud2>(
-      lidar1_topic_, qos,
-      std::bind(&DualLidarLaserScanNode::pointcloudCallback1, this, std::placeholders::_1));
-    sub2_ = create_subscription<sensor_msgs::msg::PointCloud2>(
-      lidar2_topic_, qos,
-      std::bind(&DualLidarLaserScanNode::pointcloudCallback2, this, std::placeholders::_1));
-    timer_ = create_wall_timer(
-      std::chrono::milliseconds(100),
-      std::bind(&DualLidarLaserScanNode::timerCallback, this));
+    // best-effort sensor QoS.
+    sub1_.subscribe(this, lidar1_topic_, rmw_qos_profile_sensor_data);
+    sub2_.subscribe(this, lidar2_topic_, rmw_qos_profile_sensor_data);
+    sub1_.registerCallback(&DualLidarLaserScanNode::recordLidar1Stamp, this);
+    sub2_.registerCallback(&DualLidarLaserScanNode::recordLidar2Stamp, this);
+    sync_ = std::make_shared<message_filters::Synchronizer<SyncPolicy>>(
+      SyncPolicy(10), sub1_, sub2_);
+    // Maximum time between two pairs of clouds.
+    sync_->setMaxIntervalDuration(rclcpp::Duration::from_seconds(kMaxPairIntervalSec));
+    // Minimum spacing between clouds per topic. Helps ApproximateTime decide on the optimal pair faster.
+    sync_->setInterMessageLowerBound(
+      0, rclcpp::Duration::from_seconds(kInterMessageLowerBoundSec));
+    sync_->setInterMessageLowerBound(
+      1, rclcpp::Duration::from_seconds(kInterMessageLowerBoundSec));
+    sync_->registerCallback(
+      std::bind(
+        &DualLidarLaserScanNode::syncedCloudsCallback, this,
+        std::placeholders::_1, std::placeholders::_2));
+    subscriptions_active_ = true;
   }
 
 private:
@@ -306,70 +321,128 @@ private:
       pub_pointcloud_ ? "true" : "false");
   }
 
-  tf2::TimePoint lidarTfTime() const
+  void recordLidar1Stamp(const sensor_msgs::msg::PointCloud2::ConstSharedPtr & msg)
   {
-    if (!msg1_) {
-      return tf2::TimePointZero;
-    }
-    const rclcpp::Time stamp(msg1_->header.stamp);
-    if (stamp.nanoseconds() <= 0) {
-      return tf2::TimePointZero;
-    }
-    return tf2::TimePoint(std::chrono::nanoseconds(stamp.nanoseconds()));
+    last_msg1_stamp_ = rclcpp::Time(msg->header.stamp);
+    last_msg1_latency_ = (now() - last_msg1_stamp_).seconds();
+    msg1_received_ = true;
   }
 
-  void pointcloudCallback1(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
+  void recordLidar2Stamp(const sensor_msgs::msg::PointCloud2::ConstSharedPtr & msg)
   {
-    if (!tf_available_) {
-      return;
-    }
-    msg1_ = msg;
-    msg1_arrival_time_ = now();
+    last_msg2_stamp_ = rclcpp::Time(msg->header.stamp);
+    last_msg2_latency_ = (now() - last_msg2_stamp_).seconds();
+    msg2_received_ = true;
   }
 
-  void pointcloudCallback2(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
+  void setupDiagnostics()
   {
-    if (!tf_available_) {
-      return;
-    }
-    msg2_ = msg;
-    msg2_arrival_time_ = now();
+    pub_diag_ = create_publisher<diagnostic_msgs::msg::DiagnosticArray>("/diagnostics", 1);
+    diag_timer_ = create_wall_timer(
+      std::chrono::seconds(1),
+      std::bind(&DualLidarLaserScanNode::publishLidarHealth, this));
   }
 
+  void publishLidarHealth()
+  {
+    diagnostic_msgs::msg::DiagnosticStatus status;
+    status.name = "lidar_health";
+    status.level = diagnostic_msgs::msg::DiagnosticStatus::OK;
+    status.message = "OK";
 
-  void timerCallback()
+    const auto current = now();
+    std::vector<std::string> faults;
+
+    auto addValue = [&status](const std::string & key, double value) {
+        diagnostic_msgs::msg::KeyValue kv;
+        kv.key = key;
+        char buf[32];
+        std::snprintf(buf, sizeof(buf), "%.3f", value);
+        kv.value = buf;
+        status.values.push_back(kv);
+      };
+
+    if (!subscriptions_active_) {
+      status.level = diagnostic_msgs::msg::DiagnosticStatus::WARN;
+      status.message = "Waiting for lidar transforms";
+    } else {
+      bool any_stale = false;
+      auto checkInput =
+        [&](const std::string & label, bool received, const rclcpp::Time & stamp,
+        double latency) {
+          if (!received) {
+            faults.push_back(label + ": no data yet");
+            any_stale = true;
+            return;
+          }
+          const double age = (current - stamp).seconds();
+          addValue(label + "/age_s", age);
+          addValue(label + "/latency_s", latency);
+          if (age > kStaleTimeoutSec) {
+            char buf[64];
+            std::snprintf(buf, sizeof(buf), "%s: stale (%.1f s)", label.c_str(), age);
+            faults.push_back(buf);
+            any_stale = true;
+          }
+        };
+      checkInput("lidar1", msg1_received_, last_msg1_stamp_, last_msg1_latency_);
+      checkInput("lidar2", msg2_received_, last_msg2_stamp_, last_msg2_latency_);
+
+      if (!sync_received_) {
+        faults.push_back("scan: not published yet");
+        any_stale = true;
+      } else {
+        const double scan_age = (current - last_scan_stamp_).seconds();
+        addValue("scan/age_s", scan_age);
+        if (scan_age > kStaleTimeoutSec) {
+          char buf[64];
+          std::snprintf(buf, sizeof(buf), "scan: stale (%.1f s)", scan_age);
+          faults.push_back(buf);
+          any_stale = true;
+        } else if (scan_age > kScanDelayWarnSec) {
+          char buf[64];
+          std::snprintf(buf, sizeof(buf), "scan: delayed (%.2f s)", scan_age);
+          faults.push_back(buf);
+        }
+      }
+
+      if (!faults.empty()) {
+        status.level = any_stale ?
+          diagnostic_msgs::msg::DiagnosticStatus::STALE :
+          diagnostic_msgs::msg::DiagnosticStatus::WARN;
+        status.message = joinStageNames(faults);
+        
+        RCLCPP_WARN_THROTTLE(
+          get_logger(), *get_clock(), 5000, "lidar_health: %s", status.message.c_str());
+      }
+    }
+
+    diagnostic_msgs::msg::DiagnosticArray diag_msg;
+    diag_msg.header.stamp = current;
+    diag_msg.status.push_back(status);
+    pub_diag_->publish(diag_msg);
+  }
+
+  void syncedCloudsCallback(
+    const sensor_msgs::msg::PointCloud2::ConstSharedPtr & msg1,
+    const sensor_msgs::msg::PointCloud2::ConstSharedPtr & msg2)
   {
     if (self_filter_reload_pending_) {
       loadSelfFilterParams();
       self_filter_reload_pending_ = false;
     }
 
-    if (!msg1_ || !msg2_) {
-      RCLCPP_WARN(get_logger(), "One or both LIDAR messages not yet received.");
-      return;
-    }
-
-    const auto current_time = now();
-    const double msg1_age = (current_time - msg1_arrival_time_).seconds();
-    const double msg2_age = (current_time - msg2_arrival_time_).seconds();
-    if (msg1_age > 1.0 || msg2_age > 1.0) {
-      RCLCPP_WARN_THROTTLE(
-        get_logger(), *get_clock(), 2000,
-        "LIDAR messages are stale (arrival age: msg1=%.3f s, msg2=%.3f s). Ignoring to prevent outdated collision monitoring.",
-        msg1_age, msg2_age);
-      return;
-    }
-
-    // const tf2::TimePoint tf_time = lidarTfTime();
     const tf2::TimePoint tf_time = tf2::TimePointZero;
     updateSelfFilterTransforms(tf_time);
 
     std_msgs::msg::Header output_header;
     output_header.frame_id = target_frame_;
-    output_header.stamp = olderStamp(msg1_->header.stamp, msg2_->header.stamp);
+    output_header.stamp = olderStamp(msg1->header.stamp, msg2->header.stamp);
+    last_scan_stamp_ = rclcpp::Time(output_header.stamp);
+    sync_received_ = true;
 
     const auto output = pipeline_.process(
-      msg1_, msg2_, tf_lidar1_, tf_lidar2_, self_filter_, scan_cfg_, pub_pointcloud_, output_header, get_logger());
+      msg1, msg2, tf_lidar1_, tf_lidar2_, self_filter_, scan_cfg_, pub_pointcloud_, output_header, get_logger());
     if (!hasAnyScanHits(output)) {
       RCLCPP_WARN_THROTTLE(
         get_logger(), *get_clock(), 2000,
@@ -554,7 +627,7 @@ private:
         }
 
         // Anything without a check above is accepted. Rejecting unrecognised
-        // names would block other callbacks from handling them.
+        // names would block other callbacks from handling them. (as per ros node doc)
       }
     } catch (const std::exception & ex) {
       rcl_interfaces::msg::SetParametersResult result;
@@ -658,7 +731,12 @@ private:
         pipeline_.setConfig(pipeline_config_);
       } else if (name == "pub_pointcloud") {
         pub_pointcloud_ = param.as_bool();
-        setupPublishers();
+        if (pub_pointcloud_) {
+          pub_cloud_ = create_publisher<sensor_msgs::msg::PointCloud2>(
+            pointcloud_topic_, rclcpp::SensorDataQoS());
+        } else {
+          pub_cloud_.reset();
+        }
       } else if (name == "pointcloud_topic") {
         pointcloud_topic_ = param.as_string();
         if (pub_pointcloud_) {
@@ -683,21 +761,36 @@ private:
   stretch_core::RobotSelfFilterConfig self_filter_config_;
   stretch_core::ScanProjectionConfig scan_cfg_;
 
+  using SyncPolicy = message_filters::sync_policies::ApproximateTime<
+    sensor_msgs::msg::PointCloud2, sensor_msgs::msg::PointCloud2>;
+
+  static constexpr double kStaleTimeoutSec = 1.0;
+  static constexpr double kScanDelayWarnSec = 0.5;
+  static constexpr double kMaxPairIntervalSec = 0.2;
+  static constexpr double kInterMessageLowerBoundSec = 0.09;
+
   tf2_ros::Buffer tf_buffer_;
   tf2_ros::TransformListener tf_listener_;
-  rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr sub1_;
-  rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr sub2_;
-  rclcpp::TimerBase::SharedPtr timer_;
+  rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr pub_diag_;
+  rclcpp::TimerBase::SharedPtr diag_timer_;
+  message_filters::Subscriber<sensor_msgs::msg::PointCloud2> sub1_;
+  message_filters::Subscriber<sensor_msgs::msg::PointCloud2> sub2_;
+  std::shared_ptr<message_filters::Synchronizer<SyncPolicy>> sync_;
   OnSetParametersCallbackHandle::SharedPtr param_callback_handle_;
   rclcpp::node_interfaces::PostSetParametersCallbackHandle::SharedPtr post_param_callback_handle_;
   rclcpp::Publisher<sensor_msgs::msg::LaserScan>::SharedPtr pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_cloud_;
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pub_markers_;
 
-  sensor_msgs::msg::PointCloud2::ConstSharedPtr msg1_;
-  sensor_msgs::msg::PointCloud2::ConstSharedPtr msg2_;
-  rclcpp::Time msg1_arrival_time_;
-  rclcpp::Time msg2_arrival_time_;
+  rclcpp::Time last_msg1_stamp_;
+  rclcpp::Time last_msg2_stamp_;
+  rclcpp::Time last_scan_stamp_;
+  double last_msg1_latency_{0.0};
+  double last_msg2_latency_{0.0};
+  bool subscriptions_active_{false};
+  bool msg1_received_{false};
+  bool msg2_received_{false};
+  bool sync_received_{false};
 
   std::string filter_type_;
   std::string lidar1_topic_;
@@ -712,7 +805,6 @@ private:
 
   Eigen::Matrix4f tf_lidar1_;
   Eigen::Matrix4f tf_lidar2_;
-  bool tf_available_{false};
   bool pub_pointcloud_{false};
   bool enable_self_robot_filter_{true};
   bool enable_region_filter_{true};
@@ -733,8 +825,10 @@ int main(int argc, char ** argv)
     rate.sleep();
   }
 
-  node->activateSubscription();
-  rclcpp::spin(node);
+  if (rclcpp::ok()) {
+    node->activateSubscription();
+    rclcpp::spin(node);
+  }
   rclcpp::shutdown();
   return 0;
 }
