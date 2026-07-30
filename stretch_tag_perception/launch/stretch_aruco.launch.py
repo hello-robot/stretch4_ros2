@@ -1,10 +1,12 @@
 import os
+
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, OpaqueFunction
-from launch_ros.actions import Node
-from launch.substitutions import LaunchConfiguration
 from launch.conditions import IfCondition
+from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import Node
+
 
 def launch_setup(context, *args, **kwargs): 
 
@@ -15,7 +17,7 @@ def launch_setup(context, *args, **kwargs):
     stretch_marker_dict = os.path.join(get_package_share_directory('stretch_tag_perception'), 'config', 'stretch_marker_dict.yaml')
     
     use_rviz = LaunchConfiguration('use_rviz')
-    rviz_config_path = os.path.join(get_package_share_directory('stretch_tag_perception'), 'rviz', 'wrist_tag.rviz')
+    rviz_config_path = os.path.join(get_package_share_directory('stretch_tag_perception'), 'rviz', 'tag_perception.rviz')
     rviz_node = Node(
         package="rviz2",
         executable="rviz2",
@@ -33,9 +35,14 @@ def launch_setup(context, *args, **kwargs):
                 parameters=[
                     stretch_marker_dict,
                     additional_marker_dict,
-                    {'cameras': LaunchConfiguration("cameras")}
+                    {
+                        'cameras': LaunchConfiguration("cameras"),
+                        'show_debug_images': LaunchConfiguration("show_debug_images"),
+                        'publish_markers': LaunchConfiguration("publish_markers")
+                    }
                 ],
-            )
+            ), 
+        rviz_node,
         ]
 
 
@@ -52,14 +59,19 @@ def generate_launch_description():
             description="Camera(s) to use for detection (comma-separated list of: left, right, center, or 'all')."
         ),
         DeclareLaunchArgument(
-        "use_rviz",
-        default_value="false",
-        description="If true, launch Rviz2 automatically.",
-    ),
-        # DeclareLaunchArgument(
-        #     "publish_markers",
-        #     default_value="false",
-        #     description="Publish the markers topic. If you do not publish this, the detections will still be available via TF."
-        # ),
+            "show_debug_images",
+            default_value="false",
+            description="Whether to show debug images for detected Aruco markers."
+        ),
+        DeclareLaunchArgument(
+            "use_rviz",
+            default_value="false",
+            description="If true, launch Rviz2 automatically.",
+        ),
+        DeclareLaunchArgument(
+            "publish_markers",
+            default_value="false",
+            description="Publish the markers topic. If you do not publish this, the detections will still be available via TF."
+        ),
         OpaqueFunction(function=launch_setup)
     ])

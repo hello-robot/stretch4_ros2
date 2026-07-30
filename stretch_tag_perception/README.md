@@ -24,15 +24,13 @@ ros2 launch stretch_tag_perception stretch_aruco.launch.py cameras:=all publish_
 ### Parameters
 
 When you run `ros2 launch stretch_tag_perception stretch_aruco.launch.py`, you can specify:
-- `cameras:=left` for only the left camera. 
-- `cameras:=right` for only the right camera. 
-- `cameras:=center` for only the center camera. 
-- `cameras:=left,right` for only the left/right cameras.
-- `cameras:=all` for all the cameras.
-
-- `publish_markers` is `false` by default. You can view the ArUco markers as TF frames if `publish_markers` is `false`.
+- `aruco_config_filepath`: `""` by default. Optional filepath to a YAML file containing custom/additional ArUco marker configuration parameters.
+- `cameras`: Camera(s) to use for detection (`center` by default). Options include `left`, `right`, `center`, comma-separated lists like `left,right`, or `all`.
+- `show_debug_images`: `false` by default. Set to `true` to display OpenCV debug image windows during detection.
+- `use_rviz`: `false` by default. Set to `true` to launch RViz2 automatically with pre-configured tag visualization.
+- `publish_markers`: `false` by default. Set to `true` to publish marker visualization array to `/aruco/marker_array`.
 
 ## Known Aruco Tags
 
 - [stretch_marker_dict.yaml](./config/stretch_marker_dict.yaml) contains all the markers on Stretch 4 or with official accessories, such as the Docking Station.
-- [user_aruco_dict.yaml] contains some markers that ship in Stretch 4's accessories box, and is a file where you could add your own marker id's and sizes.
+- [user_aruco_dict.yaml] contains markers that ship in Stretch 4's accessories box, and is a file where you could add your own marker id's and sizes.
