@@ -230,8 +230,74 @@ class CalibrateTagCli(Node):
             return cv2.resize(img, new_size, interpolation=cv2.INTER_AREA)
         return img
 
+    def _draw_centered_message(
+        self,
+        img: np.ndarray,
+        main_text: str,
+        sub_text: Optional[str],
+        bg_color: Tuple[int, int, int],
+        text_color: Tuple[int, int, int]
+    ) -> None:
+        """
+        Draw a beautifully centered message box in the middle of the image.
+
+        Args:
+            img: The OpenCV image to draw onto.
+            main_text: The main status text to display.
+            sub_text: Optional subtitle text to display below the main text.
+            bg_color: BGR tuple representing the background box color.
+            text_color: BGR tuple representing the text color.
+        """
+        h, w = img.shape[:2]
+        font = cv2.FONT_HERSHEY_SIMPLEX
+
+        # Slightly smaller scales for maximum readability and zero clipping
+        main_scale, main_thickness = 0.7, 2
+        sub_scale, sub_thickness = 0.5, 1
+
+        # Calculate exact text dimensions
+        (m_w, m_h), _ = cv2.getTextSize(main_text, font, main_scale, main_thickness)
+
+        s_w, s_h = 0, 0
+        if sub_text:
+            (s_w, s_h), _ = cv2.getTextSize(sub_text, font, sub_scale, sub_thickness)
+
+        # Compute optimal box dimensions
+        box_w = max(m_w, s_w) + 40
+        box_h = m_h + (s_h + 16 if sub_text else 0) + 30
+
+        # Define rectangle bounding coordinates
+        pt1 = (w // 2 - box_w // 2, h // 2 - box_h // 2)
+        pt2 = (w // 2 + box_w // 2, h // 2 + box_h // 2)
+
+        # Draw box and a subtle border
+        cv2.rectangle(img, pt1, pt2, bg_color, -1)
+        cv2.rectangle(img, pt1, pt2, (255, 255, 255), 2)
+
+        # Render centered text
+        m_x = w // 2 - m_w // 2
+        if sub_text:
+            m_y = h // 2 - 4
+            s_x = w // 2 - s_w // 2
+            s_y = h // 2 + s_h + 12
+            cv2.putText(img, main_text, (m_x, m_y), font, main_scale, text_color, main_thickness, cv2.LINE_AA)
+            cv2.putText(img, sub_text, (s_x, s_y), font, sub_scale, text_color, sub_thickness, cv2.LINE_AA)
+        else:
+            m_y = h // 2 + m_h // 2
+            cv2.putText(img, main_text, (m_x, m_y), font, main_scale, text_color, main_thickness, cv2.LINE_AA)
+
     def _draw_hud(self, img: np.ndarray, tag_visible: bool, state: CalibrationState) -> np.ndarray:
-        """Append HUD bar below image showing current node state."""
+        """
+        Append a black HUD bar below the image showing current node state.
+
+        Args:
+            img: The main camera image frame.
+            tag_visible: True if the calibration tag is currently visible.
+            state: The current calibration lifecycle state.
+
+        Returns:
+            The modified image extended vertically with the HUD bar attached.
+        """
         font = cv2.FONT_HERSHEY_SIMPLEX
         font_scale, thickness = 0.7, 2
 
@@ -264,22 +330,18 @@ class CalibrateTagCli(Node):
 
         elif state == CalibrationState.CALIBRATING:
             cv2.putText(extended_img, "CALIBRATING... HOLD STILL!", (15, y3), font, font_scale, (0, 255, 255), thickness, cv2.LINE_AA)
-            cv2.rectangle(extended_img, (w // 4, h // 2 - 40), (3 * w // 4, h // 2 + 40), (0, 165, 255), -1)
-            cv2.putText(extended_img, "CALIBRATING POSE", (w // 4 + 30, h // 2 + 10), font, 1.0, (0, 0, 0), 3, cv2.LINE_AA)
+            self._draw_centered_message(extended_img, "CALIBRATING POSE", "HOLD STILL...", (0, 165, 255), (0, 0, 0))
 
         elif state == CalibrationState.SUCCESS:
             cv2.putText(extended_img, "CALIBRATION SUCCESSFUL!", (15, y3), font, font_scale, (0, 255, 0), thickness, cv2.LINE_AA)
-            cv2.rectangle(extended_img, (w // 4, h // 2 - 40), (3 * w // 4, h // 2 + 40), (0, 255, 0), -1)
-            cv2.putText(extended_img, "SUCCESS!", (w // 2 - 80, h // 2 + 10), font, 1.2, (0, 0, 0), 3, cv2.LINE_AA)
+            self._draw_centered_message(extended_img, "SUCCESS!", "See terminal for table", (0, 255, 0), (0, 0, 0))
 
             if now - self._success_start_time > 3.0:
                 self.is_running = False
 
         elif state == CalibrationState.FAILED:
             cv2.putText(extended_img, "CALIBRATION FAILED", (15, y3), font, font_scale, (0, 0, 255), thickness, cv2.LINE_AA)
-            cv2.rectangle(extended_img, (w // 6, h // 2 - 50), (5 * w // 6, h // 2 + 50), (0, 0, 255), -1)
-            cv2.putText(extended_img, "FAILED", (w // 2 - 60, h // 2 - 10), font, 1.0, (255, 255, 255), 3, cv2.LINE_AA)
-            cv2.putText(extended_img, self._calibration_error[:50], (w // 6 + 10, h // 2 + 30), font, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+            self._draw_centered_message(extended_img, "FAILED", "see terminal", (0, 0, 255), (255, 255, 255))
 
             if now - self._fail_start_time > 5.0:
                 with self._lock:
