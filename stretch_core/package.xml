@@ -41,8 +41,6 @@
 
   <!-- EXECUTION DEPENDENCIES: Needed ONLY at runtime. -->
   <!-- Not required to build the package, but must be installed to run external drivers/tools in launch files. -->
-  <exec_depend>depthai</exec_depend>
-  <exec_depend>depthai_ros_driver</exec_depend>
   <exec_depend>hesai_ros_driver</exec_depend>
   <exec_depend>joy</exec_depend>
   <exec_depend>python3-numpy</exec_depend>
