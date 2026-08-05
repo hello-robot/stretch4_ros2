@@ -5,7 +5,7 @@ from enum import Enum
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image, CameraInfo
-from cv_bridge import CvBridge
+import ros2_numpy
 import numpy as np
 import yaml
 import os
@@ -37,8 +37,9 @@ class LuxonisCameraNode(Node):
         # Declare parameters
         self.declare_parameter('use_left', True)
         self.declare_parameter('use_right', True)
-        self.declare_parameter('use_center', False)
+        self.declare_parameter('use_center', True)
         self.declare_parameter('is_gripper', False)
+        self.declare_parameter('publish_rotated', True)
         self.declare_parameter('camera_namespace', 'camera')
         self.declare_parameter('left_calibration_file', '')
         self.declare_parameter('right_calibration_file', '')
@@ -50,17 +51,14 @@ class LuxonisCameraNode(Node):
         self.use_right = self.get_parameter('use_right').value
         self.use_center = self.get_parameter('use_center').value
         self.is_gripper = self.get_parameter('is_gripper').value
+        self.publish_rotated = self.get_parameter('publish_rotated').value
         self.camera_namespace = self.get_parameter('camera_namespace').value
-        
-        # CV Bridge
-        self.bridge = CvBridge()
         
         # Publishers and camera info caches
         self.publishers_topics = {}
+        self.rotated_publishers = {}
         self.info_publishers = {}
         self.camera_info = {}
-        
-        latching_qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         
         if self.is_gripper:
             # Gripper camera topics as requested and verified:
@@ -102,6 +100,9 @@ class LuxonisCameraNode(Node):
             if self.use_left:
                 self.publishers_topics['left'] = self.create_publisher(
                     Image, VisionTopics.image_raw('left'), 10)
+                if self.publish_rotated:
+                    self.rotated_publishers['left'] = self.create_publisher(
+                        Image, VisionTopics.rotated_image('left'), 10)
                 self.info_publishers['left'] = self.create_publisher(
                     CameraInfo, VisionTopics.camera_info('left'), 10)
                 calib_file = self.get_parameter('left_calibration_file').value
@@ -113,6 +114,9 @@ class LuxonisCameraNode(Node):
             if self.use_right:
                 self.publishers_topics['right'] = self.create_publisher(
                     Image, VisionTopics.image_raw('right'), 10)
+                if self.publish_rotated:
+                    self.rotated_publishers['right'] = self.create_publisher(
+                        Image, VisionTopics.rotated_image('right'), 10)
                 self.info_publishers['right'] = self.create_publisher(
                     CameraInfo, VisionTopics.camera_info('right'), 10)
                 calib_file = self.get_parameter('right_calibration_file').value
@@ -124,6 +128,9 @@ class LuxonisCameraNode(Node):
             if self.use_center:
                 self.publishers_topics['center'] = self.create_publisher(
                     Image, VisionTopics.image_raw('center'), 10)
+                if self.publish_rotated:
+                    self.rotated_publishers['center'] = self.create_publisher(
+                        Image, VisionTopics.rotated_image('center'), 10)
                 self.info_publishers['center'] = self.create_publisher(
                     CameraInfo, VisionTopics.camera_info('center'), 10)
                 calib_file = self.get_parameter('center_calibration_file').value
@@ -234,7 +241,7 @@ class LuxonisCameraNode(Node):
                 frame_id = VisionFrames.gripper_camera_frame('left')
                 
                 # Image msg
-                img_msg = self.bridge.cv2_to_imgmsg(left_img, encoding='bgr8')
+                img_msg = ros2_numpy.msgify(Image, left_img, encoding='bgr8')
                 img_msg.header.stamp = stamp
                 img_msg.header.frame_id = frame_id
                 self.publishers_topics['left'].publish(img_msg)
@@ -254,7 +261,7 @@ class LuxonisCameraNode(Node):
                 frame_id = VisionFrames.gripper_camera_frame('right')
                 
                 # Image msg
-                img_msg = self.bridge.cv2_to_imgmsg(right_img, encoding='bgr8')
+                img_msg = ros2_numpy.msgify(Image, right_img, encoding='bgr8')
                 img_msg.header.stamp = stamp
                 img_msg.header.frame_id = frame_id
                 self.publishers_topics['right'].publish(img_msg)
@@ -274,7 +281,7 @@ class LuxonisCameraNode(Node):
                 frame_id = VisionFrames.gripper_camera_frame('stereo')
                 
                 # Image msg
-                img_msg = self.bridge.cv2_to_imgmsg(depth_img, encoding='passthrough')
+                img_msg = ros2_numpy.msgify(Image, depth_img, encoding='16UC1')
                 img_msg.header.stamp = stamp
                 img_msg.header.frame_id = frame_id
                 self.publishers_topics['stereo'].publish(img_msg)
@@ -313,7 +320,7 @@ class LuxonisCameraNode(Node):
                 
             stamp = self.get_clock().now().to_msg()
             
-            # Helper function to publish a single frame's data
+             # Helper function to publish a single frame's data
             def publish_head_image_and_info(img_frame, camera_name):
                 if img_frame is None or img_frame.image is None:
                     return
@@ -322,10 +329,24 @@ class LuxonisCameraNode(Node):
                 frame_id = VisionFrames.camera_frame(camera_name)
                 
                 # Image msg
-                img_msg = self.bridge.cv2_to_imgmsg(img, encoding='bgr8')
+                img_msg = ros2_numpy.msgify(Image, img, encoding='bgr8')
                 img_msg.header.stamp = stamp
                 img_msg.header.frame_id = frame_id
                 self.publishers_topics[camera_name].publish(img_msg)
+                
+                # Rotated Image msg
+                if self.publish_rotated:
+                    try:
+                        pub = self.rotated_publishers.get(camera_name)
+                        if pub is not None and pub.get_subscription_count() > 0:
+                            rotate_k = VisionFrames.camera_frame_number_of_rotations(camera_name)
+                            rotated_img = np.rot90(img, k=rotate_k)
+                            rotated_msg = ros2_numpy.msgify(Image, rotated_img, encoding='bgr8')
+                            rotated_msg.header.stamp = stamp
+                            rotated_msg.header.frame_id = frame_id
+                            pub.publish(rotated_msg)
+                    except Exception as ex:
+                        self.get_logger().error(f"Failed to rotate and publish image for {camera_name}: {ex}")
                 
                 # CameraInfo msg
                 if camera_name not in self.camera_info or self.camera_info[camera_name] is None:

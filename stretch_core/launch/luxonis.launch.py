@@ -34,7 +34,12 @@ def generate_launch_description():
     )
     use_center = DeclareLaunchArgument(
         "use_center",
-        default_value="false",
+        default_value="true",
+    )
+    publish_rotated = DeclareLaunchArgument(
+        "publish_rotated",
+        default_value="true",
+        description="If true, publish rotated image frames on rotated_image topic.",
     )
 
     launch_args = [
@@ -42,6 +47,7 @@ def generate_launch_description():
         use_left,
         use_right,
         use_center,
+        publish_rotated,
     ]
 
     return LaunchDescription(launch_args + [OpaqueFunction(function=launch_setup)])
@@ -51,6 +57,7 @@ def launch_setup(context, *args, **kwargs):
     is_use_left = is_launch_config_true(context, "use_left")
     is_use_right = is_launch_config_true(context, "use_right")
     is_use_center = is_launch_config_true(context, "use_center")
+    is_publish_rotated = is_launch_config_true(context, "publish_rotated")
 
     camera_node = Node(
         package="stretch_core",
@@ -61,6 +68,7 @@ def launch_setup(context, *args, **kwargs):
                 "use_left": is_use_left,
                 "use_right": is_use_right,
                 "use_center": is_use_center,
+                "publish_rotated": is_publish_rotated,
                 "is_gripper": False,
             }
         ],
