@@ -23,11 +23,12 @@ from stretch4_body.subsystem.cameras import (
     stream_left_right_center_camera,
     stream_gripper_camera,
 )
+        
+from stretch4_body.subsystem.cameras.enums.rgb_camera import RGBCameras
 
 from stretch_core.vision.vision_topics import (
     VisionTopics,
     VisionFrames,
-    get_camera_calibration_file_path,
 )
 
 class LuxonisCameraNode(Node):
@@ -41,10 +42,6 @@ class LuxonisCameraNode(Node):
         self.declare_parameter('is_gripper', False)
         self.declare_parameter('publish_rotated', True)
         self.declare_parameter('camera_namespace', 'camera')
-        self.declare_parameter('left_calibration_file', '')
-        self.declare_parameter('right_calibration_file', '')
-        self.declare_parameter('center_calibration_file', '')
-        self.declare_parameter('stereo_calibration_file', '') # for depth info if any
         
         # Get parameters
         self.use_left = self.get_parameter('use_left').value
@@ -59,7 +56,7 @@ class LuxonisCameraNode(Node):
         self.rotated_publishers = {}
         self.info_publishers = {}
         self.camera_info = {}
-        
+
         if self.is_gripper:
             # Gripper camera topics as requested and verified:
             # left -> /cameras_gripper/left/...
@@ -72,27 +69,21 @@ class LuxonisCameraNode(Node):
                 Image, VisionTopics.gripper_image_raw('left'), 10)
             self.info_publishers['left'] = self.create_publisher(
                 CameraInfo, VisionTopics.gripper_camera_info('left'), 10)
-            calib_file = self.get_parameter('left_calibration_file').value
-            if calib_file:
-                self.camera_info['left'] = self.load_camera_info(calib_file)
+            self.camera_info['left'] = self.load_camera_info_from_enum(RGBCameras.gripper_left)
                 
             # Right camera
             self.publishers_topics['right'] = self.create_publisher(
                 Image, VisionTopics.gripper_image_raw('right'), 10)
             self.info_publishers['right'] = self.create_publisher(
                 CameraInfo, VisionTopics.gripper_camera_info('right'), 10)
-            calib_file = self.get_parameter('right_calibration_file').value
-            if calib_file:
-                self.camera_info['right'] = self.load_camera_info(calib_file)
+            self.camera_info['right'] = self.load_camera_info_from_enum(RGBCameras.gripper_right)
                 
             # Depth camera (named stereo)
             self.publishers_topics['stereo'] = self.create_publisher(
                 Image, VisionTopics.gripper_image_raw('stereo'), 10)
             self.info_publishers['stereo'] = self.create_publisher(
                 CameraInfo, VisionTopics.gripper_camera_info('stereo'), 10)
-            calib_file = self.get_parameter('stereo_calibration_file').value
-            if calib_file:
-                self.camera_info['stereo'] = self.load_camera_info(calib_file)
+            self.camera_info['stereo'] = self.camera_info['right'] # share right camera info for depth
                 
         else:
             self.get_logger().info("Configuring node for Head Cameras Mode")
@@ -105,11 +96,7 @@ class LuxonisCameraNode(Node):
                         Image, VisionTopics.rotated_image('left'), 10)
                 self.info_publishers['left'] = self.create_publisher(
                     CameraInfo, VisionTopics.camera_info('left'), 10)
-                calib_file = self.get_parameter('left_calibration_file').value
-                if not calib_file:
-                    calib_file = get_camera_calibration_file_path('left')
-                if calib_file and os.path.exists(calib_file):
-                    self.camera_info['left'] = self.load_camera_info(calib_file)
+                self.camera_info['left'] = self.load_camera_info_from_enum(RGBCameras.head_left)
                     
             if self.use_right:
                 self.publishers_topics['right'] = self.create_publisher(
@@ -119,11 +106,7 @@ class LuxonisCameraNode(Node):
                         Image, VisionTopics.rotated_image('right'), 10)
                 self.info_publishers['right'] = self.create_publisher(
                     CameraInfo, VisionTopics.camera_info('right'), 10)
-                calib_file = self.get_parameter('right_calibration_file').value
-                if not calib_file:
-                    calib_file = get_camera_calibration_file_path('right')
-                if calib_file and os.path.exists(calib_file):
-                    self.camera_info['right'] = self.load_camera_info(calib_file)
+                self.camera_info['right'] = self.load_camera_info_from_enum(RGBCameras.head_right)
                     
             if self.use_center:
                 self.publishers_topics['center'] = self.create_publisher(
@@ -133,11 +116,7 @@ class LuxonisCameraNode(Node):
                         Image, VisionTopics.rotated_image('center'), 10)
                 self.info_publishers['center'] = self.create_publisher(
                     CameraInfo, VisionTopics.camera_info('center'), 10)
-                calib_file = self.get_parameter('center_calibration_file').value
-                if not calib_file:
-                    calib_file = get_camera_calibration_file_path('center')
-                if calib_file and os.path.exists(calib_file):
-                    self.camera_info['center'] = self.load_camera_info(calib_file)
+                self.camera_info['center'] = self.load_camera_info_from_enum(RGBCameras.head_center)
 
         # Initialize thread state
         self.running = True
@@ -146,72 +125,44 @@ class LuxonisCameraNode(Node):
         
         self.get_logger().info('Luxonis camera node initialized')
 
-    def load_camera_info(self, calib_file):
-        """Load camera calibration from YAML file"""
+    def load_camera_info_from_enum(self, camera_type):
+        """Load camera calibration from RGBCameras.load_calibration()"""
         try:
-            # Remove file:// prefix if present
-            if calib_file.startswith('file://'):
-                calib_file = calib_file[7:]
-
-            if not os.path.exists(calib_file):
-                self.get_logger().warn(f'Calibration file not found: {calib_file}')
-                return None
-
-            with open(calib_file, 'r') as f:
-                calib = yaml.safe_load(f)
-
+            calib = camera_type.load_calibration()
             if calib is None:
                 return None
-
-            # Create CameraInfo message
+                
             info = CameraInfo()
-            info.width = calib.get('image_width', 0)
-            info.height = calib.get('image_height', 0)
-            info.distortion_model = calib.get('distortion_model', '')
-
-            # Load distortion coefficients
-            if 'distortion_coefficients' in calib:
-                info.d = calib['distortion_coefficients'].get('data', [])
-
-            # Load camera matrix
-            if 'camera_matrix' in calib:
-                info.k = calib['camera_matrix'].get('data', [0.0] * 9)
-
-            # Load rectification matrix
-            if 'rectification_matrix' in calib:
-                info.r = calib['rectification_matrix'].get('data', [0.0] * 9)
-
-            # Load projection matrix
-            if 'projection_matrix' in calib:
-                info.p = calib['projection_matrix'].get('data', [0.0] * 12)
-
-            if info.distortion_model == "fisheye":
+            info.width = calib.width
+            info.height = calib.height
+            info.distortion_model = calib.distortion_model.name.lower()
+            
+            # distortion coefficients d
+            info.d = calib.distortion_coefficients.flatten().tolist()
+            
+            # camera matrix k (3x3)
+            info.k = calib.camera_matrix.flatten().tolist()
+            
+            # rectification matrix r (3x3, identity by default)
+            info.r = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+            
+            # projection matrix p (3x4)
+            fx = calib.camera_matrix[0, 0]
+            fy = calib.camera_matrix[1, 1]
+            cx = calib.camera_matrix[0, 2]
+            cy = calib.camera_matrix[1, 2]
+            info.p = [fx, 0.0, cx, 0.0, 0.0, fy, cy, 0.0, 0.0, 0.0, 1.0, 0.0]
+            
+            if info.distortion_model in ["fisheye", "equidistant_with_recompute_extrinsics"]:
                 info.distortion_model = "equidistant"
+            elif info.distortion_model == "wide_angle":
+                info.distortion_model = "plumb_bob"
 
-            self.get_logger().info(f'Loaded calibration from {calib_file}')
             return info
-
         except Exception as e:
-            self.get_logger().error(f'Failed to load calibration file {calib_file}: {e}')
+            self.get_logger().error(f'Failed to load calibration for {camera_type.name} via RGBCameras enum: {e}')
             return None
-
-    def get_default_camera_info(self, width, height, frame_id):
-        """Return a default/uncalibrated CameraInfo message based on frame dimensions"""
-        info = CameraInfo()
-        info.width = width
-        info.height = height
-        info.distortion_model = "plumb_bob"
-        info.d = [0.0, 0.0, 0.0, 0.0, 0.0]
-        fx = float(width)
-        fy = float(width)
-        cx = width / 2.0
-        cy = height / 2.0
-        info.k = [fx, 0.0, cx, 0.0, fy, cy, 0.0, 0.0, 1.0]
-        info.r = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
-        info.p = [fx, 0.0, cx, 0.0, 0.0, fy, cy, 0.0, 0.0, 0.0, 1.0, 0.0]
-        info.header.frame_id = frame_id
-        return info
-
+        
     def publish_loop(self):
         """Main publishing loop running in separate thread"""
         try:
@@ -224,7 +175,6 @@ class LuxonisCameraNode(Node):
 
     def publish_gripper_frames(self):
         self.get_logger().info("Starting Gripper Camera Stream...")
-        # Call stream_gripper_camera with is_rotate=False
         generator = stream_gripper_camera(is_rotate=False)
         for synced_frame in generator:
             if not self.running or not rclpy.ok():
@@ -248,7 +198,7 @@ class LuxonisCameraNode(Node):
                 
                 # CameraInfo msg
                 if 'left' not in self.camera_info or self.camera_info['left'] is None:
-                    self.camera_info['left'] = self.get_default_camera_info(w, h, frame_id)
+                    raise RuntimeError("Camera calibration file for gripper left is missing or could not be loaded!")
                 info_msg = self.camera_info['left']
                 info_msg.header.stamp = stamp
                 info_msg.header.frame_id = frame_id
@@ -268,7 +218,7 @@ class LuxonisCameraNode(Node):
                 
                 # CameraInfo msg
                 if 'right' not in self.camera_info or self.camera_info['right'] is None:
-                    self.camera_info['right'] = self.get_default_camera_info(w, h, frame_id)
+                    raise RuntimeError("Camera calibration file for gripper right is missing or could not be loaded!")
                 info_msg = self.camera_info['right']
                 info_msg.header.stamp = stamp
                 info_msg.header.frame_id = frame_id
@@ -288,7 +238,7 @@ class LuxonisCameraNode(Node):
                 
                 # CameraInfo msg
                 if 'stereo' not in self.camera_info or self.camera_info['stereo'] is None:
-                    self.camera_info['stereo'] = self.get_default_camera_info(w, h, frame_id)
+                    raise RuntimeError("Camera calibration file for gripper stereo is missing or could not be loaded!")
                 info_msg = self.camera_info['stereo']
                 info_msg.header.stamp = stamp
                 info_msg.header.frame_id = frame_id
@@ -350,7 +300,7 @@ class LuxonisCameraNode(Node):
                 
                 # CameraInfo msg
                 if camera_name not in self.camera_info or self.camera_info[camera_name] is None:
-                    self.camera_info[camera_name] = self.get_default_camera_info(w, h, frame_id)
+                    raise RuntimeError(f"Camera calibration file for head {camera_name} is missing or could not be loaded!")
                 info_msg = self.camera_info[camera_name]
                 info_msg.header.stamp = stamp
                 info_msg.header.frame_id = frame_id
@@ -375,9 +325,8 @@ class LuxonisCameraNode(Node):
                     publish_head_image_and_info(frame, 'center')
 
     def destroy_node(self):
-        """Clean up resources"""
         self.running = False
-        if self.publish_thread.is_alive():
+        if hasattr(self, 'publish_thread') and self.publish_thread.is_alive():
             self.publish_thread.join(timeout=1.0)
         super().destroy_node()
 
@@ -385,7 +334,6 @@ class LuxonisCameraNode(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = LuxonisCameraNode()
-    
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:

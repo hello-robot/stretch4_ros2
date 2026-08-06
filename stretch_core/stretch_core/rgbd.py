@@ -23,10 +23,11 @@ from stretch4_body.subsystem.cameras import (
     stream_gripper_rgbd,
 )
 
+from stretch4_body.subsystem.cameras.enums.rgb_camera import RGBCameras
+
 from stretch_core.vision.vision_topics import (
     VisionTopics,
     VisionFrames,
-    get_camera_calibration_file_path,
 )
 
 from stretch_core.vision.ros_messages import create_pointcloud_rgb_msg
@@ -43,10 +44,6 @@ class RGBDCameraNode(Node):
         self.declare_parameter('use_center', False)
         self.declare_parameter('use_gripper', False)
         self.declare_parameter('publish_rotated', False)
-        
-        self.declare_parameter('left_calibration_file', '')
-        self.declare_parameter('right_calibration_file', '')
-        self.declare_parameter('center_calibration_file', '')
         
         # Read parameters
         self.use_left = self.get_parameter('use_left').value
@@ -66,6 +63,7 @@ class RGBDCameraNode(Node):
         
         self.get_logger().info("Configuring RGBD Node...")
         
+
         # Configure enabled head cameras
         for cam in ['left', 'right', 'center']:
             if getattr(self, f"use_{cam}"):
@@ -88,12 +86,13 @@ class RGBDCameraNode(Node):
                 self.points_publishers[cam] = self.create_publisher(
                     PointCloud2, VisionTopics.points(cam), 10)
                     
-                # Load calibration
-                calib_file = self.get_parameter(f'{cam}_calibration_file').value
-                if not calib_file:
-                    calib_file = get_camera_calibration_file_path(cam)
-                if calib_file and os.path.exists(calib_file):
-                    self.camera_info[cam] = self.load_camera_info(calib_file)
+                # Load calibration via RGBCameras enum
+                if cam == 'left':
+                    self.camera_info[cam] = self.load_camera_info_from_enum(RGBCameras.head_left)
+                elif cam == 'right':
+                    self.camera_info[cam] = self.load_camera_info_from_enum(RGBCameras.head_right)
+                elif cam == 'center':
+                    self.camera_info[cam] = self.load_camera_info_from_enum(RGBCameras.head_center)
                     
         # Configure gripper camera if enabled
         if self.use_gripper:
@@ -108,83 +107,62 @@ class RGBDCameraNode(Node):
             self.points_publishers['gripper'] = self.create_publisher(
                 PointCloud2, "/cameras_gripper/stereo_left_rgbd/points", 10)
 
+            # Load calibration via RGBCameras enum
+            self.camera_info['gripper'] = self.load_camera_info_from_enum(RGBCameras.gripper_right)
+
         # Initialize thread states
         self.running = True
         
-        self.publish_thread = threading.Thread(target=self.publish_loop, daemon=True)
-        self.publish_thread.start()
+        # Launch single unified thread for head cameras to guarantee hardware synchronization and avoid device conflicts
+        self.head_camera_thread = None
+        if self.use_left or self.use_right or self.use_center:
+            self.head_camera_thread = threading.Thread(target=self.head_publish_loop, daemon=True)
+            self.head_camera_thread.start()
         
+        # Gripper camera runs concurrently in its own independent thread
         if self.use_gripper:
             self.gripper_publish_thread = threading.Thread(target=self.gripper_publish_loop, daemon=True)
             self.gripper_publish_thread.start()
         
         self.get_logger().info('RGBD camera node initialized successfully')
 
-    def load_camera_info(self, calib_file):
-        """Load camera calibration from YAML file"""
+    def load_camera_info_from_enum(self, camera_type):
+        """Load camera calibration from RGBCameras.load_calibration()"""
         try:
-            # Remove file:// prefix if present
-            if calib_file.startswith('file://'):
-                calib_file = calib_file[7:]
-
-            if not os.path.exists(calib_file):
-                self.get_logger().warn(f'Calibration file not found: {calib_file}')
-                return None
-
-            with open(calib_file, 'r') as f:
-                calib = yaml.safe_load(f)
-
+            calib = camera_type.load_calibration()
             if calib is None:
                 return None
-
-            # Create CameraInfo message
+                
             info = CameraInfo()
-            info.width = calib.get('image_width', 0)
-            info.height = calib.get('image_height', 0)
-            info.distortion_model = calib.get('distortion_model', '')
-
-            # Load distortion coefficients
-            if 'distortion_coefficients' in calib:
-                info.d = calib['distortion_coefficients'].get('data', [])
-
-            # Load camera matrix
-            if 'camera_matrix' in calib:
-                info.k = calib['camera_matrix'].get('data', [0.0] * 9)
-
-            # Load rectification matrix
-            if 'rectification_matrix' in calib:
-                info.r = calib['rectification_matrix'].get('data', [0.0] * 9)
-
-            # Load projection matrix
-            if 'projection_matrix' in calib:
-                info.p = calib['projection_matrix'].get('data', [0.0] * 12)
-
-            if info.distortion_model == "fisheye":
+            info.width = calib.width
+            info.height = calib.height
+            info.distortion_model = calib.distortion_model.name.lower()
+            
+            # distortion coefficients d
+            info.d = calib.distortion_coefficients.flatten().tolist()
+            
+            # camera matrix k (3x3)
+            info.k = calib.camera_matrix.flatten().tolist()
+            
+            # rectification matrix r (3x3, identity by default)
+            info.r = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+            
+            # projection matrix p (3x4)
+            fx = calib.camera_matrix[0, 0]
+            fy = calib.camera_matrix[1, 1]
+            cx = calib.camera_matrix[0, 2]
+            cy = calib.camera_matrix[1, 2]
+            info.p = [fx, 0.0, cx, 0.0, 0.0, fy, cy, 0.0, 0.0, 0.0, 1.0, 0.0]
+            
+            if info.distortion_model in ["fisheye", "equidistant_with_recompute_extrinsics"]:
                 info.distortion_model = "equidistant"
+            elif info.distortion_model == "wide_angle":
+                info.distortion_model = "plumb_bob"
 
-            self.get_logger().info(f'Loaded calibration from {calib_file}')
             return info
-
         except Exception as e:
-            self.get_logger().error(f'Failed to load calibration file {calib_file}: {e}')
+            self.get_logger().error(f'Failed to load calibration for {camera_type.name} via RGBCameras enum: {e}')
             return None
-
-    def get_default_camera_info(self, width, height, frame_id):
-        """Return a default/uncalibrated CameraInfo message based on frame dimensions"""
-        info = CameraInfo()
-        info.width = width
-        info.height = height
-        info.distortion_model = "plumb_bob"
-        info.d = [0.0, 0.0, 0.0, 0.0, 0.0]
-        fx = float(width)
-        fy = float(width)
-        cx = width / 2.0
-        cy = height / 2.0
-        info.k = [fx, 0.0, cx, 0.0, fy, cy, 0.0, 0.0, 1.0]
-        info.r = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
-        info.p = [fx, 0.0, cx, 0.0, 0.0, fy, cy, 0.0, 0.0, 0.0, 1.0, 0.0]
-        info.header.frame_id = frame_id
-        return info
 
     def publish_rgbd_frame(self, rgbd_frame, camera_name, stamp):
         if rgbd_frame is None:
@@ -226,7 +204,7 @@ class RGBDCameraNode(Node):
         
         # 3. Publish CameraInfo message (Color)
         if camera_name not in self.camera_info or self.camera_info[camera_name] is None:
-            self.camera_info[camera_name] = self.get_default_camera_info(w, h, frame_id)
+            raise RuntimeError(f"Camera calibration file for {camera_name} is missing or could not be loaded!")
         info_msg = self.camera_info[camera_name]
         info_msg.header.stamp = stamp
         info_msg.header.frame_id = frame_id
@@ -236,9 +214,11 @@ class RGBDCameraNode(Node):
         depth_img = rgbd_frame.depth_image
         if depth_img is not None and depth_img.size > 0:
             try:
-                # depth_image is float32 (meters).
-                # Let's publish it as 32FC1 (meters).
-                depth_msg = ros2_numpy.msgify(Image, depth_img, encoding='32FC1')
+                # Handle dynamic depth image formatting (uint16 in mm vs float32 in meters)
+                if depth_img.dtype == np.uint16:
+                    depth_msg = ros2_numpy.msgify(Image, depth_img, encoding='16UC1')
+                else:
+                    depth_msg = ros2_numpy.msgify(Image, depth_img, encoding='32FC1')
                 depth_msg.header.stamp = stamp
                 depth_msg.header.frame_id = frame_id
                 self.depth_publishers[camera_name].publish(depth_msg)
@@ -263,23 +243,22 @@ class RGBDCameraNode(Node):
             except Exception as ex:
                 self.get_logger().error(f"Failed to serialize pointcloud for {camera_name}: {ex}")
 
-    def publish_loop(self):
-        """Main publishing loop running in separate thread"""
+    def head_publish_loop(self):
+        """Concurrently streams and publishes active head cameras using hardware synchronization"""
         self.get_logger().info("Starting Head RGBD Cameras Stream...")
         
-        # Decide the correct generator depending on enabled head cameras
+        # Select the unified synced generators to ensure camera hardware alignment and avoid board/driver conflict
         if self.use_left and self.use_right and self.use_center:
-            generator = stream_left_right_center_rgbd(is_rotate=False)
+            generator = stream_left_right_center_rgbd(is_rotate=False, use_ros_for_lidars=True)
         elif self.use_left and self.use_right:
-            generator = stream_left_right_rgbd(is_rotate=False)
+            generator = stream_left_right_rgbd(is_rotate=False, use_ros_for_lidars=True)
         elif self.use_left:
-            generator = stream_left_rgbd(is_rotate=False)
+            generator = stream_left_rgbd(is_rotate=False, use_ros_for_lidars=True)
         elif self.use_right:
-            generator = stream_right_rgbd(is_rotate=False)
+            generator = stream_right_rgbd(is_rotate=False, use_ros_for_lidars=True)
         elif self.use_center:
-            generator = stream_center_rgbd(is_rotate=False)
+            generator = stream_center_rgbd(is_rotate=False, use_ros_for_lidars=True)
         else:
-            self.get_logger().warn("No head cameras selected!")
             return
 
         for frame in generator:
@@ -323,9 +302,9 @@ class RGBDCameraNode(Node):
 
     def destroy_node(self):
         self.running = False
-        if self.publish_thread.is_alive():
-            self.publish_thread.join(timeout=1.0)
-        if self.use_gripper and hasattr(self, 'gripper_publish_thread') and self.gripper_publish_thread.is_alive():
+        if hasattr(self, 'head_camera_thread') and self.head_camera_thread is not None and self.head_camera_thread.is_alive():
+            self.head_camera_thread.join(timeout=1.0)
+        if self.use_gripper and hasattr(self, 'gripper_publish_thread') and self.gripper_publish_thread is not None and self.gripper_publish_thread.is_alive():
             self.gripper_publish_thread.join(timeout=1.0)
         super().destroy_node()
 
@@ -333,12 +312,16 @@ class RGBDCameraNode(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = RGBDCameraNode()
+    # Use MultiThreadedExecutor to concurrently schedule parallelized thread callbacks!
+    executor = rclpy.executors.MultiThreadedExecutor()
+    executor.add_node(node)
     try:
-        rclpy.spin(node)
+        executor.spin()
     except KeyboardInterrupt:
         pass
     finally:
         node.destroy_node()
+        executor.shutdown()
         rclpy.shutdown()
 
 
