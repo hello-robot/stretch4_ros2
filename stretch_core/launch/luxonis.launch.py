@@ -95,7 +95,7 @@ def launch_setup(context, *args, **kwargs):
             print(f"{camera_name} does not have a calibration file at {calibration_file_path}.")
 
     rviz_config_path = os.path.join(
-        get_package_share_directory("stretch_core"), "rviz", "cameras.rviz"
+        get_package_share_directory("stretch_core"), "rviz", "cameras_head.rviz"
     )
 
     return [camera_node] + camera_info_nodes + get_rviz_node(rviz_config_path)

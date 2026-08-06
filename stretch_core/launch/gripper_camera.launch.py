@@ -43,7 +43,7 @@ def launch_setup(context, *args, **kwargs):
     )
 
     rviz_config_path = os.path.join(
-        get_package_share_directory("stretch_core"), "rviz", "cameras.rviz"
+        get_package_share_directory("stretch_core"), "rviz", "cameras_gripper.rviz"
     )
 
     return [camera_node] + get_rviz_node(rviz_config_path)
