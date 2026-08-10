@@ -11,7 +11,7 @@ from tf2_ros import Buffer, TransformListener
 from tf2_ros import LookupException, ConnectivityException, ExtrapolationException
 
 from .image_bridge import ImageFrame
-from .pointcloud_bridge import PointCloudFrame
+from .pointcloud_bridge import PointCloudFrame, LidarPointCloudFrame, StereoPointCloudFrame
 from .transforms_bridge import TransformsFrame, transform_to_list, to_matrix
 from .camera_info_bridge import CameraInfoFrame
 from .imu_bridge import ImuFrame
@@ -102,9 +102,8 @@ class StreamManager:
     def _handle_pc(self, msg, topic):
         try:
             pc_array = ros2_numpy.numpify(msg)
-            stamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
-            frame = PointCloudFrame(points=pc_array, timestamp=stamp)
-            self.master_queue.put((topic, frame))
+            timestamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+            self.master_queue.put((topic, PointCloudFrame.from_pointcloud2(pc_array, timestamp)))
         except Exception as e:
             self.node.get_logger().error(f'PC Convert error: {e}')
 
