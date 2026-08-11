@@ -185,6 +185,8 @@ https://docs.nav2.org/tutorials/docs/navigation2_with_keepout_filter.html
 
 The `stretch_nav2` package supports seeding the robot's initial pose using a pre-calibrated ArUco tag on the map. This is useful for instantly localizing the robot without manually estimating its pose in RViz using the `2D Pose Estimate` tool.
 
+The services for calibrating the tag location (`/calibrate_tag_pose` with `std_srv Trigger`) and seeding localization when the robot can see the tag (`/seed_localization` with `std_srv Trigger`) are provided by the `aruco_tag_localization.py` node.
+
 The workflow consists of two phases:
 
 1. **Calibration**: Measure and save the static transform between the `map` and the ArUco tag (default ID: `999`, 150mm, 6x6x1000 dictionary).
