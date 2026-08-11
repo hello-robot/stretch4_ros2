@@ -298,7 +298,8 @@ class StretchDriver(Node):
         for i, joint in enumerate(jointjog_msg.joint_names):
             
             if joint not in self.set_vel_functions.keys():
-                raise AttributeError(f"Received velocity command for unexpected joint: {joint}")
+                self.robot.logger.warn(f"Received velocity command for unexpected joint: {joint}")
+                continue
 
             acceleration_param = self.get_parameter_or(f"joint_acceleration.{joint.split("_joint")[0]}",None).value
 
