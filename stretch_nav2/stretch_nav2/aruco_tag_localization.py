@@ -20,6 +20,7 @@ from tf2_ros import (
     TransformListener,
 )
 
+MAX_TRANSFORM_AGE_SEC = 2.0  # s
 
 class TagLocalizationNode(Node):
     """
@@ -273,11 +274,19 @@ class TagLocalizationNode(Node):
 
         # Sampling Loop constrained strictly to 2.0 seconds and rclpy.ok()
         while rclpy.ok() and (time.time() - start_time) < 2.0:
+            now = self.get_clock().now()
             for frame in self.tag_frames:
                 try:
                     tf_msg = self.tf_buffer.lookup_transform(
                         self.map_frame, frame, rclpy.time.Time()
                     )
+                    
+                    # Calculate age of the transform and reject stale
+                    tf_time = rclpy.time.Time.from_msg(tf_msg.header.stamp)
+                    age_sec = (now - tf_time).nanoseconds / 1e9
+
+                    if age_sec > MAX_TRANSFORM_AGE_SEC:
+                        continue
 
                     stamp_key = (frame, tf_msg.header.stamp.sec, tf_msg.header.stamp.nanosec)
                     if stamp_key not in seen_stamps:
@@ -405,11 +414,20 @@ class TagLocalizationNode(Node):
         start_time = time.time()
 
         while rclpy.ok() and (time.time() - start_time) < 0.5:
+            now = self.get_clock().now()
             for frame in self.tag_frames:
                 try:
                     tf_msg = self.tf_buffer.lookup_transform(
                         self.base_frame, frame, rclpy.time.Time()
                     )
+                    
+                    # Calculate age of the transform and reject stale
+                    tf_time = rclpy.time.Time.from_msg(tf_msg.header.stamp)
+                    age_sec = (now - tf_time).nanoseconds / 1e9
+
+                    if age_sec > MAX_TRANSFORM_AGE_SEC:
+                        continue
+                    
                     stamp_key = (frame, tf_msg.header.stamp.sec, tf_msg.header.stamp.nanosec)
 
                     if stamp_key not in seen_stamps:
@@ -447,7 +465,12 @@ class TagLocalizationNode(Node):
         M_tag_base = np.linalg.inv(M_base_tag)
 
         M_map_base = np.matmul(M_map_tag, M_tag_base)
-        robot_pos, robot_quat = self._matrix_to_transform(M_map_base)
+        robot_pos, _ = self._matrix_to_transform(M_map_base)
+
+        # Extract 2D planar yaw-only orientation from the 3D transformation matrix
+        # to avoid projection instability and AMCL initialization failures.
+        yaw = np.arctan2(M_map_base[1, 0], M_map_base[0, 0])
+        robot_quat = [0.0, 0.0, np.sin(yaw / 2.0), np.cos(yaw / 2.0)]
 
         # 4. Publish PoseWithCovarianceStamped to /initialpose
         initial_pose = PoseWithCovarianceStamped()
