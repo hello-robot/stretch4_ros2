@@ -181,6 +181,62 @@ https://docs.nav2.org/tutorials/docs/navigation2_with_keepout_filter.html
 
 ---
 
+## ArUco Tag-Based Localization and Calibration
+
+The `stretch_nav2` package supports seeding the robot's initial pose using a pre-calibrated ArUco tag on the map. This is useful for instantly localizing the robot without manually estimating its pose in RViz using the `2D Pose Estimate` tool.
+
+The workflow consists of two phases:
+
+1. **Calibration**: Measure and save the static transform between the `map` and the ArUco tag (default ID: `999`, 150mm, 6x6x1000 dictionary).
+2. **Localization Seeding**: Whenever the robot is unlocalized, look at the tag and trigger initial pose estimation.
+
+### 1. Calibration Setup & Launch
+
+To run the calibration process, place the robot in a well-localized state on your map (using AMCL or RViz) facing your statically mounted localization ArUco tag.
+
+#### Step 1: Launch the Tag Calibration Stack
+
+Run the bringup launch file to start the driver, cameras, tag perception, Nav2, and the tag localization node:
+
+```bash
+ros2 launch stretch_nav2 tag_calibration_bringup.launch.py map:=${HELLO_FLEET_PATH}/maps/<map_name>.yaml
+```
+
+#### Step 2: Launch the Interactive Calibration GUI
+
+In a separate terminal, start the interactive OpenCV calibration interface:
+
+```bash
+ros2 run stretch_nav2 calibrate_tag_cli.py
+```
+
+* Interactive Window Controls:
+  * Adjust the robot's head or position until the target ArUco tag is highlighted with a green bounding box in the GUI.
+  * Press c or SPACE in the GUI window, or press ENTER in your terminal to trigger the calibration.
+  * Press ESC in the GUI or Ctrl+C in the terminal to exit.
+
+Once triggered, the terminal will print a structured comparison table of the calibrated pose and automatically save it to `~/stretch_user/maps/tag_localization/<map_name>_tag_pose.yaml`.
+
+### 2. Seeding Robot Localization
+
+Once your tag is calibrated and saved, you can use it to instantly localize the robot.
+
+Power on the robot and start navigation or tag-calibration stacks:
+
+```bash
+ros2 launch stretch_nav2 tag_calibration_bringup.launch.py map:=${HELLO_FLEET_PATH}/maps/<map_name>.yaml
+```
+
+Position the robot so that its camera can see the calibrated tag. Call the seed localization service to calculate and publish the robot's initial pose to Nav2 (/initialpose):
+
+```bash
+ros2 service call /seed_localization std_srvs/srv/Trigger
+```
+
+If the robot can see the calibration tag, AMCL will automatically ingest this initial pose estimate and align the robot's position on the map.
+
+---
+
 ## Things to Note and Design Decisions
 
 - **Filtering Methods:** We use two filters for point cloud processing:  
