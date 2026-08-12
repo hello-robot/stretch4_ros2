@@ -550,11 +550,11 @@ def main(args=None):
                             node.set_driver_mode("velocity")
                         elif c == 'p':
                             in_position_mode = True
-                        elif c == 'h':
-                            # Print help menu
-                            sys.stdout.write("\033[2J\033[H")
-                            print(HELP_TEXT)
-                            time.sleep(2.0)
+                        # elif c == 'h':
+                        #     # Print help menu
+                        #     sys.stdout.write("\033[2J\033[H")
+                        #     print(HELP_TEXT)
+                        #     time.sleep(2.0)
                         else:
                             node.process_key(c)
 
