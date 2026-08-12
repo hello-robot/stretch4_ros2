@@ -32,7 +32,9 @@
       0.1591, -0.1591,
       0.2079, -0.0861,
     ]
+
     # Inflated base-only footprint used when joystick_control=true
+    # (param at startup or ~/joystick_control SetBool data=true).
     # 16-gon approximating 0.25 m base radius (meters, base_footprint frame)
     base_only_footprint_polygon: [
       0.25, 0.0,

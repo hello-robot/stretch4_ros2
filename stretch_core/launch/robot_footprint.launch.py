@@ -15,13 +15,18 @@ def launch_setup(context, *args, **kwargs):
     stretch_core = get_package_share_directory('stretch_core')
     tool_preset = LaunchConfiguration('tool_preset').perform(context)
     validate_tool_preset(tool_preset)
+    joystick_control = LaunchConfiguration('joystick_control').perform(context).lower() in (
+        'true', '1', 'yes',
+    )
     return [
         Node(
             package='stretch_core',
             executable='robot_footprint_publisher',
             name='robot_footprint_publisher',
             output='screen',
-            parameters=footprint_self_filter_parameters(stretch_core, tool_preset),
+            parameters=footprint_self_filter_parameters(stretch_core, tool_preset) + [
+                {'joystick_control': joystick_control},
+            ],
         ),
     ]
 
@@ -32,6 +37,15 @@ def generate_launch_description():
             'tool_preset',
             default_value='auto',
             description='Self-filter preset: auto, sg4, pg4, tablet, or nil',
+        ),
+        DeclareLaunchArgument(
+            'joystick_control',
+            default_value='false',
+            choices=['true', 'false'],
+            description=(
+                'If true, publish base-only footprint (no arm), same as calling '
+                '~/joystick_control with data=true. Toggle later via that service.'
+            ),
         ),
         OpaqueFunction(function=launch_setup),
     ])

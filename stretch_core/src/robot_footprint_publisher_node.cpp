@@ -162,6 +162,14 @@ public:
       get_logger(),
       "Joystick control footprint service ready on ~/joystick_control "
       "(data=true: base-only; data=false: joint-state / arm footprint).");
+
+    // Optional startup mode: base-only footprint (no arm)
+    if (joystick_control_) {
+      publishBaseFootprintOnly();
+      RCLCPP_INFO(
+        get_logger(),
+        "Started with joystick_control=true; publishing base footprint only.");
+    }
   }
 
 private:
@@ -184,6 +192,8 @@ private:
     declare_parameter("footprint_change_epsilon_m", 0.01);
     declare_parameter("base_footprint_polygon", std::vector<double>{});
     declare_parameter("base_only_footprint_polygon", std::vector<double>{});
+    // When true at startup (or via ~/joystick_control), publish base-only polygon (no arm).
+    declare_parameter("joystick_control", false);
   }
 
   void loadParameters()
@@ -208,6 +218,7 @@ private:
     if (base_only_polygon_.size() < 3) {
       base_only_polygon_ = base_polygon_;
     }
+    joystick_control_ = get_parameter("joystick_control").as_bool();
 
     self_filter_config_ = stretch_core::loadRobotSelfFilterConfig(*this);
     self_filter_.setConfig(self_filter_config_);
