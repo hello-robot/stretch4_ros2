@@ -657,38 +657,31 @@ class StretchMujocoDriver(Node):
             self.camera_compressed_publishers[camera.name].publish(ros_image_compressed)
 
             if camera.is_depth:
-                # if camera == StretchCameras.cam_gripper_se4_stereo_depth:
-                #     pointcloud_msg = create_pointcloud_rgb_msg(
-                #         camera_info_msg=camera_info,
-                #         rgb_image=camera_data.get_camera_data(
-                #             StretchCameras.cam_gripper_se4_stereo_depth
-                #         ),
-                #         depth_image=frame,
-                #     )
-                # elif camera == StretchCameras.cam_hemilidar_left:
-                #     pointcloud_msg = create_pointcloud_rgb_msg(
-                #         camera_info_msg=camera_info,
-                #         rgb_image=camera_data.get_camera_data(
-                #             StretchCameras.cam_nav_rgb_se4_left, auto_rotate=False
-                #         ),
-                #         depth_image=camera_data.get_camera_data(
-                #             StretchCameras.cam_hemilidar_left, auto_rotate=False
-                #         ),
-                #     )
-                # elif camera == StretchCameras.cam_hemilidar_right:
-                #     pointcloud_msg = create_pointcloud_rgb_msg(
-                #         camera_info_msg=camera_info,
-                #         rgb_image=camera_data.get_camera_data(
-                #             StretchCameras.cam_nav_rgb_se4_right, auto_rotate=False
-                #         ),
-                #         depth_image=camera_data.get_camera_data(
-                #             StretchCameras.cam_hemilidar_right, auto_rotate=False
-                #         ),
-                #     )
-                # else:
-                #     pointcloud_msg = create_pointcloud_msg(camera_info, frame)
                 pointcloud_msg = create_pointcloud_msg(camera_info, frame)
                 self.pointcloud_publishers[camera.name].publish(pointcloud_msg)
+
+        # Publish Hesai lidar point clouds
+        try:
+            hesai_pts = self.sim.pull_hemi_lidar_points()
+            if isinstance(hesai_pts, dict):
+                left_pts = hesai_pts.get("left")
+                right_pts = hesai_pts.get("right")
+
+                if left_pts is not None and len(left_pts) > 0:
+                    header = Header()
+                    header.frame_id = "lidar_left_link"
+                    header.stamp = current_time
+                    cloud_msg_left = pc2.create_cloud_xyz32(header, left_pts)
+                    self.lidar_left_pub.publish(cloud_msg_left)
+
+                if right_pts is not None and len(right_pts) > 0:
+                    header = Header()
+                    header.frame_id = "lidar_right_link"
+                    header.stamp = current_time
+                    cloud_msg_right = pc2.create_cloud_xyz32(header, right_pts)
+                    self.lidar_right_pub.publish(cloud_msg_right)
+        except Exception as e:
+            self.logger.error(f"Error publishing Hesai lidar points: {e}")
 
     # CHANGE MODES ################
     def change_mode(self, new_mode, code_to_run=None):
@@ -1024,6 +1017,16 @@ class StretchMujocoDriver(Node):
         self.laser_scan_pub = self.create_publisher(
             LaserScan,
             "/scan_filtered",
+            qos_profile=QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT),
+        )
+        self.lidar_left_pub = self.create_publisher(
+            PointCloud2,
+            "/lidar_points_left",
+            qos_profile=QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT),
+        )
+        self.lidar_right_pub = self.create_publisher(
+            PointCloud2,
+            "/lidar_points_right",
             qos_profile=QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT),
         )
 
@@ -1398,10 +1401,6 @@ def get_camera_topic_name(camera: StretchCameras):
         return "/cameras_head/right/image_raw"
     if camera == StretchCameras.cam_nav_rgb_se4_center:
         return "/camera_head/center/image_raw"
-    if camera == StretchCameras.cam_hemilidar_left:
-        return "/depth/left/depth"
-    if camera == StretchCameras.cam_hemilidar_right:
-        return "/depth/right/depth"
 
     raise NotImplementedError(f"Camera {camera} image topic mapping is not implemented")
 
@@ -1423,10 +1422,6 @@ def get_camera_info_topic_name(camera: StretchCameras):
         return "/cameras_head/right/camera_info"
     if camera == StretchCameras.cam_nav_rgb_se4_center:
         return "/camera_head/center/camera_info"
-    if camera == StretchCameras.cam_hemilidar_left:
-        return "/depth/left/camera_info"
-    if camera == StretchCameras.cam_hemilidar_right:
-        return "/depth/right/camera_info"
 
     raise NotImplementedError(f"Camera {camera} camera_info topic mapping is not implemented")
 
@@ -1438,10 +1433,6 @@ def get_camera_pointcloud_topic_name(camera: StretchCameras):
     """
     if camera == StretchCameras.cam_gripper_se4_stereo_depth:
         return "/gripper_camera/depth/color/points"
-    if camera == StretchCameras.cam_hemilidar_left:
-        return "/lidar_points_left"
-    if camera == StretchCameras.cam_hemilidar_right:
-        return "/lidar_points_right"
 
     raise NotImplementedError(f"Camera {camera} pointcloud topic mapping is not implemented")
 
@@ -1463,10 +1454,6 @@ def get_camera_frame(camera: StretchCameras):
         return "camera_right_optical_link"
     if camera == StretchCameras.cam_nav_rgb_se4_center:
         return "camera_center_optical_link"
-    if camera == StretchCameras.cam_hemilidar_left:
-        return "lidar_left_link"
-    if camera == StretchCameras.cam_hemilidar_right:
-        return "lidar_right_link"
 
     raise NotImplementedError(f"Camera {camera} frame is not implemented")
 
