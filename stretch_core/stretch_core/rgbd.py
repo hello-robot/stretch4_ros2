@@ -110,6 +110,9 @@ class RGBDCameraNode(Node):
             # Load calibration via RGBCameras enum
             self.camera_info['gripper'] = self.load_camera_info_from_enum(RGBCameras.gripper_right)
 
+        self.use_ros_for_cameras = True
+        self.use_ros_for_lidars = True
+
         # Initialize thread states
         self.running = True
         
@@ -249,15 +252,15 @@ class RGBDCameraNode(Node):
         
         # Select the unified synced generators to ensure camera hardware alignment and avoid board/driver conflict
         if self.use_left and self.use_right and self.use_center:
-            generator = stream_left_right_center_rgbd(is_rotate=False, use_ros_for_lidars=True)
+            generator = stream_left_right_center_rgbd(is_rotate=False, use_ros_for_lidars=self.use_ros_for_lidars, use_ros_for_cameras=self.use_ros_for_cameras)
         elif self.use_left and self.use_right:
-            generator = stream_left_right_rgbd(is_rotate=False, use_ros_for_lidars=True)
+            generator = stream_left_right_rgbd(is_rotate=False, use_ros_for_lidars=self.use_ros_for_lidars, use_ros_for_cameras=self.use_ros_for_cameras)
         elif self.use_left:
-            generator = stream_left_rgbd(is_rotate=False, use_ros_for_lidars=True)
+            generator = stream_left_rgbd(is_rotate=False, use_ros_for_lidars=self.use_ros_for_lidars, use_ros_for_cameras=self.use_ros_for_cameras)
         elif self.use_right:
-            generator = stream_right_rgbd(is_rotate=False, use_ros_for_lidars=True)
+            generator = stream_right_rgbd(is_rotate=False, use_ros_for_lidars=self.use_ros_for_lidars, use_ros_for_cameras=self.use_ros_for_cameras)
         elif self.use_center:
-            generator = stream_center_rgbd(is_rotate=False, use_ros_for_lidars=True)
+            generator = stream_center_rgbd(is_rotate=False, use_ros_for_lidars=self.use_ros_for_lidars, use_ros_for_cameras=self.use_ros_for_cameras)
         else:
             return
 
@@ -290,7 +293,7 @@ class RGBDCameraNode(Node):
     def gripper_publish_loop(self):
         """Gripper publishing loop running in separate thread"""
         self.get_logger().info("Starting Gripper RGBD Camera Stream...")
-        generator = stream_gripper_rgbd(is_rotate=False)
+        generator = stream_gripper_rgbd(is_rotate=False, use_ros_for_cameras=self.use_ros_for_cameras)
         for frame in generator:
             if not self.running or not rclpy.ok():
                 break
