@@ -18,6 +18,9 @@ def launch_setup(context, *args, **kwargs):
     joystick_control = LaunchConfiguration('joystick_control').perform(context).lower() in (
         'true', '1', 'yes',
     )
+    publish_footprint_stamped = LaunchConfiguration(
+        'publish_footprint_stamped',
+    ).perform(context).lower() in ('true', '1', 'yes')
     return [
         Node(
             package='stretch_core',
@@ -26,6 +29,7 @@ def launch_setup(context, *args, **kwargs):
             output='screen',
             parameters=footprint_self_filter_parameters(stretch_core, tool_preset) + [
                 {'joystick_control': joystick_control},
+                {'publish_footprint_stamped': publish_footprint_stamped},
             ],
         ),
     ]
@@ -45,6 +49,15 @@ def generate_launch_description():
             description=(
                 'If true, publish base-only footprint (no arm), same as calling '
                 '~/joystick_control with data=true. Toggle later via that service.'
+            ),
+        ),
+        DeclareLaunchArgument(
+            'publish_footprint_stamped',
+            default_value='false',
+            choices=['true', 'false'],
+            description=(
+                'If true, also publish PolygonStamped on footprint_stamped_topic '
+                '(for collision_monitor FootprintApproach without local_costmap).'
             ),
         ),
         OpaqueFunction(function=launch_setup),

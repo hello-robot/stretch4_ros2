@@ -101,6 +101,18 @@ geometry_msgs::msg::Polygon toPolygonMsg(
   return msg;
 }
 
+geometry_msgs::msg::PolygonStamped toPolygonStampedMsg(
+  const std::vector<Eigen::Vector2f> & hull,
+  const std::string & frame_id,
+  const builtin_interfaces::msg::Time & stamp)
+{
+  geometry_msgs::msg::PolygonStamped msg;
+  msg.header.frame_id = frame_id;
+  msg.header.stamp = stamp;
+  msg.polygon = toPolygonMsg(hull);
+  return msg;
+}
+
 }  // namespace
 
 class RobotFootprintPublisherNode : public rclcpp::Node
@@ -128,6 +140,14 @@ public:
 
     footprint_pub_ = create_publisher<geometry_msgs::msg::Polygon>(
         footprint_topic_, qos_profile);
+    if (publish_footprint_stamped_) {
+      footprint_stamped_pub_ = create_publisher<geometry_msgs::msg::PolygonStamped>(
+          footprint_stamped_topic_, costmap_footprint_qos);
+      RCLCPP_INFO(
+        get_logger(),
+        "Publishing PolygonStamped footprint on %s",
+        footprint_stamped_topic_.c_str());
+    }
 
     if (publish_costmap_topics_) {
         local_footprint_pub_ = create_publisher<geometry_msgs::msg::Polygon>(
@@ -177,6 +197,8 @@ private:
   {
     declare_parameter<std::string>("frame_id", "base_footprint");
     declare_parameter<std::string>("footprint_topic", "/footprint");
+    declare_parameter<std::string>("footprint_stamped_topic", "/footprint_stamped");
+    declare_parameter("publish_footprint_stamped", false);
     declare_parameter("publish_costmap_footprint_topics", true);
     declare_parameter<std::string>(
       "local_costmap_footprint_topic", "/local_costmap/local_costmap/footprint");
@@ -200,6 +222,8 @@ private:
   {
     frame_id_ = get_parameter("frame_id").as_string();
     footprint_topic_ = get_parameter("footprint_topic").as_string();
+    footprint_stamped_topic_ = get_parameter("footprint_stamped_topic").as_string();
+    publish_footprint_stamped_ = get_parameter("publish_footprint_stamped").as_bool();
     publish_costmap_topics_ = get_parameter("publish_costmap_footprint_topics").as_bool();
     local_costmap_footprint_topic_ = get_parameter("local_costmap_footprint_topic").as_string();
     global_costmap_footprint_topic_ = get_parameter("global_costmap_footprint_topic").as_string();
@@ -228,6 +252,10 @@ private:
   {
     const auto msg = toPolygonMsg(hull);
     footprint_pub_->publish(msg);
+    if (footprint_stamped_pub_) {
+      footprint_stamped_pub_->publish(
+        toPolygonStampedMsg(hull, frame_id_, now()));
+    }
     if (local_footprint_pub_) {
       local_footprint_pub_->publish(msg);
     }
@@ -392,6 +420,7 @@ private:
 
   std::string frame_id_;
   std::string footprint_topic_;
+  std::string footprint_stamped_topic_;
   std::string local_costmap_footprint_topic_;
   std::string global_costmap_footprint_topic_;
   std::string local_costmap_published_footprint_topic_;
@@ -401,6 +430,7 @@ private:
   double joint_change_threshold_rad_{0.01};
   double footprint_change_epsilon_m_{0.01};
   bool publish_costmap_topics_{true};
+  bool publish_footprint_stamped_{false};
   bool local_costmap_ready_{false};
   bool global_costmap_ready_{false};
   bool published_local_costmap_footprint_{false};
@@ -419,6 +449,7 @@ private:
   tf2_ros::TransformListener tf_listener_;
 
   rclcpp::Publisher<geometry_msgs::msg::Polygon>::SharedPtr footprint_pub_;
+  rclcpp::Publisher<geometry_msgs::msg::PolygonStamped>::SharedPtr footprint_stamped_pub_;
   rclcpp::Publisher<geometry_msgs::msg::Polygon>::SharedPtr local_footprint_pub_;
   rclcpp::Publisher<geometry_msgs::msg::Polygon>::SharedPtr global_footprint_pub_;
   rclcpp::Subscription<geometry_msgs::msg::PolygonStamped>::SharedPtr local_published_footprint_sub_;

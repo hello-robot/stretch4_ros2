@@ -2,6 +2,8 @@
   ros__parameters:
     frame_id: base_footprint
     footprint_topic: /footprint
+    footprint_stamped_topic: /footprint_stamped
+    publish_footprint_stamped: false
     publish_costmap_footprint_topics: true
     local_costmap_footprint_topic: /local_costmap/footprint
     global_costmap_footprint_topic: /global_costmap/footprint

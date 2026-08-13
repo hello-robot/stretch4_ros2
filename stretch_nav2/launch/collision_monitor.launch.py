@@ -28,11 +28,10 @@ def generate_launch_description():
     lifecycle_nodes = ['collision_monitor']
     remappings = [('/tf', 'tf'), ('/tf_static', 'tf_static')]
 
-    # Same base + core overlay used by navigation_mppi.launch.py for
-    # collision_monitor (mppi overlays do not change this node).
     default_params = MultiYaml([
         PathJoinSubstitution([stretch_navigation_path, 'config', 'original_nav2_params.yaml']),
         PathJoinSubstitution([stretch_navigation_path, 'config', 'nav2_params_core.yaml']),
+        PathJoinSubstitution([stretch_navigation_path, 'config', 'collision_monitor_standalone.yaml']),
     ])
 
     configured_params = ParameterFile(
@@ -67,6 +66,7 @@ def generate_launch_description():
         launch_arguments={
             'tool_preset': LaunchConfiguration('tool_preset'),
             'joystick_control': 'true',
+            'publish_footprint_stamped': 'true',
         }.items(),
     )
 

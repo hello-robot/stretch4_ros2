@@ -1,0 +1,5 @@
+# Standalone collision_monitor (no local_costmap): use robot_footprint_publisher.
+collision_monitor:
+  ros__parameters:
+    FootprintApproach:
+      footprint_topic: "/footprint_stamped"
