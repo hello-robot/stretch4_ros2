@@ -48,8 +48,7 @@ def generate_launch_description():
         PathJoinSubstitution([stretch_core_path, 'launch', 'stretch_driver.launch.py']),
         launch_arguments={
             'broadcast_odom_tf': 'True',
-            # navigation mode: accepts /cmd_vel (after collision_monitor)
-            'mode': 'navigation',
+            'mode': 'velocity',
         }.items(),
     )
 

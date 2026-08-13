@@ -7,6 +7,7 @@
 #include <tf2_ros/transform_listener.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <limits>
 #include <string>
@@ -147,6 +148,10 @@ public:
         get_logger(),
         "Publishing PolygonStamped footprint on %s",
         footprint_stamped_topic_.c_str());
+        
+      stamped_subscriber_watch_timer_ = create_wall_timer(
+        std::chrono::seconds(1),
+        std::bind(&RobotFootprintPublisherNode::republishStampedOnNewSubscriber, this));
     }
 
     if (publish_costmap_topics_) {
@@ -262,6 +267,20 @@ private:
     if (global_footprint_pub_) {
       global_footprint_pub_->publish(msg);
     }
+  }
+
+  void republishStampedOnNewSubscriber()
+  {
+    const std::size_t count = footprint_stamped_pub_->get_subscription_count();
+    if (count > last_stamped_subscriber_count_ && !last_published_hull_.empty()) {
+      footprint_stamped_pub_->publish(
+        toPolygonStampedMsg(last_published_hull_, frame_id_, now()));
+      RCLCPP_INFO(
+        get_logger(),
+        "New subscriber on %s; republished footprint.",
+        footprint_stamped_topic_.c_str());
+    }
+    last_stamped_subscriber_count_ = count;
   }
 
   void publishLocalCostmapFootprintOnce()
@@ -437,6 +456,7 @@ private:
   bool published_global_costmap_footprint_{false};
   bool received_first_joint_state_{false};
   bool joystick_control_{false};
+  std::size_t last_stamped_subscriber_count_{0};
 
   std::vector<Eigen::Vector2f> base_polygon_;
   std::vector<Eigen::Vector2f> base_only_polygon_;
@@ -456,6 +476,7 @@ private:
   rclcpp::Subscription<geometry_msgs::msg::PolygonStamped>::SharedPtr global_published_footprint_sub_;
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr joint_states_sub_;
   rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr joystick_control_service_;
+  rclcpp::TimerBase::SharedPtr stamped_subscriber_watch_timer_;
 };
 
 int main(int argc, char ** argv)
