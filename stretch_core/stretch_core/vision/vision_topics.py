@@ -213,3 +213,11 @@ class VisionTopics(str, Enum):
     @staticmethod
     def gripper_camera_info(camera_name: str) -> str:
         return f"{VisionTopics.GRIPPER_CAMERA_NAMESPACE.value}/{camera_name}/{VisionTopics._CAMERA_INFO.value}"
+
+    @staticmethod
+    def gripper_imu() -> str:
+        return f"{VisionTopics.GRIPPER_CAMERA_NAMESPACE.value}/imu/data"
+
+    @staticmethod
+    def gripper_stereo_points() -> str:
+        return f"{VisionTopics.GRIPPER_CAMERA_NAMESPACE.value}/stereo_left_rgbd/points"

@@ -97,15 +97,15 @@ class RGBDCameraNode(Node):
         # Configure gripper camera if enabled
         if self.use_gripper:
             self.publishers_topics['gripper'] = self.create_publisher(
-                Image, "/cameras_gripper/right/image_raw", 10)
+                Image, VisionTopics.gripper_image_raw("right"), 10)
             self.info_publishers['gripper'] = self.create_publisher(
-                CameraInfo, "/cameras_gripper/right/camera_info", 10)
+                CameraInfo, VisionTopics.gripper_camera_info("right"), 10)
             self.depth_publishers['gripper'] = self.create_publisher(
-                Image, "/cameras_gripper/stereo/image_raw", 10)
+                Image, VisionTopics.gripper_image_raw("stereo"), 10)
             self.depth_info_publishers['gripper'] = self.create_publisher(
-                CameraInfo, "/cameras_gripper/stereo/camera_info", 10)
+                CameraInfo, VisionTopics.gripper_camera_info("stereo"), 10)
             self.points_publishers['gripper'] = self.create_publisher(
-                PointCloud2, "/cameras_gripper/stereo_left_rgbd/points", 10)
+                PointCloud2, VisionTopics.gripper_stereo_points(), 10)
 
             # Load calibration via RGBCameras enum
             self.camera_info['gripper'] = self.load_camera_info_from_enum(RGBCameras.gripper_right)
