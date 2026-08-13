@@ -14,6 +14,7 @@ import threading
 from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.qos import QoSProfile, DurabilityPolicy
 
+
 # Import stretch4_body camera stream functions
 from stretch4_body.subsystem.cameras import (
     stream_left_camera,
@@ -26,6 +27,7 @@ from stretch4_body.subsystem.cameras import (
         
 from stretch4_body.subsystem.cameras.enums.rgb_camera import RGBCameras
 
+from stretch_core.vision.ros_messages import create_timestamp
 from stretch_core.vision.vision_topics import (
     VisionTopics,
     VisionFrames,
@@ -184,8 +186,10 @@ class LuxonisCameraNode(Node):
                 
             stamp = self.get_clock().now().to_msg()
             
+            
             # 1. Publish Left Camera (image + camera_info)
             if synced_frame.left is not None and synced_frame.left.image is not None:
+                stamp = create_timestamp(synced_frame.left.timestamp)
                 left_img = synced_frame.left.image
                 h, w = left_img.shape[:2]
                 frame_id = VisionFrames.gripper_camera_frame('left')
@@ -206,6 +210,7 @@ class LuxonisCameraNode(Node):
                 
             # 2. Publish Right Camera (image + camera_info)
             if synced_frame.right is not None and synced_frame.right.image is not None:
+                stamp = create_timestamp(synced_frame.right.timestamp)
                 right_img = synced_frame.right.image
                 h, w = right_img.shape[:2]
                 frame_id = VisionFrames.gripper_camera_frame('right')
@@ -268,7 +273,7 @@ class LuxonisCameraNode(Node):
             if frame is None:
                 continue
                 
-            stamp = self.get_clock().now().to_msg()
+            # stamp = self.get_clock().now().to_msg()
             
              # Helper function to publish a single frame's data
             def publish_head_image_and_info(img_frame, camera_name):
@@ -277,6 +282,8 @@ class LuxonisCameraNode(Node):
                 img = img_frame.image
                 h, w = img.shape[:2]
                 frame_id = VisionFrames.camera_frame(camera_name)
+
+                stamp = create_timestamp(img_frame.timestamp)
                 
                 # Image msg
                 img_msg = ros2_numpy.msgify(Image, img, encoding='bgr8')

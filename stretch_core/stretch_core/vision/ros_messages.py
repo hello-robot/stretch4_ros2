@@ -7,6 +7,7 @@ from sensor_msgs_py import point_cloud2
 from array import array
 from sensor_msgs.msg._compressed_image import CompressedImage
 from sensor_msgs.msg import Image
+from builtin_interfaces.msg import Time
 
 
 def rotate_img_msg(img_msg, rotate_rgb_image_number_of_times):
@@ -82,3 +83,10 @@ def compress_depth_image(frame: np.ndarray):
     )
 
     return ros_image_compressed
+
+
+def create_timestamp(epoch_seconds:float):
+    stamp = Time()
+    stamp.sec = int(epoch_seconds)
+    stamp.nanosec = int((epoch_seconds - stamp.sec) * 1e9)
+    return stamp
