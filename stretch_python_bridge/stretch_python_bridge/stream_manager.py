@@ -95,6 +95,7 @@ class StreamManager:
             np_image = ros2_numpy.numpify(msg).copy()
             stamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
             frame = ImageFrame(image=np_image, timestamp=stamp)
+            self.latest_frames[topic] = frame
             self.master_queue.put((topic, frame))
         except Exception as e:
             self.node.get_logger().error(f'Image Convert error: {e}')
@@ -103,7 +104,9 @@ class StreamManager:
         try:
             pc_array = ros2_numpy.numpify(msg)
             timestamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
-            self.master_queue.put((topic, PointCloudFrame.from_pointcloud2(pc_array, timestamp)))
+            frame = PointCloudFrame.from_pointcloud2(pc_array, timestamp)
+            self.latest_frames[topic] = frame
+            self.master_queue.put((topic, frame))
         except Exception as e:
             self.node.get_logger().error(f'PC Convert error: {e}')
 
@@ -118,6 +121,7 @@ class StreamManager:
                 distortion_model=msg.distortion_model,
                 timestamp=stamp
             )
+            self.latest_frames[topic] = frame
             self.master_queue.put((topic, frame))
         except Exception as e:
             self.node.get_logger().error(f'CameraInfo Convert error: {e}')
@@ -134,6 +138,7 @@ class StreamManager:
                 linear_acceleration=linear_acceleration,
                 timestamp=stamp
             )
+            self.latest_frames[topic] = frame
             self.master_queue.put((topic, frame))
         except Exception as e:
             self.node.get_logger().error(f'Imu Convert error: {e}')
@@ -203,6 +208,7 @@ class StreamManager:
                         pose_mat = to_matrix(trans, rot)
                         
                         frame = TransformsFrame(transform=pose_mat, timestamp=stamp)
+                        self.latest_frames[key] = frame
                         self.master_queue.put((key, frame))
                 except (LookupException, ConnectivityException, ExtrapolationException):
                     pass
