@@ -58,11 +58,11 @@ from std_msgs.msg import Bool, String, Float64MultiArray
 from hello_helpers.joy_conversion import SE4_dw4_sg4_Idx
 from hello_helpers.joy_conversion import get_Idx
 
-'''from hello_helpers.joy_conversion import (
+from hello_helpers.joy_conversion import (
     unpack_joy_to_gamepad_state,
     unpack_gamepad_state_to_joy,
     get_default_joy_msg,
-)'''
+)
 
 
 #from .joint_trajectory_server import JointTrajectoryAction
@@ -84,7 +84,7 @@ class StretchMujocoDriver(Stretch4ROSDriver):
                       "wrist_pitch",
                       "wrist_roll",
                       "stretch_gripper",
-                      "parallel_gripper",
+                      #"parallel_gripper",
                       #"gripper_right_finger",
                       #"gripper_left_finger",
                       ]
@@ -385,7 +385,7 @@ class StretchMujocoDriver(Stretch4ROSDriver):
                 goal.name.append(joint)
                 goal.velocity.append(vel)
                 # Compute integrated position target
-                curr_pos = self.get_joint_position(joint)
+                curr_pos = self.cmd_joint_position(joint)
                 goal.position.append(curr_pos + vel * dt)
                 
         return goal
@@ -521,7 +521,7 @@ class StretchMujocoDriver(Stretch4ROSDriver):
                     self.set_joint_velocity(joint, 0.0)
                 else:
                     # Position or other modes: halt at current position
-                    current_pos = self.get_joint_position(joint)
+                    current_pos = self.cmd_joint_position(joint)
                     self.set_joint_position(joint, current_pos)
 
             # 3. Wait for joints and base to settle if settling.enable is True
@@ -765,7 +765,7 @@ class StretchMujocoDriver(Stretch4ROSDriver):
         return robot_status
 
     def command_joint_pose_from_joint_state(self, command_joint, joint_state, default=None):
-        #I think this has to be hard-coded for now
+
         match command_joint:
             case "arm":
                 poses = []
@@ -783,6 +783,15 @@ class StretchMujocoDriver(Stretch4ROSDriver):
                     return left + right
                 except ValueError:
                     return default
+            case _:
+                joint_name = command_joint+"_joint"
+                try:
+                    return joint_state.position[joint_state.name.index(joint_name)]
+                except (ValueError, IndexError):
+                    return default
+            
+
+                
     def command_joint_vel_from_joint_state(self, command_joint, joint_state, default=None):
         match command_joint:
             case "arm":
@@ -992,7 +1001,7 @@ class StretchMujocoDriver(Stretch4ROSDriver):
             try:
                 lower = self.get_parameter(f"joint_limit.{joint}.lower").value
                 upper = self.get_parameter(f"joint_limit.{joint}.upper").value
-                pos = self.get_joint_position(joint)
+                pos = self.cmd_joint_position(joint)
                 at_limit = str(abs(pos - lower) < 1e-3 or abs(pos - upper) < 1e-3)
             except Exception:
                 at_limit = "False"

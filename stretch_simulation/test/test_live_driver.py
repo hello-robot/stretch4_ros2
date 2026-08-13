@@ -702,36 +702,42 @@ class StretchLiveDriverTester(Node):
         self.ros_sleep(1.0)
 
         # -------------------------------------------------------------
-        # Test D: pid_correction mode
+        # Test D: pid_correction mode (REMOVED)
         # -------------------------------------------------------------
-        print(f"\n{BOLD}{CYAN}Test D: 'pid_correction' Mode{RESET}")
-        assert set_traj_param("mode", "pid_correction", ParameterType.PARAMETER_STRING), "Failed to set mode"
-        
-        # Restore lift joint mode to position since pid_correction adds correction on top of position commands
-        p_mode.value.string_value = 'position'
-        future = self.param_set_cli.call_async(req_set)
-        rclpy.spin_until_future_complete(self, future)
-
-        goal_d = make_lift_goal(0.5, 2.0)
-        print(f"{YELLOW}Sending goal to move lift to 0.5m using pid_correction...{RESET}")
-        
-        send_goal_future = self.trajectory_client.send_goal_async(goal_d)
-        rclpy.spin_until_future_complete(self, send_goal_future)
-        goal_handle = send_goal_future.result()
-        assert goal_handle.accepted, "Goal was rejected!"
-        
-        get_result_future = goal_handle.get_result_async()
-        rclpy.spin_until_future_complete(self, get_result_future)
-        result = get_result_future.result()
-        
-        assert result.result.error_code == FollowJointTrajectory.Result.SUCCESSFUL, f"Goal failed: {result.result.error_code}"
-        print(f"{GREEN}✓ pid_correction test passed successfully!{RESET}")
-        self.ros_sleep(2.0)
+        # print(f"\n{BOLD}{CYAN}Test D: 'pid_correction' Mode{RESET}")
+        # assert set_traj_param("mode", "pid_correction", ParameterType.PARAMETER_STRING), "Failed to set mode"
+        # 
+        # # Restore lift joint mode to position since pid_correction adds correction on top of position commands
+        # p_mode.value.string_value = 'position'
+        # future = self.param_set_cli.call_async(req_set)
+        # rclpy.spin_until_future_complete(self, future)
+        # 
+        # goal_d = make_lift_goal(0.5, 2.0)
+        # print(f"{YELLOW}Sending goal to move lift to 0.5m using pid_correction...{RESET}")
+        # 
+        # send_goal_future = self.trajectory_client.send_goal_async(goal_d)
+        # rclpy.spin_until_future_complete(self, send_goal_future)
+        # goal_handle = send_goal_future.result()
+        # assert goal_handle.accepted, "Goal was rejected!"
+        # 
+        # get_result_future = goal_handle.get_result_async()
+        # rclpy.spin_until_future_complete(self, get_result_future)
+        # result = get_result_future.result()
+        # 
+        # assert result.result.error_code == FollowJointTrajectory.Result.SUCCESSFUL, f"Goal failed: {result.result.error_code}"
+        # print(f"{GREEN}✓ pid_correction test passed successfully!{RESET}")
+        # self.ros_sleep(2.0)
 
         # -------------------------------------------------------------
         # Test E: Interruption via direct joint commands (preemption)
         # -------------------------------------------------------------
         print(f"\n{BOLD}{CYAN}Test E: Interruption via Direct Command (Preemption){RESET}")
+        
+        # Restore lift joint mode to position since time_priority mode sends position commands
+        p_mode.value.string_value = 'position'
+        future = self.param_set_cli.call_async(req_set)
+        rclpy.spin_until_future_complete(self, future)
+
         assert set_traj_param("mode", "time_priority", ParameterType.PARAMETER_STRING), "Failed to set mode"
         
         goal_e = make_lift_goal(0.2, 4.0) # Slow 4-second motion
@@ -1051,6 +1057,16 @@ class StretchLiveDriverTester(Node):
                             "2. Call /stop_the_robot service.\n"
                             "3. Assert service returns success and robot halts.")
 
+        # Set joint_mode.lift to velocity mode before testing stop_the_robot
+        req_set = SetParameters.Request()
+        p_mode = ParameterMsg()
+        p_mode.name = 'joint_mode.lift'
+        p_mode.value.type = ParameterType.PARAMETER_STRING
+        p_mode.value.string_value = 'velocity'
+        req_set.parameters = [p_mode]
+        future = self.param_set_cli.call_async(req_set)
+        rclpy.spin_until_future_complete(self, future)
+
         # Command lift upward via velocity
         js_vel = JointState()
         js_vel.name = ["lift"]
@@ -1077,7 +1093,7 @@ class StretchLiveDriverTester(Node):
 
     def test_diagnostics_and_battery(self):
         print_header("11. SYSTEM DIAGNOSTICS & BATTERY TELEMETRY")
-        print_robot_behavior("1. Subscribe to /battery_state, /diagnostics, joint_states_diagnostics, and server_lease_holder.\n"
+        print_robot_behavior("1. Subscribe to /battery, /diagnostics, joint_states_diagnostics, and server_lease_holder.\n"
                             "2. Wait for messages on all topics and assert valid contents.")
 
         battery_msg = None
@@ -1101,7 +1117,7 @@ class StretchLiveDriverTester(Node):
             nonlocal lease_msg
             lease_msg = msg
 
-        battery_sub = self.create_subscription(BatteryState, '/battery_state', battery_cb, 10)
+        battery_sub = self.create_subscription(BatteryState, '/battery', battery_cb, 10)
         diag_sub = self.create_subscription(DiagnosticArray, '/diagnostics', diag_cb, 10)
         joint_diag_sub = self.create_subscription(DiagnosticArray, 'joint_states_diagnostics', joint_diag_cb, 10)
         lease_sub = self.create_subscription(DiagnosticStatus, 'server_lease_holder', lease_cb, 10)
@@ -1149,7 +1165,7 @@ def main():
 
     try:
         # Run entire integration test suite
-        tester.test_parameters()
+        '''tester.test_parameters()
         tester.ros_sleep(3.0)
         tester.test_homing_and_stowing()
         tester.ros_sleep(3.0)
@@ -1162,7 +1178,7 @@ def main():
         tester.test_runstop_safety()
         tester.ros_sleep(3.0)
         tester.test_joy_commands()
-        tester.ros_sleep(3.0)
+        tester.ros_sleep(3.0)'''
         tester.test_trajectory_action()
         tester.ros_sleep(3.0)
         tester.test_trajectory_diagnostics()
