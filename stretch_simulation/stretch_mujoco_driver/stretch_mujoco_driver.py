@@ -660,28 +660,28 @@ class StretchMujocoDriver(Node):
                 pointcloud_msg = create_pointcloud_msg(camera_info, frame)
                 self.pointcloud_publishers[camera.name].publish(pointcloud_msg)
 
-        # Publish Hesai lidar point clouds
+        # Publish lidar point clouds
         try:
-            hesai_pts = self.sim.pull_hemi_lidar_points()
+            hesai_pts = self.sim.pull_lidar_points()
             if isinstance(hesai_pts, dict):
                 left_pts = hesai_pts.get("left")
                 right_pts = hesai_pts.get("right")
 
                 if left_pts is not None and len(left_pts) > 0:
                     header = Header()
-                    header.frame_id = "lidar_left_link"
+                    header.frame_id = "base_footprint"
                     header.stamp = current_time
                     cloud_msg_left = pc2.create_cloud_xyz32(header, left_pts)
                     self.lidar_left_pub.publish(cloud_msg_left)
 
                 if right_pts is not None and len(right_pts) > 0:
                     header = Header()
-                    header.frame_id = "lidar_right_link"
+                    header.frame_id = "base_footprint"
                     header.stamp = current_time
                     cloud_msg_right = pc2.create_cloud_xyz32(header, right_pts)
                     self.lidar_right_pub.publish(cloud_msg_right)
         except Exception as e:
-            self.logger.error(f"Error publishing Hesai lidar points: {e}")
+            self.logger.error(f"Error publishing lidar points: {e}")
 
     # CHANGE MODES ################
     def change_mode(self, new_mode, code_to_run=None):
@@ -1017,48 +1017,55 @@ class StretchMujocoDriver(Node):
         self.laser_scan_pub = self.create_publisher(
             LaserScan,
             "/scan_filtered",
-            qos_profile=QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT),
+            qos_profile=QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE),
         )
         self.lidar_left_pub = self.create_publisher(
             PointCloud2,
             "/lidar_points_left",
-            qos_profile=QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT),
+            qos_profile=QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE),
         )
         self.lidar_right_pub = self.create_publisher(
             PointCloud2,
             "/lidar_points_right",
-            qos_profile=QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT),
+            qos_profile=QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE),
         )
+
+        active_cameras = [
+            StretchCameras.cam_nav_rgb_se4_center
+            if camera == StretchCameras.cam_nav_rgb_se4_center_low_rez
+            else camera
+            for camera in self.sim._cameras_to_use
+        ]
 
         self.camera_publishers = {
             camera.name: self.create_publisher(
                 Image,
                 get_camera_topic_name(camera),
                 qos_profile=QoSProfile(
-                    depth=1, reliability=ReliabilityPolicy.BEST_EFFORT
+                    depth=1, reliability=ReliabilityPolicy.RELIABLE
                 ),
             )
-            for camera in self.sim._cameras_to_use
+            for camera in active_cameras
         }
         self.camera_compressed_publishers = {
             camera.name: self.create_publisher(
                 CompressedImage,
                 f"{get_camera_topic_name(camera)}/compressed",
                 qos_profile=QoSProfile(
-                    depth=1, reliability=ReliabilityPolicy.BEST_EFFORT
+                    depth=1, reliability=ReliabilityPolicy.RELIABLE
                 ),
             )
-            for camera in self.sim._cameras_to_use
+            for camera in active_cameras
         }
         self.pointcloud_publishers = {
             camera.name: self.create_publisher(
                 PointCloud2,
                 get_camera_pointcloud_topic_name(camera),
                 qos_profile=QoSProfile(
-                    depth=1, reliability=ReliabilityPolicy.BEST_EFFORT
+                    depth=1, reliability=ReliabilityPolicy.RELIABLE
                 ),
             )
-            for camera in self.sim._cameras_to_use
+            for camera in active_cameras
             if camera.is_depth
         }
         self.camera_info_publishers = {
@@ -1066,10 +1073,10 @@ class StretchMujocoDriver(Node):
                 CameraInfo,
                 get_camera_info_topic_name(camera),
                 qos_profile=QoSProfile(
-                    depth=1, reliability=ReliabilityPolicy.BEST_EFFORT
+                    depth=1, reliability=ReliabilityPolicy.RELIABLE
                 ),
             )
-            for camera in self.sim._cameras_to_use
+            for camera in active_cameras
         }
 
         self.clock_pub = self.create_publisher(
@@ -1399,7 +1406,7 @@ def get_camera_topic_name(camera: StretchCameras):
         return "/cameras_head/left/image_raw"
     if camera == StretchCameras.cam_nav_rgb_se4_right:
         return "/cameras_head/right/image_raw"
-    if camera == StretchCameras.cam_nav_rgb_se4_center:
+    if camera == StretchCameras.cam_nav_rgb_se4_center or camera == StretchCameras.cam_nav_rgb_se4_center_low_rez:
         return "/camera_head/center/image_raw"
 
     raise NotImplementedError(f"Camera {camera} image topic mapping is not implemented")
@@ -1420,7 +1427,7 @@ def get_camera_info_topic_name(camera: StretchCameras):
         return "/cameras_head/left/camera_info"
     if camera == StretchCameras.cam_nav_rgb_se4_right:
         return "/cameras_head/right/camera_info"
-    if camera == StretchCameras.cam_nav_rgb_se4_center:
+    if camera == StretchCameras.cam_nav_rgb_se4_center or camera == StretchCameras.cam_nav_rgb_se4_center_low_rez:
         return "/camera_head/center/camera_info"
 
     raise NotImplementedError(f"Camera {camera} camera_info topic mapping is not implemented")
@@ -1452,7 +1459,7 @@ def get_camera_frame(camera: StretchCameras):
         return "camera_left_optical_link"
     if camera == StretchCameras.cam_nav_rgb_se4_right:
         return "camera_right_optical_link"
-    if camera == StretchCameras.cam_nav_rgb_se4_center:
+    if camera == StretchCameras.cam_nav_rgb_se4_center or camera == StretchCameras.cam_nav_rgb_se4_center_low_rez:
         return "camera_center_optical_link"
 
     raise NotImplementedError(f"Camera {camera} frame is not implemented")
