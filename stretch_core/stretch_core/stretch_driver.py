@@ -1,43 +1,38 @@
 #! /usr/bin/env python3
 
 
-import sys
 import copy
 import math
+import sys
 import time
-from typing import Any
-from threading import Lock
 from functools import partial
-
-from .joint_trajectory_server import JointTrajectoryAction
-import stretch4_body.robot.robot_client as rc
-from stretch4_body.core.gamepad_control_mappings import ControlMapping
-from stretch4_body.core.gamepad_teleop import GamePadTeleop
-
-import rclpy
-from rclpy.duration import Duration
-from rclpy.executors import MultiThreadedExecutor
-from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
-from rclpy.node import Node
-from rclpy.parameter import Parameter
-from rclpy.qos import QoSProfile, QoSDurabilityPolicy
-from rclpy.publisher import Publisher
-
-from std_srvs.srv import Trigger, SetBool
-
-from geometry_msgs.msg import Twist
-from geometry_msgs.msg import TransformStamped
-from nav_msgs.msg import Odometry
-from rcl_interfaces.msg import ParameterDescriptor, ParameterType, SetParametersResult
-from sensor_msgs.msg import BatteryState, JointState, Imu, MagneticField, Joy
-from std_msgs.msg import Bool, String
-from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
-from control_msgs.msg import JointJog
-
-import tf2_ros
-from tf_transformations import quaternion_from_euler
+from threading import Lock
+from typing import Any
 
 import hello_helpers.joy_conversion as jc
+import rclpy
+import stretch4_body.robot.robot_client as rc
+import tf2_ros
+from control_msgs.msg import JointJog
+from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
+from geometry_msgs.msg import TransformStamped, Twist
+from nav_msgs.msg import Odometry
+from rcl_interfaces.msg import ParameterDescriptor, ParameterType, SetParametersResult
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
+from rclpy.duration import Duration
+from rclpy.executors import MultiThreadedExecutor
+from rclpy.node import Node
+from rclpy.parameter import Parameter
+from rclpy.publisher import Publisher
+from rclpy.qos import QoSDurabilityPolicy, QoSProfile
+from sensor_msgs.msg import BatteryState, Imu, JointState, Joy, MagneticField
+from std_msgs.msg import Bool, String
+from std_srvs.srv import SetBool, Trigger
+from stretch4_body.core.gamepad_control_mappings import ControlMapping
+from stretch4_body.core.gamepad_teleop import GamePadTeleop
+from tf_transformations import quaternion_from_euler
+
+from .joint_trajectory_server import JointTrajectoryAction
 
 
 class StretchDriver(Node):
@@ -466,6 +461,7 @@ class StretchDriver(Node):
         is_homed_msg = DiagnosticStatus(name="is_homed")
         is_homing_msg = DiagnosticStatus(name="is_homing")
         is_runstopped_msg = DiagnosticStatus(name="is_runstopped")
+        in_collision_msg = DiagnosticStatus(name="in_collision")
 
         for cg in self.joint_trajectory_action.command_groups:
             pos, vel, eff = cg.joint_state(robot_status)
@@ -524,6 +520,7 @@ class StretchDriver(Node):
             is_homed_msg.values.append(KeyValue(key=cg.name, value=f"{is_homed}"))
             is_homing_msg.values.append(KeyValue(key=cg.name, value=f"{is_homing}"))
             is_runstopped_msg.values.append(KeyValue(key=cg.name, value=f"{is_runstopped}"))
+            in_collision_msg.values.append(KeyValue(key=cg.name, value=f"{status_dict['in_collision_stop']}"))
 
         joint_state_diagnostics.status.append(is_runstopped_msg)
         joint_state_diagnostics.status.append(is_homed_msg)
@@ -531,6 +528,7 @@ class StretchDriver(Node):
         joint_state_diagnostics.status.append(at_limit_msg)
         joint_state_diagnostics.status.append(soft_limits_msg)
         joint_state_diagnostics.status.append(braking_distance_msg)
+        joint_state_diagnostics.status.append(in_collision_msg)
 
         self.joint_state_pub.publish(joint_state)
         self.joint_state_diagnostics_pub.publish(joint_state_diagnostics)
