@@ -72,6 +72,14 @@ def generate_launch_description():
     )
     ld.add_action(log_level_arg)
 
+    # Action timeout arg
+    action_timeout_arg = DeclareLaunchArgument(
+        'action_timeout',
+        default_value='3.0',
+        description='Default timeout (sec) for execution of joint traj action'
+    )
+    ld.add_action(action_timeout_arg)
+
     # Convert the robot_id LaunchConfiguration into a python string so we can check it
     def add_stretch_driver(context, *args, **kwargs):
         prefix = LaunchConfiguration('driver_namespace').perform(context)
@@ -83,8 +91,10 @@ def generate_launch_description():
                               emulate_tty=True,
                               output='screen',
                               parameters=[{'broadcast_odom_tf': LaunchConfiguration('broadcast_odom_tf')},
-                                          {'mode': LaunchConfiguration('mode')}],
-                              ros_arguments=['--log-level', ['stretch_driver:=', LaunchConfiguration('log_level')]],)
+                                          {'mode': LaunchConfiguration('mode')},
+                                          {'action_timeout': LaunchConfiguration('action_timeout')}],
+                              ros_arguments=['--log-level', ['stretch_driver:=', LaunchConfiguration('log_level')]],
+        )
         return [stretch_driver]
 
     add_stretch_driver_fn = OpaqueFunction(function=add_stretch_driver)
