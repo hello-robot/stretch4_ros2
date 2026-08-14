@@ -7,6 +7,7 @@
 #include <tf2_ros/transform_listener.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <limits>
 #include <string>
@@ -101,6 +102,18 @@ geometry_msgs::msg::Polygon toPolygonMsg(
   return msg;
 }
 
+geometry_msgs::msg::PolygonStamped toPolygonStampedMsg(
+  const std::vector<Eigen::Vector2f> & hull,
+  const std::string & frame_id,
+  const builtin_interfaces::msg::Time & stamp)
+{
+  geometry_msgs::msg::PolygonStamped msg;
+  msg.header.frame_id = frame_id;
+  msg.header.stamp = stamp;
+  msg.polygon = toPolygonMsg(hull);
+  return msg;
+}
+
 }  // namespace
 
 class RobotFootprintPublisherNode : public rclcpp::Node
@@ -128,6 +141,18 @@ public:
 
     footprint_pub_ = create_publisher<geometry_msgs::msg::Polygon>(
         footprint_topic_, qos_profile);
+    if (publish_footprint_stamped_) {
+      footprint_stamped_pub_ = create_publisher<geometry_msgs::msg::PolygonStamped>(
+          footprint_stamped_topic_, costmap_footprint_qos);
+      RCLCPP_INFO(
+        get_logger(),
+        "Publishing PolygonStamped footprint on %s",
+        footprint_stamped_topic_.c_str());
+        
+      stamped_subscriber_watch_timer_ = create_wall_timer(
+        std::chrono::seconds(1),
+        std::bind(&RobotFootprintPublisherNode::republishStampedOnNewSubscriber, this));
+    }
 
     if (publish_costmap_topics_) {
         local_footprint_pub_ = create_publisher<geometry_msgs::msg::Polygon>(
@@ -162,6 +187,14 @@ public:
       get_logger(),
       "Joystick control footprint service ready on ~/joystick_control "
       "(data=true: base-only; data=false: joint-state / arm footprint).");
+
+    // Optional startup mode: base-only footprint (no arm)
+    if (joystick_control_) {
+      publishBaseFootprintOnly();
+      RCLCPP_INFO(
+        get_logger(),
+        "Started with joystick_control=true; publishing base footprint only.");
+    }
   }
 
 private:
@@ -169,6 +202,8 @@ private:
   {
     declare_parameter<std::string>("frame_id", "base_footprint");
     declare_parameter<std::string>("footprint_topic", "/footprint");
+    declare_parameter<std::string>("footprint_stamped_topic", "/footprint_stamped");
+    declare_parameter("publish_footprint_stamped", false);
     declare_parameter("publish_costmap_footprint_topics", true);
     declare_parameter<std::string>(
       "local_costmap_footprint_topic", "/local_costmap/local_costmap/footprint");
@@ -184,12 +219,16 @@ private:
     declare_parameter("footprint_change_epsilon_m", 0.01);
     declare_parameter("base_footprint_polygon", std::vector<double>{});
     declare_parameter("base_only_footprint_polygon", std::vector<double>{});
+    // When true at startup (or via ~/joystick_control), publish base-only polygon (no arm).
+    declare_parameter("joystick_control", false);
   }
 
   void loadParameters()
   {
     frame_id_ = get_parameter("frame_id").as_string();
     footprint_topic_ = get_parameter("footprint_topic").as_string();
+    footprint_stamped_topic_ = get_parameter("footprint_stamped_topic").as_string();
+    publish_footprint_stamped_ = get_parameter("publish_footprint_stamped").as_bool();
     publish_costmap_topics_ = get_parameter("publish_costmap_footprint_topics").as_bool();
     local_costmap_footprint_topic_ = get_parameter("local_costmap_footprint_topic").as_string();
     global_costmap_footprint_topic_ = get_parameter("global_costmap_footprint_topic").as_string();
@@ -208,6 +247,7 @@ private:
     if (base_only_polygon_.size() < 3) {
       base_only_polygon_ = base_polygon_;
     }
+    joystick_control_ = get_parameter("joystick_control").as_bool();
 
     self_filter_config_ = stretch_core::loadRobotSelfFilterConfig(*this);
     self_filter_.setConfig(self_filter_config_);
@@ -217,12 +257,30 @@ private:
   {
     const auto msg = toPolygonMsg(hull);
     footprint_pub_->publish(msg);
+    if (footprint_stamped_pub_) {
+      footprint_stamped_pub_->publish(
+        toPolygonStampedMsg(hull, frame_id_, now()));
+    }
     if (local_footprint_pub_) {
       local_footprint_pub_->publish(msg);
     }
     if (global_footprint_pub_) {
       global_footprint_pub_->publish(msg);
     }
+  }
+
+  void republishStampedOnNewSubscriber()
+  {
+    const std::size_t count = footprint_stamped_pub_->get_subscription_count();
+    if (count > last_stamped_subscriber_count_ && !last_published_hull_.empty()) {
+      footprint_stamped_pub_->publish(
+        toPolygonStampedMsg(last_published_hull_, frame_id_, now()));
+      RCLCPP_INFO(
+        get_logger(),
+        "New subscriber on %s; republished footprint.",
+        footprint_stamped_topic_.c_str());
+    }
+    last_stamped_subscriber_count_ = count;
   }
 
   void publishLocalCostmapFootprintOnce()
@@ -381,6 +439,7 @@ private:
 
   std::string frame_id_;
   std::string footprint_topic_;
+  std::string footprint_stamped_topic_;
   std::string local_costmap_footprint_topic_;
   std::string global_costmap_footprint_topic_;
   std::string local_costmap_published_footprint_topic_;
@@ -390,12 +449,14 @@ private:
   double joint_change_threshold_rad_{0.01};
   double footprint_change_epsilon_m_{0.01};
   bool publish_costmap_topics_{true};
+  bool publish_footprint_stamped_{false};
   bool local_costmap_ready_{false};
   bool global_costmap_ready_{false};
   bool published_local_costmap_footprint_{false};
   bool published_global_costmap_footprint_{false};
   bool received_first_joint_state_{false};
   bool joystick_control_{false};
+  std::size_t last_stamped_subscriber_count_{0};
 
   std::vector<Eigen::Vector2f> base_polygon_;
   std::vector<Eigen::Vector2f> base_only_polygon_;
@@ -408,12 +469,14 @@ private:
   tf2_ros::TransformListener tf_listener_;
 
   rclcpp::Publisher<geometry_msgs::msg::Polygon>::SharedPtr footprint_pub_;
+  rclcpp::Publisher<geometry_msgs::msg::PolygonStamped>::SharedPtr footprint_stamped_pub_;
   rclcpp::Publisher<geometry_msgs::msg::Polygon>::SharedPtr local_footprint_pub_;
   rclcpp::Publisher<geometry_msgs::msg::Polygon>::SharedPtr global_footprint_pub_;
   rclcpp::Subscription<geometry_msgs::msg::PolygonStamped>::SharedPtr local_published_footprint_sub_;
   rclcpp::Subscription<geometry_msgs::msg::PolygonStamped>::SharedPtr global_published_footprint_sub_;
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr joint_states_sub_;
   rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr joystick_control_service_;
+  rclcpp::TimerBase::SharedPtr stamped_subscriber_watch_timer_;
 };
 
 int main(int argc, char ** argv)
