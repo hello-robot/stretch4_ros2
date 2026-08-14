@@ -166,7 +166,9 @@ class StretchMujocoDriver(Stretch4ROSDriver):
 
         use_mujoco_viewer = self.get_parameter('use_mujoco_viewer').value
         self.sim.start(headless=not use_mujoco_viewer)
-        self.setup_cam_pubs()
+
+        if self.get_parameter("use_cameras").value:
+            self.setup_cam_pubs()
 
         limits = self.sim.pull_joint_limits()
 
@@ -506,7 +508,8 @@ class StretchMujocoDriver(Stretch4ROSDriver):
         i.linear_acceleration.z = az
         self.imu_wrist_pub.publish(i)
 
-        self.publish_camera_and_lidar(current_time=current_time)
+        if self.get_parameter("use_cameras").value:
+            self.publish_camera_and_lidar(current_time=current_time)
 
         
     def stop_the_robot_callback(self, request, response):
@@ -1271,11 +1274,8 @@ def get_camera_topic_name(camera: StretchCameras):
         return "/cameras_head/right/image_raw"
     if camera == StretchCameras.cam_nav_rgb_se4_center:
         return "/camera_head/center/image_raw"
-    if camera == StretchCameras.cam_hemilidar_left:
-        return "/depth/left/depth"
-    if camera == StretchCameras.cam_hemilidar_right:
-        return "/depth/right/depth"
-
+    if camera == StretchCameras.cam_nav_rgb_se4_center_low_rez:
+        return "/camera_head/center/low_res"
     raise NotImplementedError(f"Camera {camera} image topic mapping is not implemented")
 
 
@@ -1296,10 +1296,8 @@ def get_camera_info_topic_name(camera: StretchCameras):
         return "/cameras_head/right/camera_info"
     if camera == StretchCameras.cam_nav_rgb_se4_center:
         return "/camera_head/center/camera_info"
-    if camera == StretchCameras.cam_hemilidar_left:
-        return "/depth/left/camera_info"
-    if camera == StretchCameras.cam_hemilidar_right:
-        return "/depth/right/camera_info"
+    if camera == StretchCameras.cam_nav_rgb_se4_center_low_rez:
+        return "/camera_head/center/low_res/camera_info"
 
     raise NotImplementedError(f"Camera {camera} camera_info topic mapping is not implemented")
 
@@ -1311,11 +1309,6 @@ def get_camera_pointcloud_topic_name(camera: StretchCameras):
     """
     if camera == StretchCameras.cam_gripper_se4_stereo_depth:
         return "/gripper_camera/depth/color/points"
-    if camera == StretchCameras.cam_hemilidar_left:
-        return "/lidar_points_left"
-    if camera == StretchCameras.cam_hemilidar_right:
-        return "/lidar_points_right"
-
     raise NotImplementedError(f"Camera {camera} pointcloud topic mapping is not implemented")
 
 
@@ -1336,11 +1329,6 @@ def get_camera_frame(camera: StretchCameras):
         return "camera_right_optical_link"
     if camera == StretchCameras.cam_nav_rgb_se4_center:
         return "camera_center_optical_link"
-    if camera == StretchCameras.cam_hemilidar_left:
-        return "lidar_left_link"
-    if camera == StretchCameras.cam_hemilidar_right:
-        return "lidar_right_link"
-
     raise NotImplementedError(f"Camera {camera} frame is not implemented")
 
 
