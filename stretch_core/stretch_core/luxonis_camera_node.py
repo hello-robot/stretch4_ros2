@@ -27,7 +27,7 @@ from stretch4_body.subsystem.cameras import (
         
 from stretch4_body.subsystem.cameras.enums.rgb_camera import RGBCameras
 
-from stretch_core.vision.ros_messages import create_timestamp
+from stretch_core.vision.ros_messages import create_timestamp, DeviceClockOffset
 from stretch_core.vision.vision_topics import (
     VisionTopics,
     VisionFrames,
@@ -123,6 +123,9 @@ class LuxonisCameraNode(Node):
                     CameraInfo, VisionTopics.camera_info('center'), self.sensor_qos)
                 self.camera_info['center'] = self.load_camera_info_from_enum(RGBCameras.head_center)
 
+        # shiftcamera frames stamps from the device's monotonic clock to system clock
+        self.clock_offset = DeviceClockOffset()
+
         # Initialize thread state
         self.running = True
         self.publish_thread = threading.Thread(target=self.publish_loop, daemon=True)
@@ -178,6 +181,11 @@ class LuxonisCameraNode(Node):
         except Exception as e:
             self.get_logger().error(f'Error in publish loop: {e}')
 
+    def frame_stamp(self, img_frame):
+        """ROS-clock stamp for a camera frame, shifted off the device's monotonic clock."""
+        return create_timestamp(
+            self.clock_offset.to_ros(img_frame.timestamp, img_frame.timestamp_system))
+
     def publish_gripper_frames(self):
         self.get_logger().info("Starting Gripper Camera Stream...")
         generator = stream_gripper_camera(is_rotate=False)
@@ -192,7 +200,7 @@ class LuxonisCameraNode(Node):
             
             # 1. Publish Left Camera (image + camera_info)
             if synced_frame.left is not None and synced_frame.left.image is not None:
-                stamp = create_timestamp(synced_frame.left.timestamp)
+                stamp = self.frame_stamp(synced_frame.left)
                 left_img = synced_frame.left.image
                 h, w = left_img.shape[:2]
                 frame_id = VisionFrames.gripper_camera_frame('left')
@@ -213,7 +221,7 @@ class LuxonisCameraNode(Node):
                 
             # 2. Publish Right Camera (image + camera_info)
             if synced_frame.right is not None and synced_frame.right.image is not None:
-                stamp = create_timestamp(synced_frame.right.timestamp)
+                stamp = self.frame_stamp(synced_frame.right)
                 right_img = synced_frame.right.image
                 h, w = right_img.shape[:2]
                 frame_id = VisionFrames.gripper_camera_frame('right')
@@ -286,7 +294,7 @@ class LuxonisCameraNode(Node):
                 h, w = img.shape[:2]
                 frame_id = VisionFrames.camera_frame(camera_name)
 
-                stamp = create_timestamp(img_frame.timestamp)
+                stamp = self.frame_stamp(img_frame)
                 
                 # Image msg
                 img_msg = ros2_numpy.msgify(Image, img, encoding='bgr8')
