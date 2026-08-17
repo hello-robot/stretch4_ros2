@@ -36,7 +36,7 @@ from stretch4_body.subsystem.cameras.enums.rgb_camera import RGBCameras
 
 from stretch_python_bridge import compressed_format_with_sequence
 
-from stretch_core.vision.ros_messages import create_timestamp
+from stretch_core.vision.ros_messages import DeviceClockOffset, create_timestamp
 from stretch_core.vision.vision_topics import (
     VisionTopics,
     VisionFrames,
@@ -64,6 +64,16 @@ class LuxonisCameraNode(Node):
                 "means decoding every frame."
             )),
         )
+        self.declare_parameter(
+            'use_system_timestamp',
+            True,
+            ParameterDescriptor(description=(
+                "If true, shift the camera's device timestamps onto the system clock before "
+                "stamping messages. The device clock's steadiness is kept, it is just offset so "
+                "that consumers can compare these stamps against the rest of the system. If "
+                "false, the device timestamp is published as-is."
+            )),
+        )
 
         # Get parameters
         self.use_left = self.get_parameter('use_left').value
@@ -73,6 +83,11 @@ class LuxonisCameraNode(Node):
         self.publish_rotated = self.get_parameter('publish_rotated').value
         self.camera_namespace = self.get_parameter('camera_namespace').value
         self.use_compressed = self.get_parameter('use_compressed').value
+        self.use_system_timestamp = self.get_parameter('use_system_timestamp').value
+
+        # The device clock is shared by every camera on the device, so one offset estimator
+        # serves them all and sees more samples than a per-camera one would.
+        self.clock_offset = DeviceClockOffset() if self.use_system_timestamp else None
 
         # Publishers and camera info caches
         self.publishers_topics = {}
@@ -197,6 +212,12 @@ class LuxonisCameraNode(Node):
         except Exception as e:
             self.get_logger().error(f'Error in publish loop: {e}')
 
+    def create_stamp(self, device_seconds: float):
+        """The frame's timestamp as a ROS Time, on the system clock unless asked otherwise."""
+        if self.clock_offset is not None:
+            device_seconds = self.clock_offset.to_ros(device_seconds)
+        return create_timestamp(device_seconds)
+
     def decode_if_needed(self, img_frame):
         """The frame as raw BGR pixels, decoding the bitstream first if the camera handed us one.
 
@@ -221,7 +242,7 @@ class LuxonisCameraNode(Node):
         if img_frame is None or img_frame.image is None:
             return
 
-        stamp = create_timestamp(img_frame.timestamp)
+        stamp = self.create_stamp(img_frame.timestamp)
 
         compressed_publisher = self.compressed_publishers.get(camera_name)
         if img_frame.is_compressed() and compressed_publisher is not None:
@@ -285,7 +306,7 @@ class LuxonisCameraNode(Node):
             # 16-bit depth is not MJPEG encodable, so it stays on the raw topic.
             if synced_frame.depth is not None:
                 frame_id = VisionFrames.gripper_camera_frame('stereo')
-                stamp = create_timestamp(synced_frame.right.timestamp if synced_frame.right is not None else synced_frame.timestamp)
+                stamp = self.create_stamp(synced_frame.right.timestamp if synced_frame.right is not None else synced_frame.timestamp)
 
                 depth_publisher = self.publishers_topics['stereo']
                 if depth_publisher.get_subscription_count() > 0:

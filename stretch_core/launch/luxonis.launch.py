@@ -46,6 +46,15 @@ def generate_launch_description():
         ),
     )
 
+    use_system_timestamp = DeclareLaunchArgument(
+        "use_system_timestamp",
+        default_value="true",
+        description=(
+            "If true, shift the camera's device timestamps onto the system clock before stamping "
+            "messages, so they can be compared against the rest of the system."
+        ),
+    )
+
     launch_args = [
         use_rviz_arg,
         use_left,
@@ -53,6 +62,7 @@ def generate_launch_description():
         use_center,
         publish_rotated,
         use_compressed,
+        use_system_timestamp,
     ]
 
     return LaunchDescription(launch_args + [OpaqueFunction(function=launch_setup)])
@@ -64,6 +74,7 @@ def launch_setup(context, *args, **kwargs):
     is_use_center = is_launch_config_true(context, "use_center")
     is_publish_rotated = is_launch_config_true(context, "publish_rotated")
     is_use_compressed = is_launch_config_true(context, "use_compressed")
+    is_use_system_timestamp = is_launch_config_true(context, "use_system_timestamp")
 
     camera_node = Node(
         package="stretch_core",
@@ -76,6 +87,7 @@ def launch_setup(context, *args, **kwargs):
                 "use_center": is_use_center,
                 "publish_rotated": is_publish_rotated,
                 "use_compressed": is_use_compressed,
+                "use_system_timestamp": is_use_system_timestamp,
                 "is_gripper": False,
             }
         ],

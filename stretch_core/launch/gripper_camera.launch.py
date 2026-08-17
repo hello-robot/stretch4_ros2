@@ -32,9 +32,19 @@ def generate_launch_description():
         ),
     )
 
+    use_system_timestamp = DeclareLaunchArgument(
+        "use_system_timestamp",
+        default_value="true",
+        description=(
+            "If true, shift the camera's device timestamps onto the system clock before stamping "
+            "messages, so they can be compared against the rest of the system."
+        ),
+    )
+
     launch_args = [
         use_rviz_arg,
         use_compressed,
+        use_system_timestamp,
     ]
 
     return LaunchDescription(launch_args + [OpaqueFunction(function=launch_setup)])
@@ -49,6 +59,7 @@ def launch_setup(context, *args, **kwargs):
             {
                 "is_gripper": True,
                 "use_compressed": is_launch_config_true(context, "use_compressed"),
+                "use_system_timestamp": is_launch_config_true(context, "use_system_timestamp"),
             }
         ],
         output="both",
