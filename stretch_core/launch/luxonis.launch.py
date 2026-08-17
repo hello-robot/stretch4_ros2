@@ -36,6 +36,15 @@ def generate_launch_description():
         default_value="true",
         description="If true, publish rotated image frames on rotated_image topic.",
     )
+    use_compressed = DeclareLaunchArgument(
+        "use_compressed",
+        default_value="true",
+        description=(
+            "If true, capture MJPEG on the camera and publish it on the compressed topics. The raw and "
+            "rotated topics are then only published while something is subscribed, since serving them "
+            "costs a decode per frame."
+        ),
+    )
 
     launch_args = [
         use_rviz_arg,
@@ -43,6 +52,7 @@ def generate_launch_description():
         use_right,
         use_center,
         publish_rotated,
+        use_compressed,
     ]
 
     return LaunchDescription(launch_args + [OpaqueFunction(function=launch_setup)])
@@ -53,6 +63,7 @@ def launch_setup(context, *args, **kwargs):
     is_use_right = is_launch_config_true(context, "use_right")
     is_use_center = is_launch_config_true(context, "use_center")
     is_publish_rotated = is_launch_config_true(context, "publish_rotated")
+    is_use_compressed = is_launch_config_true(context, "use_compressed")
 
     camera_node = Node(
         package="stretch_core",
@@ -64,6 +75,7 @@ def launch_setup(context, *args, **kwargs):
                 "use_right": is_use_right,
                 "use_center": is_use_center,
                 "publish_rotated": is_publish_rotated,
+                "use_compressed": is_use_compressed,
                 "is_gripper": False,
             }
         ],

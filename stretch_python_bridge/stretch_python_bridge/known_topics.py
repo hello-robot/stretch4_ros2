@@ -1,7 +1,7 @@
 from typing import Generator
 from .stream_manager import StreamManager
 from .camera_info_bridge import camera_info_stream, CameraInfoFrame
-from .image_bridge import image_stream, ImageFrame
+from .image_bridge import compressed_image_stream, image_stream, ImageFrame
 from .pointcloud_bridge import pointcloud_stream, LidarPointCloudFrame, StereoPointCloudFrame, RGBDPointCloudFrame, PointCloudFrame
 from .imu_bridge import imu_stream, ImuFrame
 from stretch_core.vision.vision_topics import VisionTopics
@@ -138,3 +138,45 @@ def stream_gripper_stereo_points(timeout: float | None = 10.0, blocking: bool = 
         stream_manager.add_pointcloud_topic(topic)
         return stream_manager.create_topic_generator(topic)
     return pointcloud_stream(topic, timeout=timeout, block=blocking)
+
+
+# The compressed streams below carry the same images as their raw counterparts, but MJPEG encoded by
+# the camera itself. Frames arrive still encoded (`ImageFrame.is_compressed()`), which is a fraction of
+# the bytes and lets the publisher skip decoding entirely, so these are the fast path for anything that
+# just needs pixels on the host. They also carry the sensor's sequence number in `frame_number`.
+# There is no compressed gripper stereo stream: the depth map is 16-bit and is not MJPEG encodable.
+
+def stream_camera_left_compressed(timeout: float | None = 10.0, blocking: bool = True, stream_manager: StreamManager|None = None) -> Generator[ImageFrame | None, None, None]:
+    topic = VisionTopics.compressed("left")
+    if stream_manager is not None:
+        stream_manager.add_compressed_image_topic(topic)
+        return stream_manager.create_topic_generator(topic)
+    return compressed_image_stream(topic, timeout=timeout, block=blocking)
+
+def stream_camera_right_compressed(timeout: float | None = 10.0, blocking: bool = True, stream_manager: StreamManager|None = None) -> Generator[ImageFrame | None, None, None]:
+    topic = VisionTopics.compressed("right")
+    if stream_manager is not None:
+        stream_manager.add_compressed_image_topic(topic)
+        return stream_manager.create_topic_generator(topic)
+    return compressed_image_stream(topic, timeout=timeout, block=blocking)
+
+def stream_camera_center_compressed(timeout: float | None = 10.0, blocking: bool = True, stream_manager: StreamManager|None = None) -> Generator[ImageFrame | None, None, None]:
+    topic = VisionTopics.compressed("center")
+    if stream_manager is not None:
+        stream_manager.add_compressed_image_topic(topic)
+        return stream_manager.create_topic_generator(topic)
+    return compressed_image_stream(topic, timeout=timeout, block=blocking)
+
+def stream_gripper_left_compressed(timeout: float | None = 10.0, blocking: bool = True, stream_manager: StreamManager|None = None) -> Generator[ImageFrame | None, None, None]:
+    topic = VisionTopics.gripper_compressed("left")
+    if stream_manager is not None:
+        stream_manager.add_compressed_image_topic(topic)
+        return stream_manager.create_topic_generator(topic)
+    return compressed_image_stream(topic, timeout=timeout, block=blocking)
+
+def stream_gripper_right_compressed(timeout: float | None = 10.0, blocking: bool = True, stream_manager: StreamManager|None = None) -> Generator[ImageFrame | None, None, None]:
+    topic = VisionTopics.gripper_compressed("right")
+    if stream_manager is not None:
+        stream_manager.add_compressed_image_topic(topic)
+        return stream_manager.create_topic_generator(topic)
+    return compressed_image_stream(topic, timeout=timeout, block=blocking)

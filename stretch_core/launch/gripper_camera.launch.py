@@ -22,8 +22,19 @@ def generate_launch_description():
         description="If true, launch Rviz2 automatically.",
     )
 
+    use_compressed = DeclareLaunchArgument(
+        "use_compressed",
+        default_value="true",
+        description=(
+            "If true, publish the camera's MJPEG stream on the compressed topics. The raw topics are "
+            "then only published while something is subscribed, since serving them costs a decode per "
+            "frame. The 16-bit depth image is always published raw."
+        ),
+    )
+
     launch_args = [
-        use_rviz_arg
+        use_rviz_arg,
+        use_compressed,
     ]
 
     return LaunchDescription(launch_args + [OpaqueFunction(function=launch_setup)])
@@ -37,6 +48,7 @@ def launch_setup(context, *args, **kwargs):
         parameters=[
             {
                 "is_gripper": True,
+                "use_compressed": is_launch_config_true(context, "use_compressed"),
             }
         ],
         output="both",

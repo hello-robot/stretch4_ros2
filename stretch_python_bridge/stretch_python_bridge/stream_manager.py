@@ -5,13 +5,13 @@ import time
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
-from sensor_msgs.msg import Image, PointCloud2, CameraInfo, Imu
+from sensor_msgs.msg import CompressedImage, Image, PointCloud2, CameraInfo, Imu
 import ros2_numpy
 import numpy as np
 from tf2_ros import Buffer, TransformListener
 from tf2_ros import LookupException, ConnectivityException, ExtrapolationException
 
-from .image_bridge import ImageFrame
+from .image_bridge import ImageFrame, compressed_image_message_to_frame
 from .pointcloud_bridge import PointCloudFrame, LidarPointCloudFrame, StereoPointCloudFrame
 from .transforms_bridge import TransformsFrame, transform_to_list, to_matrix
 from .camera_info_bridge import CameraInfoFrame
@@ -61,6 +61,16 @@ class StreamManager:
             SENSOR_QOS
         )
 
+    def add_compressed_image_topic(self, topic_name: str):
+        """Subscribes to a CompressedImage topic. Frames arrive still encoded, so nothing is decoded here."""
+        self.latest_frames[topic_name] = None
+        self.node.create_subscription(
+            CompressedImage,
+            topic_name,
+            lambda msg, topic=topic_name: self._handle_compressed_image(msg, topic),
+            SENSOR_QOS
+        )
+
     def add_pointcloud_topic(self, topic_name: str):
         self.latest_frames[topic_name] = None
         self.node.create_subscription(
@@ -103,6 +113,14 @@ class StreamManager:
             self.master_queue.put((topic, frame))
         except Exception as e:
             self.node.get_logger().error(f'Image Convert error: {e}')
+
+    def _handle_compressed_image(self, msg, topic):
+        try:
+            frame = compressed_image_message_to_frame(msg)
+            self.latest_frames[topic] = frame
+            self.master_queue.put((topic, frame))
+        except Exception as e:
+            self.node.get_logger().error(f'Compressed image error: {e}')
 
     def _handle_pc(self, msg, topic):
         try:
