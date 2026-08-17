@@ -9,7 +9,7 @@ from stretch_core.vision.vision_topics import (
 import yaml
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, DurabilityPolicy
+from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy
 from sensor_msgs.msg import CameraInfo, Image
 
 from stretch_core.vision.ros_messages import rotate_img_msg
@@ -72,7 +72,8 @@ class CameraInfoPublisher(Node):
         self.output_info_topic = VisionTopics.camera_info(self.camera_name)
 
         self.sub_img = self.create_subscription(
-            Image, self.input_topic, self.img_cb, 10
+            Image, self.input_topic, self.img_cb,
+            QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
         )
 
         # Parse the YAML file
@@ -93,13 +94,18 @@ class CameraInfoPublisher(Node):
             # Not sure if this is the best place to do this, but "fisheye" is more intuitive for the user in a calibration file and different apps expect different names for the same thing.
             self.camera_info_msg.distortion_model = "equidistant"
 
-        latching_qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        latching_qos = QoSProfile(
+            depth=1,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+        )
 
         self.info_publisher = self.create_publisher(
             CameraInfo, self.output_info_topic, latching_qos
         )
         self.rotated_img_publisher = self.create_publisher(
-            Image, self.output_rotated_topic, 10
+            Image, self.output_rotated_topic,
+            QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
         )
 
     def img_cb(self, img_msg):

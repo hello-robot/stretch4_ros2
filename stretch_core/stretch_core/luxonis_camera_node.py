@@ -12,7 +12,7 @@ import os
 from pathlib import Path
 import threading
 from rcl_interfaces.msg import ParameterDescriptor
-from rclpy.qos import QoSProfile, DurabilityPolicy
+from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy
 
 
 # Import stretch4_body camera stream functions
@@ -59,6 +59,9 @@ class LuxonisCameraNode(Node):
         self.info_publishers = {}
         self.camera_info = {}
 
+        # Sensor data (images, camera info) is published Best Effort
+        self.sensor_qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
+
         if self.is_gripper:
             # Gripper camera topics as requested and verified:
             # left -> /cameras_gripper/left/...
@@ -68,23 +71,23 @@ class LuxonisCameraNode(Node):
             
             # Left camera
             self.publishers_topics['left'] = self.create_publisher(
-                Image, VisionTopics.gripper_image_raw('left'), 10)
+                Image, VisionTopics.gripper_image_raw('left'), self.sensor_qos)
             self.info_publishers['left'] = self.create_publisher(
-                CameraInfo, VisionTopics.gripper_camera_info('left'), 10)
+                CameraInfo, VisionTopics.gripper_camera_info('left'), self.sensor_qos)
             self.camera_info['left'] = self.load_camera_info_from_enum(RGBCameras.gripper_left)
                 
             # Right camera
             self.publishers_topics['right'] = self.create_publisher(
-                Image, VisionTopics.gripper_image_raw('right'), 10)
+                Image, VisionTopics.gripper_image_raw('right'), self.sensor_qos)
             self.info_publishers['right'] = self.create_publisher(
-                CameraInfo, VisionTopics.gripper_camera_info('right'), 10)
+                CameraInfo, VisionTopics.gripper_camera_info('right'), self.sensor_qos)
             self.camera_info['right'] = self.load_camera_info_from_enum(RGBCameras.gripper_right)
                 
             # Depth camera (named stereo)
             self.publishers_topics['stereo'] = self.create_publisher(
-                Image, VisionTopics.gripper_image_raw('stereo'), 10)
+                Image, VisionTopics.gripper_image_raw('stereo'), self.sensor_qos)
             self.info_publishers['stereo'] = self.create_publisher(
-                CameraInfo, VisionTopics.gripper_camera_info('stereo'), 10)
+                CameraInfo, VisionTopics.gripper_camera_info('stereo'), self.sensor_qos)
             self.camera_info['stereo'] = self.camera_info['right'] # share right camera info for depth
                 
         else:
@@ -92,32 +95,32 @@ class LuxonisCameraNode(Node):
             # Head cameras
             if self.use_left:
                 self.publishers_topics['left'] = self.create_publisher(
-                    Image, VisionTopics.image_raw('left'), 10)
+                    Image, VisionTopics.image_raw('left'), self.sensor_qos)
                 if self.publish_rotated:
                     self.rotated_publishers['left'] = self.create_publisher(
-                        Image, VisionTopics.rotated_image('left'), 10)
+                        Image, VisionTopics.rotated_image('left'), self.sensor_qos)
                 self.info_publishers['left'] = self.create_publisher(
-                    CameraInfo, VisionTopics.camera_info('left'), 10)
+                    CameraInfo, VisionTopics.camera_info('left'), self.sensor_qos)
                 self.camera_info['left'] = self.load_camera_info_from_enum(RGBCameras.head_left)
                     
             if self.use_right:
                 self.publishers_topics['right'] = self.create_publisher(
-                    Image, VisionTopics.image_raw('right'), 10)
+                    Image, VisionTopics.image_raw('right'), self.sensor_qos)
                 if self.publish_rotated:
                     self.rotated_publishers['right'] = self.create_publisher(
-                        Image, VisionTopics.rotated_image('right'), 10)
+                        Image, VisionTopics.rotated_image('right'), self.sensor_qos)
                 self.info_publishers['right'] = self.create_publisher(
-                    CameraInfo, VisionTopics.camera_info('right'), 10)
+                    CameraInfo, VisionTopics.camera_info('right'), self.sensor_qos)
                 self.camera_info['right'] = self.load_camera_info_from_enum(RGBCameras.head_right)
                     
             if self.use_center:
                 self.publishers_topics['center'] = self.create_publisher(
-                    Image, VisionTopics.image_raw('center'), 10)
+                    Image, VisionTopics.image_raw('center'), self.sensor_qos)
                 if self.publish_rotated:
                     self.rotated_publishers['center'] = self.create_publisher(
-                        Image, VisionTopics.rotated_image('center'), 10)
+                        Image, VisionTopics.rotated_image('center'), self.sensor_qos)
                 self.info_publishers['center'] = self.create_publisher(
-                    CameraInfo, VisionTopics.camera_info('center'), 10)
+                    CameraInfo, VisionTopics.camera_info('center'), self.sensor_qos)
                 self.camera_info['center'] = self.load_camera_info_from_enum(RGBCameras.head_center)
 
         # Initialize thread state

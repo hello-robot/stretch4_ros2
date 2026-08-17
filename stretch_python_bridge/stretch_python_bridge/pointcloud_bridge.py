@@ -5,6 +5,7 @@ import threading
 import queue
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import Image
 import ros2_numpy
 import numpy as np
@@ -105,7 +106,7 @@ class PointCloudBufferNode(Node):
             PointCloud2,
             topic_name,
             self.listener_callback,
-            10
+            QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT)
         )
 
     def listener_callback(self, msg):
