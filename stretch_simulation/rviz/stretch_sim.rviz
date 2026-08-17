@@ -80,7 +80,7 @@ Visualization Manager:
         Durability Policy: Volatile
         Filter size: 10
         History Policy: Keep Last
-        Reliability Policy: Reliable
+        Reliability Policy: Best Effort
         Value: /scan_filtered
       Use Fixed Frame: true
       Use rainbow: true
@@ -437,7 +437,7 @@ Visualization Manager:
         Depth: 5
         Durability Policy: Volatile
         History Policy: Keep Last
-        Reliability Policy: Reliable
+        Reliability Policy: Best Effort
         Value: /cameras_head/left/image_raw
       Value: true
       Visibility:
@@ -478,7 +478,7 @@ Visualization Manager:
         Durability Policy: Volatile
         Filter size: 10
         History Policy: Keep Last
-        Reliability Policy: Reliable
+        Reliability Policy: Best Effort
         Value: /gripper_camera/depth/color/points
       Use Fixed Frame: true
       Use rainbow: true
@@ -512,7 +512,7 @@ Visualization Manager:
         Durability Policy: Volatile
         Filter size: 10
         History Policy: Keep Last
-        Reliability Policy: Reliable
+        Reliability Policy: Best Effort
         Value: /lidar_points_left
       Use Fixed Frame: true
       Use rainbow: true
@@ -546,7 +546,7 @@ Visualization Manager:
         Durability Policy: Volatile
         Filter size: 10
         History Policy: Keep Last
-        Reliability Policy: Reliable
+        Reliability Policy: Best Effort
         Value: /lidar_points_right
       Use Fixed Frame: true
       Use rainbow: true

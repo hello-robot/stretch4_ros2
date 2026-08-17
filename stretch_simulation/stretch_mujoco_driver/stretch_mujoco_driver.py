@@ -1017,17 +1017,17 @@ class StretchMujocoDriver(Node):
         self.laser_scan_pub = self.create_publisher(
             LaserScan,
             "/scan_filtered",
-            qos_profile=QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE),
+            qos_profile=QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT),
         )
         self.lidar_left_pub = self.create_publisher(
             PointCloud2,
             "/lidar_points_left",
-            qos_profile=QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE),
+            qos_profile=QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT),
         )
         self.lidar_right_pub = self.create_publisher(
             PointCloud2,
             "/lidar_points_right",
-            qos_profile=QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE),
+            qos_profile=QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT),
         )
 
         active_cameras = [
@@ -1042,7 +1042,7 @@ class StretchMujocoDriver(Node):
                 Image,
                 get_camera_topic_name(camera),
                 qos_profile=QoSProfile(
-                    depth=1, reliability=ReliabilityPolicy.RELIABLE
+                    depth=1, reliability=ReliabilityPolicy.BEST_EFFORT
                 ),
             )
             for camera in active_cameras
@@ -1052,7 +1052,7 @@ class StretchMujocoDriver(Node):
                 CompressedImage,
                 f"{get_camera_topic_name(camera)}/compressed",
                 qos_profile=QoSProfile(
-                    depth=1, reliability=ReliabilityPolicy.RELIABLE
+                    depth=1, reliability=ReliabilityPolicy.BEST_EFFORT
                 ),
             )
             for camera in active_cameras
@@ -1062,7 +1062,7 @@ class StretchMujocoDriver(Node):
                 PointCloud2,
                 get_camera_pointcloud_topic_name(camera),
                 qos_profile=QoSProfile(
-                    depth=1, reliability=ReliabilityPolicy.RELIABLE
+                    depth=1, reliability=ReliabilityPolicy.BEST_EFFORT
                 ),
             )
             for camera in active_cameras
