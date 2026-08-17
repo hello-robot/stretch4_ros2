@@ -215,6 +215,10 @@ class VisionTopics(str, Enum):
         return f"{VisionTopics.GRIPPER_CAMERA_NAMESPACE.value}/{camera_name}/{VisionTopics._COMPRESSED.value}"
 
     @staticmethod
+    def gripper_image_rect(camera_name: str) -> str:
+        return f"{VisionTopics.GRIPPER_CAMERA_NAMESPACE.value}/{camera_name}/{VisionTopics._IMAGE_RECT.value}"
+
+    @staticmethod
     def gripper_camera_info(camera_name: str) -> str:
         return f"{VisionTopics.GRIPPER_CAMERA_NAMESPACE.value}/{camera_name}/{VisionTopics._CAMERA_INFO.value}"
 

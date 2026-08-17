@@ -36,6 +36,7 @@ from stretch4_body.subsystem.cameras.enums.rgb_camera import RGBCameras
 
 from stretch_python_bridge import compressed_format_with_sequence
 
+from stretch_core.vision.rectify import CameraRectifier
 from stretch_core.vision.ros_messages import DeviceClockOffset, create_timestamp
 from stretch_core.vision.vision_topics import (
     VisionTopics,
@@ -93,8 +94,15 @@ class LuxonisCameraNode(Node):
         self.publishers_topics = {}
         self.compressed_publishers = {}
         self.rotated_publishers = {}
+        self.rect_publishers = {}
         self.info_publishers = {}
         self.camera_info = {}
+
+        # Which RGBCameras member each published camera name maps to, and the rectifier built from
+        # its calibration. Rectifiers are created on first use, since a camera nobody subscribes to
+        # on image_rect should not pay for loading a calibration or building remap tables.
+        self.camera_types = {}
+        self.rectifiers = {}
 
         # Sensor data (images, camera info) is published Best Effort
         self.sensor_qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT)
@@ -112,8 +120,11 @@ class LuxonisCameraNode(Node):
             if self.use_compressed:
                 self.compressed_publishers['left'] = self.create_publisher(
                     CompressedImage, VisionTopics.gripper_compressed('left'), self.sensor_qos)
+            self.rect_publishers['left'] = self.create_publisher(
+                Image, VisionTopics.gripper_image_rect('left'), self.sensor_qos)
             self.info_publishers['left'] = self.create_publisher(
                 CameraInfo, VisionTopics.gripper_camera_info('left'), self.sensor_qos)
+            self.camera_types['left'] = RGBCameras.gripper_left
             self.camera_info['left'] = self.load_camera_info_from_enum(RGBCameras.gripper_left)
 
             # Right camera
@@ -122,8 +133,11 @@ class LuxonisCameraNode(Node):
             if self.use_compressed:
                 self.compressed_publishers['right'] = self.create_publisher(
                     CompressedImage, VisionTopics.gripper_compressed('right'), self.sensor_qos)
+            self.rect_publishers['right'] = self.create_publisher(
+                Image, VisionTopics.gripper_image_rect('right'), self.sensor_qos)
             self.info_publishers['right'] = self.create_publisher(
                 CameraInfo, VisionTopics.gripper_camera_info('right'), self.sensor_qos)
+            self.camera_types['right'] = RGBCameras.gripper_right
             self.camera_info['right'] = self.load_camera_info_from_enum(RGBCameras.gripper_right)
 
             # Depth camera (named stereo)
@@ -153,8 +167,11 @@ class LuxonisCameraNode(Node):
                 if self.publish_rotated:
                     self.rotated_publishers[camera_name] = self.create_publisher(
                         Image, VisionTopics.rotated_image(camera_name), self.sensor_qos)
+                self.rect_publishers[camera_name] = self.create_publisher(
+                    Image, VisionTopics.image_rect(camera_name), self.sensor_qos)
                 self.info_publishers[camera_name] = self.create_publisher(
                     CameraInfo, VisionTopics.camera_info(camera_name), self.sensor_qos)
+                self.camera_types[camera_name] = camera_type
                 self.camera_info[camera_name] = self.load_camera_info_from_enum(camera_type)
 
         # Initialize thread state
@@ -211,6 +228,23 @@ class LuxonisCameraNode(Node):
                 self.publish_head_frames()
         except Exception as e:
             self.get_logger().error(f'Error in publish loop: {e}')
+
+    def get_rectifier(self, camera_name: str) -> CameraRectifier | None:
+        """The rectifier for a camera, built the first time it is asked for.
+
+        A camera whose rectifier cannot be built caches None, so a missing calibration costs one
+        error rather than one per frame.
+        """
+        if camera_name in self.rectifiers:
+            return self.rectifiers[camera_name]
+
+        rectifier = None
+        try:
+            rectifier = CameraRectifier(self.camera_types[camera_name])
+        except Exception as ex:
+            self.get_logger().error(f"Cannot rectify frames for {camera_name}: {ex}")
+        self.rectifiers[camera_name] = rectifier
+        return rectifier
 
     def create_stamp(self, device_seconds: float):
         """The frame's timestamp as a ROS Time, on the system clock unless asked otherwise."""
@@ -278,6 +312,21 @@ class LuxonisCameraNode(Node):
                     rotated_publisher.publish(rotated_msg)
             except Exception as ex:
                 self.get_logger().error(f"Failed to rotate and publish image for {camera_name}: {ex}")
+
+        rect_publisher = self.rect_publishers.get(camera_name)
+        if rect_publisher is not None and rect_publisher.get_subscription_count() > 0:
+            rectifier = self.get_rectifier(camera_name)
+            if rectifier is not None:
+                try:
+                    if image is None:
+                        image = self.decode_if_needed(img_frame)
+                    if image is not None:
+                        rect_msg = ros2_numpy.msgify(Image, rectifier.rectify(image), encoding='bgr8')
+                        rect_msg.header.stamp = stamp
+                        rect_msg.header.frame_id = frame_id
+                        rect_publisher.publish(rect_msg)
+                except Exception as ex:
+                    self.get_logger().error(f"Failed to rectify and publish image for {camera_name}: {ex}")
 
         if camera_name not in self.camera_info or self.camera_info[camera_name] is None:
             raise RuntimeError(f"Camera calibration file for {camera_name} is missing or could not be loaded!")
