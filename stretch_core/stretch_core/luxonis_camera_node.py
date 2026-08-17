@@ -60,7 +60,7 @@ class LuxonisCameraNode(Node):
         self.camera_info = {}
 
         # Sensor data (images, camera info) is published Best Effort
-        self.sensor_qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
+        self.sensor_qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT)
 
         if self.is_gripper:
             # Gripper camera topics as requested and verified:

@@ -1,5 +1,4 @@
 import os
-from pathlib import Path
 
 from ament_index_python import get_package_share_directory
 from launch import LaunchDescription
@@ -7,10 +6,6 @@ from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
-from stretch_core.vision.vision_topics import (
-    VisionTopics,
-    get_camera_calibration_file_path,
-)
 from hello_helpers.launch_utils import get_rviz_node
 
 def is_launch_config_true(context, name):
@@ -75,27 +70,8 @@ def launch_setup(context, *args, **kwargs):
         output="both",
     )
 
-    camera_info_nodes = []
-    for camera_name in ["left", "right", "center"]:
-        calibration_file_path = get_camera_calibration_file_path(camera_name)
-        if is_launch_config_true(context, f"use_{camera_name}") and Path(calibration_file_path).exists():
-            camera_info_nodes.append(
-                Node(
-                    package="stretch_core",
-                    executable="camera_info_publisher",
-                    name=f"camera_info_publisher_{camera_name}",
-                    parameters=[
-                        {
-                            "camera_name": camera_name,
-                        }
-                    ],
-                )
-            )
-        else:
-            print(f"{camera_name} does not have a calibration file at {calibration_file_path}.")
-
     rviz_config_path = os.path.join(
         get_package_share_directory("stretch_core"), "rviz", "cameras_head.rviz"
     )
 
-    return [camera_node] + camera_info_nodes + get_rviz_node(rviz_config_path)
+    return [camera_node] + get_rviz_node(rviz_config_path)

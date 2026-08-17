@@ -8,6 +8,7 @@ import yaml
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy
 from rcl_interfaces.msg import ParameterDescriptor
 from sensor_msgs.msg import Image, CameraInfo, PointCloud2
 
@@ -60,7 +61,10 @@ class RGBDCameraNode(Node):
         self.depth_info_publishers = {}
         self.points_publishers = {}
         self.camera_info = {}
-        
+
+        # Sensor data (images, camera info, point clouds) is published Best Effort
+        self.sensor_qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT)
+
         self.get_logger().info("Configuring RGBD Node...")
         
 
@@ -68,23 +72,23 @@ class RGBDCameraNode(Node):
         for cam in ['left', 'right', 'center']:
             if getattr(self, f"use_{cam}"):
                 self.publishers_topics[cam] = self.create_publisher(
-                    Image, VisionTopics.image_raw(cam), 10)
+                    Image, VisionTopics.image_raw(cam), self.sensor_qos)
                 
                 if self.publish_rotated:
                     self.rotated_publishers[cam] = self.create_publisher(
-                        Image, VisionTopics.rotated_image(cam), 10)
+                        Image, VisionTopics.rotated_image(cam), self.sensor_qos)
                         
                 self.info_publishers[cam] = self.create_publisher(
-                    CameraInfo, VisionTopics.camera_info(cam), 10)
+                    CameraInfo, VisionTopics.camera_info(cam), self.sensor_qos)
                     
                 self.depth_publishers[cam] = self.create_publisher(
-                    Image, VisionTopics.depth(cam), 10)
+                    Image, VisionTopics.depth(cam), self.sensor_qos)
                     
                 self.depth_info_publishers[cam] = self.create_publisher(
-                    CameraInfo, VisionTopics.depth_camera_info(cam), 10)
+                    CameraInfo, VisionTopics.depth_camera_info(cam), self.sensor_qos)
                     
                 self.points_publishers[cam] = self.create_publisher(
-                    PointCloud2, VisionTopics.points(cam), 10)
+                    PointCloud2, VisionTopics.points(cam), self.sensor_qos)
                     
                 # Load calibration via RGBCameras enum
                 if cam == 'left':
@@ -97,15 +101,15 @@ class RGBDCameraNode(Node):
         # Configure gripper camera if enabled
         if self.use_gripper:
             self.publishers_topics['gripper'] = self.create_publisher(
-                Image, VisionTopics.gripper_image_raw("right"), 10)
+                Image, VisionTopics.gripper_image_raw("right"), self.sensor_qos)
             self.info_publishers['gripper'] = self.create_publisher(
-                CameraInfo, VisionTopics.gripper_camera_info("right"), 10)
+                CameraInfo, VisionTopics.gripper_camera_info("right"), self.sensor_qos)
             self.depth_publishers['gripper'] = self.create_publisher(
-                Image, VisionTopics.gripper_image_raw("stereo"), 10)
+                Image, VisionTopics.gripper_image_raw("stereo"), self.sensor_qos)
             self.depth_info_publishers['gripper'] = self.create_publisher(
-                CameraInfo, VisionTopics.gripper_camera_info("stereo"), 10)
+                CameraInfo, VisionTopics.gripper_camera_info("stereo"), self.sensor_qos)
             self.points_publishers['gripper'] = self.create_publisher(
-                PointCloud2, VisionTopics.gripper_stereo_points(), 10)
+                PointCloud2, VisionTopics.gripper_stereo_points(), self.sensor_qos)
 
             # Load calibration via RGBCameras enum
             self.camera_info['gripper'] = self.load_camera_info_from_enum(RGBCameras.gripper_right)
