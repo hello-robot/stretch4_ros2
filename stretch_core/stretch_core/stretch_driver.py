@@ -302,28 +302,20 @@ class StretchDriver(Node):
 
             acceleration_param = self.get_parameter_or(f"joint_acceleration.{joint.split("_joint")[0]}",None).value
 
-<<<<<<< HEAD
             joint_velocity = jointjog_msg.velocities[i]
             duration = jointjog_msg.duration
 
-            if "gripper" in joint: 
-                joint_velocity *= 300
+            if "gripper" in joint:
+                joint_clean = joint.split('_joint')[0]
+                joint_enum = RobotJoints.get_joint_by_name(joint_clean)
+                if joint_enum:
+                    joint_velocity = joint_enum.urdf_to_subsystem(joint_velocity)
 
             if "wrist" in joint:
                 # account for move_by (lack of velocity control)
                 joint_velocity *= duration
 
             self.set_vel_functions[joint](joint_velocity, acceleration_param)
-=======
-            velocity_val = jointjog_msg.velocities[i]
-            if "gripper" in joint:
-                joint_clean = joint.split('_joint')[0]
-                joint_enum = RobotJoints.get_joint_by_name(joint_clean)
-                if joint_enum:
-                    velocity_val = joint_enum.urdf_to_subsystem(velocity_val)
-
-            self.set_vel_functions[joint](velocity_val, acceleration_param)
->>>>>>> 0842e1a (Use updated RobotJoint utils for pg4 and sg4 support)
 
         # Set timeout (TODO)
         self.robot.logger.debug(str(self.robot.cmd_dict))
@@ -478,6 +470,8 @@ class StretchDriver(Node):
         is_runstopped_msg = DiagnosticStatus(name="is_runstopped")
         in_collision_msg = DiagnosticStatus(name="in_collision")
 
+        end_of_arm_joint_names = [j.value for j in RobotJoints.get_end_of_arm_joints() if j.value]
+
         for cg in self.joint_trajectory_action.command_groups:
             pos, vel, eff = cg.joint_state(robot_status)
 
@@ -488,14 +482,14 @@ class StretchDriver(Node):
                     joint_state.velocity.append(vel/4.0)
                     joint_state.effort.append(eff)
             elif cg.name == "gripper_joint":
-                for link in ['gripper_finger_left_joint', 'gripper_finger_right_joint']:
+                for link in RobotJoints.gripper.tool_joints:
                     joint_state.name.append(link)
                     joint_state.position.append(pos)
                     joint_state.velocity.append(vel)
                     joint_state.effort.append(eff)
             elif cg.name == "parallel_gripper_joint":
                 finger_pos = -pos / 2.0
-                for link in ['finger_left_joint', 'finger_right_joint']:
+                for link in RobotJoints.gripper.tool_joints:
                     joint_state.name.append(link)
                     joint_state.position.append(finger_pos)
                     joint_state.velocity.append(vel)
@@ -517,9 +511,9 @@ class StretchDriver(Node):
 
             joint_status_key = cg.name.replace("_joint","")
             if joint_status_key == "gripper":
-                joint_status_key = "stretch_gripper"
+                joint_status_key = RobotJoints.gripper.value
 
-            if joint_status_key in ["wrist_roll", "wrist_pitch", "wrist_yaw", "stretch_gripper", "parallel_gripper"]:
+            if joint_status_key in end_of_arm_joint_names:
                 status_dict = robot_status["end_of_arm"][joint_status_key]
                 is_homed = bool(status_dict.get('pos_calibrated', False))
                 is_homing = bool(status_dict.get('is_homing', False))
