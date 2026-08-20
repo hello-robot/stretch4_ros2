@@ -37,6 +37,7 @@ from stretch4_body.subsystem.cameras.enums.rgb_camera import RGBCameras
 from stretch_python_bridge import compressed_format_with_sequence
 
 from stretch_core.vision.rectify import CameraRectifier
+from stretch_core.vision.stereo_rectify import StereoRectifier
 from stretch_core.vision.ros_messages import DeviceClockOffset, create_timestamp
 from stretch_core.vision.vision_topics import (
     VisionTopics,
@@ -52,6 +53,13 @@ class LuxonisCameraNode(Node):
         self.declare_parameter('use_right', True)
         self.declare_parameter('use_center', True)
         self.declare_parameter('is_gripper', False)
+        self.declare_parameter('publish_rotated', True)
+        self.declare_parameter(
+            'publish_stereo',
+            True,
+            ParameterDescriptor(description=(
+                "If true, publish the head cameras as a rectified, row-aligned stereo pair on "
+                "/cameras_head/stereo/{left,right}/. Needs both head cameras enabled.")))
         self.declare_parameter('camera_namespace', 'camera')
         self.declare_parameter(
             'use_compressed',
@@ -80,6 +88,7 @@ class LuxonisCameraNode(Node):
         self.use_right = self.get_parameter('use_right').value
         self.use_center = self.get_parameter('use_center').value
         self.is_gripper = self.get_parameter('is_gripper').value
+        self.publish_stereo = self.get_parameter('publish_stereo').value
         self.camera_namespace = self.get_parameter('camera_namespace').value
         self.use_compressed = self.get_parameter('use_compressed').value
         self.use_system_timestamp = self.get_parameter('use_system_timestamp').value
@@ -93,6 +102,12 @@ class LuxonisCameraNode(Node):
         self.compressed_publishers = {}
         self.rotated_publishers = {}
         self.rect_publishers = {}
+        self.stereo_publishers = {}
+        self.stereo_info_publishers = {}
+        # Built on first use, like the per-camera rectifiers: a pair nobody subscribes to should not
+        # pay for loading calibration and building remap tables.
+        self.stereo_rectifier = None
+        self.stereo_camera_info = {}
         self.info_publishers = {}
         self.camera_info = {}
 
@@ -171,6 +186,16 @@ class LuxonisCameraNode(Node):
                 self.camera_types[camera_name] = camera_type
                 self.camera_info[camera_name] = self.load_camera_info_from_enum(camera_type)
 
+            if self.publish_stereo and self.use_left and self.use_right:
+                for side in ('left', 'right'):
+                    self.stereo_publishers[side] = self.create_publisher(
+                        Image, VisionTopics.stereo_image_rect(side), self.sensor_qos)
+                    self.stereo_info_publishers[side] = self.create_publisher(
+                        CameraInfo, VisionTopics.stereo_camera_info(side), self.sensor_qos)
+            elif self.publish_stereo:
+                self.get_logger().info(
+                    "Not publishing a stereo pair: it needs both the left and right head cameras.")
+
         # Initialize thread state
         self.running = True
         self.publish_thread = threading.Thread(target=self.publish_loop, daemon=True)
@@ -242,6 +267,73 @@ class LuxonisCameraNode(Node):
             self.get_logger().error(f"Cannot rectify frames for {camera_name}: {ex}")
         self.rectifiers[camera_name] = rectifier
         return rectifier
+
+    def get_stereo_rectifier(self):
+        """The head stereo rectifier, built the first time it is asked for.
+
+        A failure caches False so a missing or unusable calibration costs one error rather than one
+        per frame.
+        """
+        if self.stereo_rectifier is None:
+            try:
+                self.stereo_rectifier = StereoRectifier()
+                self.stereo_camera_info = {
+                    side: self.stereo_rectifier.camera_info(side) for side in ('left', 'right')
+                }
+                self.get_logger().info(
+                    f"Head stereo pair rectified with a {self.stereo_rectifier.baseline_m:.4f} m baseline.")
+            except Exception as ex:
+                self.get_logger().error(f"Cannot publish a head stereo pair: {ex}")
+                self.stereo_rectifier = False
+        return self.stereo_rectifier or None
+
+    def publish_head_stereo_pair(self, frame):
+        """Publishes the head cameras as a rectified, row-aligned stereo pair.
+
+        Each camera feeds the stereo side of the same name. That only works because the rectifier
+        folds a 180 degree roll into both rectification rotations: without it the pair comes out
+        upside down, and an upside-down pair also has its left and right reversed.
+
+        Frames go in UNROTATED. All of the mounting roll lives in the rectification rotations, so
+        applying the usual rotate_k here would double-correct it.
+        """
+        if not self.stereo_publishers:
+            return
+        if not any(p.get_subscription_count() > 0 for p in self.stereo_publishers.values()):
+            return
+
+        rectifier = self.get_stereo_rectifier()
+        if rectifier is None:
+            return
+
+        sources = {'left': getattr(frame, 'left', None), 'right': getattr(frame, 'right', None)}
+        if any(f is None or f.image is None for f in sources.values()):
+            return
+
+        # One stamp for both images, or the stereo sync downstream will never pair them.
+        stamp = self.create_stamp(sources['left'].timestamp)
+
+        for side, img_frame in sources.items():
+            try:
+                image = self.decode_if_needed(img_frame)
+                if image is None:
+                    return
+                rectified = (rectifier.rectify_left(image) if side == 'left'
+                             else rectifier.rectify_right(image))
+                frame_id = VisionFrames.head_stereo_frame(side)
+
+                img_msg = ros2_numpy.msgify(Image, rectified, encoding='bgr8')
+                img_msg.header.stamp = stamp
+                img_msg.header.frame_id = frame_id
+                self.stereo_publishers[side].publish(img_msg)
+
+                info_msg = self.stereo_camera_info[side]
+                info_msg.header.stamp = stamp
+                info_msg.header.frame_id = frame_id
+                self.stereo_info_publishers[side].publish(info_msg)
+            except Exception as ex:
+                self.get_logger().error(f"Failed to publish the {side} stereo image: {ex}")
+                return
 
     def create_stamp(self, device_seconds: float):
         """The frame's timestamp as a ROS Time, on the system clock unless asked otherwise."""
@@ -425,6 +517,7 @@ class LuxonisCameraNode(Node):
                     publish_head_image_and_info(frame.right, 'right')
                 if self.use_center and hasattr(frame, 'center'):
                     publish_head_image_and_info(frame.center, 'center')
+                self.publish_head_stereo_pair(frame)
             else:
                 # Single ImageFrame
                 publish_head_image_and_info(frame, enabled[0])
