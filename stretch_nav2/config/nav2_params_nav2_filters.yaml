@@ -1,0 +1,31 @@
+# Overlay enabling KeepoutFilter + SpeedFilter on costmaps.
+# Merge after nav2_params_mppi.yaml via MultiYaml.
+
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      filters: ["keepout_filter", "speed_filter"]
+      keepout_filter:
+        plugin: "nav2_costmap_2d::KeepoutFilter"
+        enabled: True
+        filter_info_topic: "/keepout_costmap_filter_info"
+        transform_tolerance: 0.1
+      speed_filter:
+        plugin: "nav2_costmap_2d::SpeedFilter"
+        enabled: True
+        filter_info_topic: "/speed_costmap_filter_info"
+        transform_tolerance: 0.1
+        speed_limit_topic: "/speed_limit"
+
+# from https://docs.nav2.org/tutorials/docs/navigation2_with_speed_filter.html
+# no speed filter on local costmap based on nav2 documentation specifically it says
+# You can place the plugin either in the global_costmap section in nav2_params.yaml to have speed restriction mask applied to global costmap or in the local_costmap to apply speed mask to the local costmap. However, SpeedFilter plugin should never be enabled simultaneously for global and local costmaps.
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      filters: ["keepout_filter"]
+      keepout_filter:
+        plugin: "nav2_costmap_2d::KeepoutFilter"
+        enabled: True
+        filter_info_topic: "/keepout_costmap_filter_info"
+        transform_tolerance: 0.1

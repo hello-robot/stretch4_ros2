@@ -29,6 +29,7 @@ def generate_launch_description():
     navigation_launch = IncludeLaunchDescription(
         PathJoinSubstitution([stretch_navigation_path, 'launch', 'include', 'nav_core.launch.py']),
         launch_arguments={
+            'map': LaunchConfiguration('map'),
             'params_file': MultiYaml([
                 PathJoinSubstitution([stretch_navigation_path, 'config', 'original_nav2_params.yaml']),
                 PathJoinSubstitution([stretch_navigation_path, 'config', 'nav2_params_core.yaml']),
@@ -41,6 +42,13 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+        DeclareLaunchArgument(
+            'map',
+            default_value=PathJoinSubstitution([
+                stretch_navigation_path, 'maps', 'dual_ds3.yaml'
+            ]),
+            description='Full path to the map.yaml file to use for navigation',
+        ),
         DeclareLaunchArgument(
             'tool_preset',
             default_value='auto',
