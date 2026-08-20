@@ -52,7 +52,6 @@ class LuxonisCameraNode(Node):
         self.declare_parameter('use_right', True)
         self.declare_parameter('use_center', True)
         self.declare_parameter('is_gripper', False)
-        self.declare_parameter('publish_rotated', True)
         self.declare_parameter('camera_namespace', 'camera')
         self.declare_parameter(
             'use_compressed',
@@ -81,7 +80,6 @@ class LuxonisCameraNode(Node):
         self.use_right = self.get_parameter('use_right').value
         self.use_center = self.get_parameter('use_center').value
         self.is_gripper = self.get_parameter('is_gripper').value
-        self.publish_rotated = self.get_parameter('publish_rotated').value
         self.camera_namespace = self.get_parameter('camera_namespace').value
         self.use_compressed = self.get_parameter('use_compressed').value
         self.use_system_timestamp = self.get_parameter('use_system_timestamp').value
@@ -164,9 +162,8 @@ class LuxonisCameraNode(Node):
                 if self.use_compressed:
                     self.compressed_publishers[camera_name] = self.create_publisher(
                         CompressedImage, VisionTopics.compressed(camera_name), self.sensor_qos)
-                if self.publish_rotated:
-                    self.rotated_publishers[camera_name] = self.create_publisher(
-                        Image, VisionTopics.rotated_image(camera_name), self.sensor_qos)
+                self.rotated_publishers[camera_name] = self.create_publisher(
+                    Image, VisionTopics.rotated_image(camera_name), self.sensor_qos)
                 self.rect_publishers[camera_name] = self.create_publisher(
                     Image, VisionTopics.image_rect(camera_name), self.sensor_qos)
                 self.info_publishers[camera_name] = self.create_publisher(
@@ -416,7 +413,7 @@ class LuxonisCameraNode(Node):
                     img_frame,
                     camera_name,
                     VisionFrames.camera_frame(camera_name),
-                    rotate_k=VisionFrames.camera_frame_number_of_rotations(camera_name) if self.publish_rotated else None,
+                    rotate_k=VisionFrames.camera_frame_number_of_rotations(camera_name),
                 )
 
             # Check if it is a SyncedImageFrame or a single ImageFrame

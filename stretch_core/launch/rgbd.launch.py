@@ -46,11 +46,6 @@ def generate_launch_description():
         default_value="false",
         description="If true, stream the gripper camera.",
     )
-    publish_rotated = DeclareLaunchArgument(
-        "publish_rotated",
-        default_value="false",
-        description="If true, publish rotated color image frames on rotated_image topic.",
-    )
 
     launch_args = [
         use_rviz_arg,
@@ -58,7 +53,6 @@ def generate_launch_description():
         use_right,
         use_center,
         use_gripper,
-        publish_rotated,
     ]
 
     return LaunchDescription(launch_args + [OpaqueFunction(function=launch_setup)])
@@ -136,7 +130,6 @@ def launch_setup(context, *args, **kwargs):
     is_use_right = is_launch_config_true(context, "use_right")
     is_use_center = is_launch_config_true(context, "use_center")
     is_use_gripper = is_launch_config_true(context, "use_gripper")
-    is_publish_rotated = is_launch_config_true(context, "publish_rotated")
 
     has_active_head, has_active_gripper, has_active_lidar = check_active_topics()
 
@@ -153,7 +146,6 @@ def launch_setup(context, *args, **kwargs):
                     'use_left': 'true' if is_use_left else 'false',
                     'use_right': 'true' if is_use_right else 'false',
                     'use_center': 'true' if is_use_center else 'false',
-                    'publish_rotated': 'true' if is_publish_rotated else 'false',
                 }.items()
             )
         )
@@ -188,7 +180,6 @@ def launch_setup(context, *args, **kwargs):
                 "use_right": is_use_right,
                 "use_center": is_use_center,
                 "use_gripper": is_use_gripper,
-                "publish_rotated": is_publish_rotated,
             }
         ],
         output="both",

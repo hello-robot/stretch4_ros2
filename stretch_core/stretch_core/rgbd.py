@@ -44,14 +44,12 @@ class RGBDCameraNode(Node):
         self.declare_parameter('use_right', True)
         self.declare_parameter('use_center', False)
         self.declare_parameter('use_gripper', False)
-        self.declare_parameter('publish_rotated', False)
         
         # Read parameters
         self.use_left = self.get_parameter('use_left').value
         self.use_right = self.get_parameter('use_right').value
         self.use_center = self.get_parameter('use_center').value
         self.use_gripper = self.get_parameter('use_gripper').value
-        self.publish_rotated = self.get_parameter('publish_rotated').value
         
         # Publishers and camera info caches
         self.publishers_topics = {}
@@ -74,9 +72,8 @@ class RGBDCameraNode(Node):
                 self.publishers_topics[cam] = self.create_publisher(
                     Image, VisionTopics.image_raw(cam), self.sensor_qos)
                 
-                if self.publish_rotated:
-                    self.rotated_publishers[cam] = self.create_publisher(
-                        Image, VisionTopics.rotated_image(cam), self.sensor_qos)
+                self.rotated_publishers[cam] = self.create_publisher(
+                    Image, VisionTopics.rotated_image(cam), self.sensor_qos)
                         
                 self.info_publishers[cam] = self.create_publisher(
                     CameraInfo, VisionTopics.camera_info(cam), self.sensor_qos)
@@ -196,7 +193,7 @@ class RGBDCameraNode(Node):
         self.publishers_topics[camera_name].publish(img_msg)
         
         # 2. Publish Rotated Color Image message (Head only)
-        if camera_name != 'gripper' and self.publish_rotated:
+        if camera_name != 'gripper':
             try:
                 pub = self.rotated_publishers.get(camera_name)
                 if pub is not None and pub.get_subscription_count() > 0:

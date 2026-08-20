@@ -31,11 +31,6 @@ def generate_launch_description():
         "use_center",
         default_value="true",
     )
-    publish_rotated = DeclareLaunchArgument(
-        "publish_rotated",
-        default_value="true",
-        description="If true, publish rotated image frames on rotated_image topic.",
-    )
     use_compressed = DeclareLaunchArgument(
         "use_compressed",
         default_value="true",
@@ -60,7 +55,6 @@ def generate_launch_description():
         use_left,
         use_right,
         use_center,
-        publish_rotated,
         use_compressed,
         use_system_timestamp,
     ]
@@ -72,7 +66,6 @@ def launch_setup(context, *args, **kwargs):
     is_use_left = is_launch_config_true(context, "use_left")
     is_use_right = is_launch_config_true(context, "use_right")
     is_use_center = is_launch_config_true(context, "use_center")
-    is_publish_rotated = is_launch_config_true(context, "publish_rotated")
     is_use_compressed = is_launch_config_true(context, "use_compressed")
     is_use_system_timestamp = is_launch_config_true(context, "use_system_timestamp")
 
@@ -85,7 +78,6 @@ def launch_setup(context, *args, **kwargs):
                 "use_left": is_use_left,
                 "use_right": is_use_right,
                 "use_center": is_use_center,
-                "publish_rotated": is_publish_rotated,
                 "use_compressed": is_use_compressed,
                 "use_system_timestamp": is_use_system_timestamp,
                 "is_gripper": False,
