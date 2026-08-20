@@ -4,125 +4,44 @@ from dataclasses import dataclass
 from enum import Enum
 import rclpy
 from rclpy.node import Node
-from sensor_msgs.msg import Image, CameraInfo
-from cv_bridge import CvBridge
-import depthai as dai
+from sensor_msgs.msg import CompressedImage, Image, CameraInfo
+import ros2_numpy
 import numpy as np
+import cv2
 import yaml
 import os
+from pathlib import Path
 import threading
 from rcl_interfaces.msg import ParameterDescriptor
+from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy
 
 
+# Import stretch4_body camera stream functions
+from stretch4_body.subsystem.cameras import (
+    stream_left_camera,
+    stream_right_camera,
+    stream_center_camera,
+    stream_left_right_camera,
+    stream_left_right_center_camera,
+    stream_gripper_camera,
+    stream_left_camera_compressed,
+    stream_right_camera_compressed,
+    stream_center_camera_compressed,
+    stream_left_right_camera_compressed,
+    stream_left_right_center_camera_compressed,
+    stream_gripper_camera_compressed,
+)
 
-class RGBCameras(Enum):
-    luxonis_synced_left = 1
-    luxonis_synced_right = 2
-    luxonis_synced_center = 3
-    @property
-    def config(self):
-        if self == RGBCameras.luxonis_synced_left:
-            rotate_number_of_times = 1
-            rotate_number_of_times=0
-            return RGBCameraConfig("", image_size=(1200,1920), fps=30, camera_type=self, rotate_number_of_times=rotate_number_of_times, buffer_size=1, is_compressed=False)
-        if self == RGBCameras.luxonis_synced_right:
-            rotate_number_of_times=-1
-            rotate_number_of_times=0
-            return RGBCameraConfig("", image_size=(1200,1920), fps=30, camera_type=self, rotate_number_of_times=rotate_number_of_times, buffer_size=1, is_compressed=False)
-        if self == RGBCameras.luxonis_synced_center:
-            # image_size=(3040,4056) # Full 12MP resolution
-            image_size = (3040,4032) # Full 12MP but divisible by 32
-            # image_size = (2160,3840) # 4K resolution, the default crop from Luxonis
-            rotate_number_of_times=-1
-            rotate_number_of_times=0
-            return RGBCameraConfig("", image_size=image_size, fps=5, camera_type=self, rotate_number_of_times=rotate_number_of_times, buffer_size=1, is_compressed=True)
-        
-        raise ValueError(f"{self} does not have a device configuration")
+from stretch4_body.subsystem.cameras.enums.rgb_camera import RGBCameras
 
+from stretch_python_bridge import compressed_format_with_sequence
 
-@dataclass
-class RGBCameraConfig:
-    camera_device:str
-    image_size:tuple[int,int]
-    fps:int
-    camera_type:RGBCameras
-    rotate_number_of_times:int = 0
-    buffer_size:int = 1
-    is_compressed:bool = True
-    
-    
-def get_dai_camera(camera_type:RGBCameras):
-    if camera_type == RGBCameras.luxonis_synced_left:
-        return dai.CameraBoardSocket.CAM_C
-    if camera_type == RGBCameras.luxonis_synced_right:
-        return dai.CameraBoardSocket.CAM_B
-    if camera_type == RGBCameras.luxonis_synced_center:
-        return dai.CameraBoardSocket.CAM_A
-    
-    raise Exception(f"{camera_type} is not supported as a Luxonis device.")
-
-def create_camera_node(pipeline: dai.Pipeline, camera_config:RGBCameraConfig):
-    """
-    Takes a dai.Pipeline reference and adds a camera node to it.
-    """
-    board_socket = get_dai_camera(camera_type=camera_config.camera_type)
-
-    buffer_size = camera_config.buffer_size
-    fps = camera_config.fps
-    node = pipeline.create(dai.node.Camera)
-    node.setNumFramesPools(isp=buffer_size, raw=buffer_size, imgmanip=buffer_size)
-    node.setSensorType(dai.CameraSensorType.COLOR)
-    node.build(boardSocket=board_socket, sensorFps=fps)
-
-    camera_output = node.requestOutput(size=camera_config.image_size[::-1], fps=fps, type=dai.ImgFrame.Type.NV12, resizeMode=dai.ImgResizeMode.CROP, enableUndistortion=False)
-    
-    if camera_config.is_compressed:
-        videoEncoder = pipeline.create(dai.node.VideoEncoder)
-        videoEncoder.setDefaultProfilePreset(fps, dai.VideoEncoderProperties.Profile.MJPEG)
-        # videoEncoder.setBitrateKbps(500) # 0.5 Mbps
-        videoEncoder.setLossless(True) # Lossless only for MJPEG
-        videoEncoder.setNumFramesPool(buffer_size)
-        # videoEncoder.setQuality(90)
-        videoEncoder.build(
-            camera_output,
-            frameRate=fps
-        )
-
-    return camera_output
-
-def get_frame_from_output_queue(output_queue:dai.MessageQueue, rotate_number_of_times):
-    while True:
-        message: dai.ImgFrame|None = output_queue.get()
-        if message:
-            # time_stamp = time.monotonic()
-            #https://docs.luxonis.com/hardware/platform/deploy/frame-sync/
-            # time_stamp = message.getTimestamp().total_seconds() # Timestamp synced with the host computer clock
-            sequence_number = message.getSequenceNum()
-            color_image = message.getCvFrame()
-            if rotate_number_of_times:
-                color_image = np.rot90(color_image, k=rotate_number_of_times)
-
-            # latencyMs = (dai.Clock.now() - message.getTimestamp()).total_seconds() * 1000
-            # diffs = np.append(diffs, latencyMs)
-            # print(f"Latency: {latencyMs} ms")
-                
-            # yield color_image, time_stamp
-            yield color_image, sequence_number
-
-        # print(f"Dropped frame {output_queue.getName()}")
-
-@staticmethod
-def create_pipeline():
-    device = dai.Device(maxUsbSpeed=dai.UsbSpeed.HIGH)
-    pipeline = dai.Pipeline(defaultDevice=device)
-    
-    print('DeviceID:',device.getDeviceInfo().getDeviceId())
-    print('USB speed:',device.getUsbSpeed())
-    print('Connected cameras:',device.getConnectedCameras())
-
-    pipeline.setXLinkChunkSize(0)
-
-    return pipeline
+from stretch_core.vision.rectify import CameraRectifier
+from stretch_core.vision.ros_messages import DeviceClockOffset, create_timestamp
+from stretch_core.vision.vision_topics import (
+    VisionTopics,
+    VisionFrames,
+)
 
 class LuxonisCameraNode(Node):
     def __init__(self):
@@ -131,224 +50,395 @@ class LuxonisCameraNode(Node):
         # Declare parameters
         self.declare_parameter('use_left', True)
         self.declare_parameter('use_right', True)
-        self.declare_parameter('use_center', False)
+        self.declare_parameter('use_center', True)
+        self.declare_parameter('is_gripper', False)
         self.declare_parameter('camera_namespace', 'camera')
-        self.declare_parameter('do_sync_frames', True)
-        self.declare_parameter('sync_threshold', 4, descriptor=ParameterDescriptor(description="Number of frames to wait for before dropping a syncedframe"))
-        self.declare_parameter('left_calibration_file', '')
-        self.declare_parameter('right_calibration_file', '')
-        self.declare_parameter('center_calibration_file', '')
-        
+        self.declare_parameter(
+            'use_compressed',
+            True,
+            ParameterDescriptor(description=(
+                "If true, capture MJPEG straight off the camera and republish it on the compressed "
+                "topics. This is the fast path: nothing decodes or re-encodes, and a frame costs a "
+                "fraction of the bandwidth of raw BGR. The raw and rotated topics still work, but "
+                "they are only published while something is subscribed to them, because serving them "
+                "means decoding every frame."
+            )),
+        )
+        self.declare_parameter(
+            'use_system_timestamp',
+            True,
+            ParameterDescriptor(description=(
+                "If true, shift the camera's device timestamps onto the system clock before "
+                "stamping messages. The device clock's steadiness is kept, it is just offset so "
+                "that consumers can compare these stamps against the rest of the system. If "
+                "false, the device timestamp is published as-is."
+            )),
+        )
+
         # Get parameters
         self.use_left = self.get_parameter('use_left').value
         self.use_right = self.get_parameter('use_right').value
         self.use_center = self.get_parameter('use_center').value
+        self.is_gripper = self.get_parameter('is_gripper').value
         self.camera_namespace = self.get_parameter('camera_namespace').value
-        self.do_sync_frames:bool = self.get_parameter('do_sync_frames').value
-        self.sync_threshold:int = self.get_parameter('sync_threshold').value
+        self.use_compressed = self.get_parameter('use_compressed').value
+        self.use_system_timestamp = self.get_parameter('use_system_timestamp').value
 
-        if (not (not self.use_left and not self.use_right)) and (self.do_sync_frames and not (self.use_left or self.use_right)):
-            raise Exception("Cannot sync frames without left and right cameras, you must enable both of them with the use_left and use_right params..")
-        
-        # CV Bridge
-        self.bridge = CvBridge()
-        
-        # Publishers
+        # The device clock is shared by every camera on the device, so one offset estimator
+        # serves them all and sees more samples than a per-camera one would.
+        self.clock_offset = DeviceClockOffset() if self.use_system_timestamp else None
+
+        # Publishers and camera info caches
         self.publishers_topics = {}
+        self.compressed_publishers = {}
+        self.rotated_publishers = {}
+        self.rect_publishers = {}
         self.info_publishers = {}
         self.camera_info = {}
 
-        if self.use_left:
+        # Which RGBCameras member each published camera name maps to, and the rectifier built from
+        # its calibration. Rectifiers are created on first use, since a camera nobody subscribes to
+        # on image_rect should not pay for loading a calibration or building remap tables.
+        self.camera_types = {}
+        self.rectifiers = {}
+
+        # Sensor data (images, camera info) is published Best Effort
+        self.sensor_qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT)
+
+        if self.is_gripper:
+            # Gripper camera topics as requested and verified:
+            # left -> /cameras_gripper/left/...
+            # right -> /cameras_gripper/right/...
+            # depth (stereo) -> /cameras_gripper/stereo/...
+            self.get_logger().info("Configuring node for Gripper Camera Mode")
+            
+            # Left camera
             self.publishers_topics['left'] = self.create_publisher(
-                Image, f'{self.camera_namespace}/left/image_raw', 10)
+                Image, VisionTopics.gripper_image_raw('left'), self.sensor_qos)
+            if self.use_compressed:
+                self.compressed_publishers['left'] = self.create_publisher(
+                    CompressedImage, VisionTopics.gripper_compressed('left'), self.sensor_qos)
+            self.rect_publishers['left'] = self.create_publisher(
+                Image, VisionTopics.gripper_image_rect('left'), self.sensor_qos)
             self.info_publishers['left'] = self.create_publisher(
-                CameraInfo, f'{self.camera_namespace}/left/camera_info', 10)
-            calib_file = self.get_parameter('left_calibration_file').value
-            if calib_file:
-                self.camera_info['left'] = self.load_camera_info(calib_file)
+                CameraInfo, VisionTopics.gripper_camera_info('left'), self.sensor_qos)
+            self.camera_types['left'] = RGBCameras.gripper_left
+            self.camera_info['left'] = self.load_camera_info_from_enum(RGBCameras.gripper_left)
 
-        if self.use_right:
+            # Right camera
             self.publishers_topics['right'] = self.create_publisher(
-                Image, f'{self.camera_namespace}/right/image_raw', 10)
+                Image, VisionTopics.gripper_image_raw('right'), self.sensor_qos)
+            if self.use_compressed:
+                self.compressed_publishers['right'] = self.create_publisher(
+                    CompressedImage, VisionTopics.gripper_compressed('right'), self.sensor_qos)
+            self.rect_publishers['right'] = self.create_publisher(
+                Image, VisionTopics.gripper_image_rect('right'), self.sensor_qos)
             self.info_publishers['right'] = self.create_publisher(
-                CameraInfo, f'{self.camera_namespace}/right/camera_info', 10)
-            calib_file = self.get_parameter('right_calibration_file').value
-            if calib_file:
-                self.camera_info['right'] = self.load_camera_info(calib_file)
+                CameraInfo, VisionTopics.gripper_camera_info('right'), self.sensor_qos)
+            self.camera_types['right'] = RGBCameras.gripper_right
+            self.camera_info['right'] = self.load_camera_info_from_enum(RGBCameras.gripper_right)
 
-        if self.use_center:
-            self.publishers_topics['center'] = self.create_publisher(
-                Image, f'{self.camera_namespace}/center/image_raw', 10)
-            self.info_publishers['center'] = self.create_publisher(
-                CameraInfo, f'{self.camera_namespace}/center/camera_info', 10)
-            calib_file = self.get_parameter('center_calibration_file').value
-            if calib_file:
-                self.camera_info['center'] = self.load_camera_info(calib_file)
-        
-        # Initialize pipeline
-        self.device = None
+            # Depth camera (named stereo)
+            self.publishers_topics['stereo'] = self.create_publisher(
+                Image, VisionTopics.gripper_image_raw('stereo'), self.sensor_qos)
+            self.info_publishers['stereo'] = self.create_publisher(
+                CameraInfo, VisionTopics.gripper_camera_info('stereo'), self.sensor_qos)
+            self.camera_info['stereo'] = self.camera_info['right'] # share right camera info for depth
+                
+        else:
+            self.get_logger().info("Configuring node for Head Cameras Mode")
+            # Head cameras
+            head_cameras = {
+                'left': (self.use_left, RGBCameras.head_left),
+                'right': (self.use_right, RGBCameras.head_right),
+                'center': (self.use_center, RGBCameras.head_center),
+            }
+            for camera_name, (is_enabled, camera_type) in head_cameras.items():
+                if not is_enabled:
+                    continue
+
+                self.publishers_topics[camera_name] = self.create_publisher(
+                    Image, VisionTopics.image_raw(camera_name), self.sensor_qos)
+                if self.use_compressed:
+                    self.compressed_publishers[camera_name] = self.create_publisher(
+                        CompressedImage, VisionTopics.compressed(camera_name), self.sensor_qos)
+                self.rotated_publishers[camera_name] = self.create_publisher(
+                    Image, VisionTopics.rotated_image(camera_name), self.sensor_qos)
+                self.rect_publishers[camera_name] = self.create_publisher(
+                    Image, VisionTopics.image_rect(camera_name), self.sensor_qos)
+                self.info_publishers[camera_name] = self.create_publisher(
+                    CameraInfo, VisionTopics.camera_info(camera_name), self.sensor_qos)
+                self.camera_types[camera_name] = camera_type
+                self.camera_info[camera_name] = self.load_camera_info_from_enum(camera_type)
+
+        # Initialize thread state
         self.running = True
-        
-        self.create_pipeline()
-        
-        # Start publishing thread
         self.publish_thread = threading.Thread(target=self.publish_loop, daemon=True)
         self.publish_thread.start()
         
         self.get_logger().info('Luxonis camera node initialized')
 
-    def load_camera_info(self, calib_file):
-        """Load camera calibration from YAML file"""
+    def load_camera_info_from_enum(self, camera_type):
+        """Load camera calibration from RGBCameras.load_calibration()"""
         try:
-            # Remove file:// prefix if present
-            if calib_file.startswith('file://'):
-                calib_file = calib_file[7:]
-
-            if not os.path.exists(calib_file):
-                self.get_logger().warn(f'Calibration file not found: {calib_file}')
-                return None
-
-            with open(calib_file, 'r') as f:
-                calib = yaml.safe_load(f)
-
+            calib = camera_type.load_calibration()
             if calib is None:
                 return None
-
-            # Create CameraInfo message
+                
             info = CameraInfo()
-            info.width = calib.get('image_width', 0)
-            info.height = calib.get('image_height', 0)
-            info.distortion_model = calib.get('distortion_model', '')
+            info.width = calib.width
+            info.height = calib.height
+            info.distortion_model = calib.distortion_model.name.lower()
+            
+            # distortion coefficients d
+            info.d = calib.distortion_coefficients.flatten().tolist()
+            
+            # camera matrix k (3x3)
+            info.k = calib.camera_matrix.flatten().tolist()
+            
+            # rectification matrix r (3x3, identity by default)
+            info.r = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+            
+            # projection matrix p (3x4)
+            fx = calib.camera_matrix[0, 0]
+            fy = calib.camera_matrix[1, 1]
+            cx = calib.camera_matrix[0, 2]
+            cy = calib.camera_matrix[1, 2]
+            info.p = [fx, 0.0, cx, 0.0, 0.0, fy, cy, 0.0, 0.0, 0.0, 1.0, 0.0]
+            
+            if info.distortion_model in ["fisheye", "equidistant_with_recompute_extrinsics"]:
+                info.distortion_model = "equidistant"
+            elif info.distortion_model == "wide_angle":
+                info.distortion_model = "plumb_bob"
 
-            # Load distortion coefficients
-            if 'distortion_coefficients' in calib:
-                info.d = calib['distortion_coefficients'].get('data', [])
-
-            # Load camera matrix
-            if 'camera_matrix' in calib:
-                info.k = calib['camera_matrix'].get('data', [0.0] * 9)
-
-            # Load rectification matrix
-            if 'rectification_matrix' in calib:
-                info.r = calib['rectification_matrix'].get('data', [0.0] * 9)
-
-            # Load projection matrix
-            if 'projection_matrix' in calib:
-                info.p = calib['projection_matrix'].get('data', [0.0] * 12)
-
-            self.get_logger().info(f'Loaded calibration from {calib_file}')
             return info
-
         except Exception as e:
-            self.get_logger().error(f'Failed to load calibration file {calib_file}: {e}')
+            self.get_logger().error(f'Failed to load calibration for {camera_type.name} via RGBCameras enum: {e}')
             return None
-
-    def create_pipeline(self):
-        """Initialize DepthAI pipeline and device"""
-        try:
-            
-            self.pipeline = create_pipeline()
-            self.camera = self.pipeline
-
-            self.left_output = None
-            self.right_output = None
-            self.center_output = None
-
-            self.left = RGBCameras.luxonis_synced_left.config
-            self.right = RGBCameras.luxonis_synced_right.config
-            self.center = RGBCameras.luxonis_synced_center.config
-
-            if self.use_left:
-                node_left = create_camera_node(pipeline=self.pipeline, camera_config=self.left)
-                self.left_output = node_left.createOutputQueue(maxSize=1)
-            if self.use_right:
-                node_right = create_camera_node(pipeline=self.pipeline, camera_config=self.right)
-                self.right_output = node_right.createOutputQueue(maxSize=1)
-            if self.use_center:
-                node_center = create_camera_node(pipeline=self.pipeline, camera_config=self.center)
-                self.center_output =  node_center.createOutputQueue(maxSize=1)
-
-
-            self.pipeline.start()
-            
-            self.get_logger().info('Pipeline initialized successfully')
-            
-        except Exception as e:
-            self.get_logger().error(f'Failed to initialize pipeline: {e}')
-            raise
-    
-    
+        
     def publish_loop(self):
         """Main publishing loop running in separate thread"""
-        while self.running and rclpy.ok():
-            try:
-                self.publish_synced_frames()
-            except Exception as e:
-                self.get_logger().error(f'Error in publish loop: {e}')
-    
-    def publish_synced_frames(self):
-        """Publish synchronized frames from left/right cameras. The center camera is not synced because it uses a different FPS."""
-
-        if self.center_output is not None:
-            center_image, center_sequence_number = next(get_frame_from_output_queue(self.center_output, self.center.rotate_number_of_times))
-            self.publish_frame_data(center_image, "center")
-
-        if self.do_sync_frames and self.left_output is not None and self.right_output is not None:
-            # Do sync
-            left_image, left_sequence_number = next(get_frame_from_output_queue(self.left_output, self.left.rotate_number_of_times))
-            right_image, right_sequence_number = next(get_frame_from_output_queue(self.right_output, self.right.rotate_number_of_times))
-
-            if abs(left_sequence_number - right_sequence_number) <= self.sync_threshold:
-                self.publish_frame_data(left_image, "left")
-                self.publish_frame_data(right_image, "right")
-            else:
-                print("frames are not synced, skipping")
-        else:
-            # Publish without sync
-            if self.left_output is not None:
-                left_image, left_sequence_number = next(get_frame_from_output_queue(self.left_output, self.left.rotate_number_of_times))
-                self.publish_frame_data(left_image, "left")
-            if self.right_output is not None:
-                right_image, right_sequence_number = next(get_frame_from_output_queue(self.right_output, self.right.rotate_number_of_times))
-                self.publish_frame_data(right_image, "right")
-
-
-    
-    def publish_frame_data(self, frame, camera_name):
-        """Convert and publish a single frame"""
         try:
-
-            # Create ROS image message
-            img_msg = self.bridge.cv2_to_imgmsg(frame, encoding='bgr8')
-            img_msg.header.stamp = self.get_clock().now().to_msg()
-            img_msg.header.frame_id = f'{self.camera_namespace}/{camera_name}_optical_frame'
-
-            # Publish image
-            self.publishers_topics[camera_name].publish(img_msg)
-
-            # Publish camera info if available
-            if camera_name in self.camera_info and self.camera_info[camera_name] is not None:
-                info_msg = self.camera_info[camera_name]
-                info_msg.header = img_msg.header
-                self.info_publishers[camera_name].publish(info_msg)
-
+            if self.is_gripper:
+                self.publish_gripper_frames()
+            else:
+                self.publish_head_frames()
         except Exception as e:
-            self.get_logger().error(f'Error publishing frame for {camera_name}: {e}')
-    
+            self.get_logger().error(f'Error in publish loop: {e}')
+
+    def get_rectifier(self, camera_name: str) -> CameraRectifier | None:
+        """The rectifier for a camera, built the first time it is asked for.
+
+        A camera whose rectifier cannot be built caches None, so a missing calibration costs one
+        error rather than one per frame.
+        """
+        if camera_name in self.rectifiers:
+            return self.rectifiers[camera_name]
+
+        rectifier = None
+        try:
+            rectifier = CameraRectifier(self.camera_types[camera_name])
+        except Exception as ex:
+            self.get_logger().error(f"Cannot rectify frames for {camera_name}: {ex}")
+        self.rectifiers[camera_name] = rectifier
+        return rectifier
+
+    def create_stamp(self, device_seconds: float):
+        """The frame's timestamp as a ROS Time, on the system clock unless asked otherwise."""
+        if self.clock_offset is not None:
+            device_seconds = self.clock_offset.to_ros(device_seconds)
+        return create_timestamp(device_seconds)
+
+    def decode_if_needed(self, img_frame):
+        """The frame as raw BGR pixels, decoding the bitstream first if the camera handed us one.
+
+        Deliberately does not use ImageFrame.uncompress(), which would mutate the frame we are about to
+        republish compressed.
+        """
+        if not img_frame.is_compressed():
+            return img_frame.image
+
+        image = cv2.imdecode(img_frame.image, cv2.IMREAD_COLOR)
+        if image is None:
+            self.get_logger().error("Failed to decode a compressed frame; skipping its raw publish.")
+        return image
+
+    def publish_camera_frame(self, img_frame, camera_name: str, frame_id: str, rotate_k: int | None = None):
+        """Publishes one camera frame plus its CameraInfo.
+
+        An already-encoded frame goes out on the compressed topic as-is, which costs nothing but a
+        memcpy. The raw and rotated topics need decoded pixels, so they are only served while someone
+        is subscribed - otherwise the whole point of capturing MJPEG would be lost to a decode per frame.
+        """
+        if img_frame is None or img_frame.image is None:
+            return
+
+        stamp = self.create_stamp(img_frame.timestamp)
+
+        compressed_publisher = self.compressed_publishers.get(camera_name)
+        if img_frame.is_compressed() and compressed_publisher is not None:
+            compressed_msg = CompressedImage()
+            compressed_msg.header.stamp = stamp
+            compressed_msg.header.frame_id = frame_id
+            # ROS 2 has no header.seq, so the sensor's sequence number rides along in the format string.
+            compressed_msg.format = compressed_format_with_sequence(
+                img_frame.compression_format or "jpeg", img_frame.frame_number
+            )
+            compressed_msg.data = img_frame.image.tobytes()
+            compressed_publisher.publish(compressed_msg)
+
+        image = None
+        raw_publisher = self.publishers_topics.get(camera_name)
+        if raw_publisher is not None and raw_publisher.get_subscription_count() > 0:
+            image = self.decode_if_needed(img_frame)
+            if image is not None:
+                img_msg = ros2_numpy.msgify(Image, image, encoding='bgr8')
+                img_msg.header.stamp = stamp
+                img_msg.header.frame_id = frame_id
+                raw_publisher.publish(img_msg)
+
+        rotated_publisher = self.rotated_publishers.get(camera_name)
+        if rotate_k and rotated_publisher is not None and rotated_publisher.get_subscription_count() > 0:
+            try:
+                if image is None:
+                    image = self.decode_if_needed(img_frame)
+                if image is not None:
+                    rotated_msg = ros2_numpy.msgify(Image, np.rot90(image, k=rotate_k), encoding='bgr8')
+                    rotated_msg.header.stamp = stamp
+                    rotated_msg.header.frame_id = frame_id
+                    rotated_publisher.publish(rotated_msg)
+            except Exception as ex:
+                self.get_logger().error(f"Failed to rotate and publish image for {camera_name}: {ex}")
+
+        rect_publisher = self.rect_publishers.get(camera_name)
+        if rect_publisher is not None and rect_publisher.get_subscription_count() > 0:
+            rectifier = self.get_rectifier(camera_name)
+            if rectifier is not None:
+                try:
+                    if image is None:
+                        image = self.decode_if_needed(img_frame)
+                    if image is not None:
+                        rect_msg = ros2_numpy.msgify(Image, rectifier.rectify(image), encoding='bgr8')
+                        rect_msg.header.stamp = stamp
+                        rect_msg.header.frame_id = frame_id
+                        rect_publisher.publish(rect_msg)
+                except Exception as ex:
+                    self.get_logger().error(f"Failed to rectify and publish image for {camera_name}: {ex}")
+
+        if camera_name not in self.camera_info or self.camera_info[camera_name] is None:
+            raise RuntimeError(f"Camera calibration file for {camera_name} is missing or could not be loaded!")
+        info_msg = self.camera_info[camera_name]
+        info_msg.header.stamp = stamp
+        info_msg.header.frame_id = frame_id
+        self.info_publishers[camera_name].publish(info_msg)
+
+    def publish_gripper_frames(self):
+        self.get_logger().info(f"Starting Gripper Camera Stream (compressed={self.use_compressed})...")
+
+        # is_run_pipeline=False keeps frames exactly as the camera produced them: no decode, no
+        # rotation, no extra full-frame copy. Anything that needs raw pixels decodes on demand below.
+        stream_gripper = stream_gripper_camera_compressed if self.use_compressed else stream_gripper_camera
+        generator = stream_gripper(is_rotate=False, is_run_pipeline=False)
+
+        for synced_frame in generator:
+            if not self.running or not rclpy.ok():
+                break
+            if synced_frame is None:
+                continue
+
+            self.publish_camera_frame(synced_frame.left, 'left', VisionFrames.gripper_camera_frame('left'))
+            self.publish_camera_frame(synced_frame.right, 'right', VisionFrames.gripper_camera_frame('right'))
+
+            # 16-bit depth is not MJPEG encodable, so it stays on the raw topic.
+            if synced_frame.depth is not None:
+                frame_id = VisionFrames.gripper_camera_frame('stereo')
+                stamp = self.create_stamp(synced_frame.right.timestamp if synced_frame.right is not None else synced_frame.timestamp)
+
+                depth_publisher = self.publishers_topics['stereo']
+                if depth_publisher.get_subscription_count() > 0:
+                    img_msg = ros2_numpy.msgify(Image, synced_frame.depth, encoding='16UC1')
+                    img_msg.header.stamp = stamp
+                    img_msg.header.frame_id = frame_id
+                    depth_publisher.publish(img_msg)
+
+                if 'stereo' not in self.camera_info or self.camera_info['stereo'] is None:
+                    raise RuntimeError("Camera calibration file for gripper stereo is missing or could not be loaded!")
+                info_msg = self.camera_info['stereo']
+                info_msg.header.stamp = stamp
+                info_msg.header.frame_id = frame_id
+                self.info_publishers['stereo'].publish(info_msg)
+
+    def publish_head_frames(self):
+        self.get_logger().info(f"Starting Head Cameras Stream (compressed={self.use_compressed})...")
+
+        # Decide the correct generator depending on enabled head cameras. See publish_gripper_frames()
+        # for why nothing runs the image pipeline here.
+        if self.use_compressed:
+            single_streams = {
+                'left': stream_left_camera_compressed,
+                'right': stream_right_camera_compressed,
+                'center': stream_center_camera_compressed,
+            }
+            stream_left_right = stream_left_right_camera_compressed
+            stream_left_right_center = stream_left_right_center_camera_compressed
+        else:
+            single_streams = {
+                'left': stream_left_camera,
+                'right': stream_right_camera,
+                'center': stream_center_camera,
+            }
+            stream_left_right = stream_left_right_camera
+            stream_left_right_center = stream_left_right_center_camera
+
+        enabled = [name for name, is_enabled in (('left', self.use_left), ('right', self.use_right), ('center', self.use_center)) if is_enabled]
+
+        if self.use_left and self.use_right and self.use_center:
+            generator = stream_left_right_center(is_rotate=False, is_run_pipeline=False)
+        elif self.use_left and self.use_right:
+            generator = stream_left_right(is_rotate=False, is_run_pipeline=False)
+        elif len(enabled) == 1:
+            generator = single_streams[enabled[0]](is_rotate=False, is_run_pipeline=False)
+        else:
+            self.get_logger().warn(f"Unsupported head camera combination: {enabled or 'none selected'}!")
+            return
+
+        for frame in generator:
+            if not self.running or not rclpy.ok():
+                break
+            if frame is None:
+                continue
+
+            def publish_head_image_and_info(img_frame, camera_name):
+                self.publish_camera_frame(
+                    img_frame,
+                    camera_name,
+                    VisionFrames.camera_frame(camera_name),
+                    rotate_k=VisionFrames.camera_frame_number_of_rotations(camera_name),
+                )
+
+            # Check if it is a SyncedImageFrame or a single ImageFrame
+            if hasattr(frame, 'left') or hasattr(frame, 'right') or hasattr(frame, 'center'):
+                # SyncedImageFrame
+                if self.use_left and hasattr(frame, 'left'):
+                    publish_head_image_and_info(frame.left, 'left')
+                if self.use_right and hasattr(frame, 'right'):
+                    publish_head_image_and_info(frame.right, 'right')
+                if self.use_center and hasattr(frame, 'center'):
+                    publish_head_image_and_info(frame.center, 'center')
+            else:
+                # Single ImageFrame
+                publish_head_image_and_info(frame, enabled[0])
+
     def destroy_node(self):
-        """Clean up resources"""
         self.running = False
-        if self.publish_thread.is_alive():
+        if hasattr(self, 'publish_thread') and self.publish_thread.is_alive():
             self.publish_thread.join(timeout=1.0)
-        if self.device:
-            self.device.close()
         super().destroy_node()
 
 
 def main(args=None):
     rclpy.init(args=args)
     node = LuxonisCameraNode()
-    
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
@@ -360,4 +450,3 @@ def main(args=None):
 
 if __name__ == '__main__':
     main()
-

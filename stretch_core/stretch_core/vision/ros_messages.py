@@ -1,3 +1,6 @@
+import time
+from collections import deque
+
 import cv2
 import numpy as np
 import ros2_numpy
@@ -7,6 +10,7 @@ from sensor_msgs_py import point_cloud2
 from array import array
 from sensor_msgs.msg._compressed_image import CompressedImage
 from sensor_msgs.msg import Image
+from builtin_interfaces.msg import Time
 
 
 def rotate_img_msg(img_msg, rotate_rgb_image_number_of_times):
@@ -82,3 +86,31 @@ def compress_depth_image(frame: np.ndarray):
     )
 
     return ros_image_compressed
+
+
+def create_timestamp(epoch_seconds:float):
+    stamp = Time()
+    stamp.sec = int(epoch_seconds)
+    stamp.nanosec = int((epoch_seconds - stamp.sec) * 1e9)
+    return stamp
+
+
+class DeviceClockOffset:
+    """Maps Luxonis frame timestamps onto the ROS system clock.
+
+    Device timing is kept because it is far steadier than host arrival time; it is
+    only shifted onto the system clock.
+    """
+
+    def __init__(self, window: int = 300):
+        self._candidates = deque(maxlen=window)
+
+    def to_ros(self, device_seconds: float, system_seconds: float | None = None) -> float:
+        if system_seconds is None:
+            system_seconds = time.time()
+        candidate = system_seconds - device_seconds
+        if abs(candidate) < 1.0:
+            # Already on the system clock, leave it alone.
+            return device_seconds
+        self._candidates.append(candidate)
+        return device_seconds + min(self._candidates)

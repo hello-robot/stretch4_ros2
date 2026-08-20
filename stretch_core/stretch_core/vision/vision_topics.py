@@ -63,6 +63,16 @@ class VisionFrames(str, Enum):
         raise ValueError(f"{camera_name} is not a valid camera name")
 
     @staticmethod
+    def gripper_camera_frame(camera_name: str) -> str:
+        if camera_name == "left":
+            return "gripper_left_camera_color_optical_frame"
+        if camera_name == "right":
+            return "gripper_right_camera_color_optical_frame"
+        if camera_name == "stereo":
+            return "gripper_stereo_camera_color_optical_frame"
+        raise ValueError(f"{camera_name} is not a valid gripper camera name")
+
+    @staticmethod
     def camera_frame_number_of_rotations(camera_name: str) -> int:
         """Number of rotations to apply to the camera image to make it portrait."""
         if camera_name == "left":
@@ -195,3 +205,27 @@ class VisionTopics(str, Enum):
         if lidar_name == "right":
             return VisionTopics._LIDAR_POINTS_RIGHT.value
         raise ValueError(f"{lidar_name} is not a valid lidar name")
+
+    @staticmethod
+    def gripper_image_raw(camera_name: str) -> str:
+        return f"{VisionTopics.GRIPPER_CAMERA_NAMESPACE.value}/{camera_name}/{VisionTopics._IMAGE_RAW.value}"
+
+    @staticmethod
+    def gripper_compressed(camera_name: str) -> str:
+        return f"{VisionTopics.GRIPPER_CAMERA_NAMESPACE.value}/{camera_name}/{VisionTopics._COMPRESSED.value}"
+
+    @staticmethod
+    def gripper_image_rect(camera_name: str) -> str:
+        return f"{VisionTopics.GRIPPER_CAMERA_NAMESPACE.value}/{camera_name}/{VisionTopics._IMAGE_RECT.value}"
+
+    @staticmethod
+    def gripper_camera_info(camera_name: str) -> str:
+        return f"{VisionTopics.GRIPPER_CAMERA_NAMESPACE.value}/{camera_name}/{VisionTopics._CAMERA_INFO.value}"
+
+    @staticmethod
+    def gripper_imu() -> str:
+        return f"{VisionTopics.GRIPPER_CAMERA_NAMESPACE.value}/imu/data"
+
+    @staticmethod
+    def gripper_stereo_points() -> str:
+        return f"{VisionTopics.GRIPPER_CAMERA_NAMESPACE.value}/stereo_left_rgbd/points"
