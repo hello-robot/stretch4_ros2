@@ -73,6 +73,18 @@ class VisionFrames(str, Enum):
         raise ValueError(f"{camera_name} is not a valid gripper camera name")
 
     @staticmethod
+    def head_stereo_frame(side: str) -> str:
+        """Optical frame of a rectified head stereo image.
+
+        Rectification rotates each camera by ~89.5 degrees, so these are NOT the physical optical
+        frames; rtabmap_glim.launch.py publishes the static transform from each camera to its
+        rectified frame.
+        """
+        if side in ("left", "right"):
+            return f"head_stereo_{side}_optical"
+        raise ValueError(f"{side} is not a valid stereo side")
+
+    @staticmethod
     def camera_frame_number_of_rotations(camera_name: str) -> int:
         """Number of rotations to apply to the camera image to make it portrait."""
         if camera_name == "left":
@@ -169,6 +181,20 @@ class VisionTopics(str, Enum):
     @staticmethod
     def image_rect(camera_name: str) -> str:
         return f"{VisionTopics.CAMERAS_NAMESPACE.value}/{camera_name}/{VisionTopics._IMAGE_RECT.value}"
+
+    @staticmethod
+    def stereo_image_rect(side: str) -> str:
+        """A rectified image of the head stereo PAIR, which is not the same as image_rect(side).
+
+        image_rect undistorts one camera on its own; these two are rectified together, so they share
+        a focal length and are row-aligned. "side" is left or right of the stereo pair, not the name
+        of the physical camera behind it.
+        """
+        return f"{VisionTopics.CAMERAS_NAMESPACE.value}/stereo/{side}/{VisionTopics._IMAGE_RECT.value}"
+
+    @staticmethod
+    def stereo_camera_info(side: str) -> str:
+        return f"{VisionTopics.CAMERAS_NAMESPACE.value}/stereo/{side}/{VisionTopics._CAMERA_INFO.value}"
 
     @staticmethod
     def depth(camera_name: str) -> str:
