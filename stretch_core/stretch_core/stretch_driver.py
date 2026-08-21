@@ -338,41 +338,6 @@ class StretchDriver(Stretch4ROSDriver):
             case _:
                 self.logger.warn(f"Unable to set position for unknown joint {joint}.")
         
-    
-    def joy_to_joint_cmd(self, joy_msg: Joy) -> JointState:
-        '''        state = jc.unpack_joy_to_gamepad_state(joy_msg)
-        tool_name = self.robot.params['tool']
-        Idx = jc.get_Idx(tool_name)
-
-        # Standard Scaling
-        MAX_VEL = 0.2
-        DEADZONE = 0.05
-
-        def get_val(axis_name, scale):
-            val = state.get(axis_name, 0.0)
-            return val * scale if abs(val) > DEADZONE else 0.0
-
-        self.robot.lift.set_velocity(get_val('left_stick_y', MAX_VEL))
-
-        if hasattr(self.robot, 'arm'):
-            self.robot.arm.set_velocity(get_val('left_stick_x', MAX_VEL))
-
-        if hasattr(Idx, 'WRIST_YAW'):
-            self.robot.end_of_arm.set_velocity('wrist_yaw', get_val('right_stick_x', MAX_VEL))        
-        if hasattr(Idx, 'WRIST_PITCH'):
-            # Dex Wrist or DW4 tools
-            self.robot.end_of_arm.set_velocity('wrist_pitch', get_val('right_stick_y', MAX_VEL))
-        if hasattr(Idx, 'WRIST_ROLL'):
-            roll_vel = 0.0
-            if state['right_shoulder_button_pressed']: roll_vel = MAX_VEL
-            if state['left_shoulder_button_pressed']: roll_vel = -MAX_VEL
-            self.robot.end_of_arm.set_velocity('wrist_roll', roll_vel)
-        if hasattr(Idx, 'GRIPPER') and 'stretch_gripper' in self.robot.end_of_arm.joints:
-            grip_vel = 0.0
-            if state['top_button_pressed']: grip_vel = MAX_VEL   # Open
-            if state['bottom_button_pressed']: grip_vel = -MAX_VEL # Close
-            self.robot.end_of_arm.set_velocity('stretch_gripper', grip_vel)'''
-
 
     def publish_child_info(self):
         #real robot driver doesn't have additional publishers

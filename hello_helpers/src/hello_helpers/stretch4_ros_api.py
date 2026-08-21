@@ -31,6 +31,11 @@ from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus
 
 import tf2_ros
 from tf2_ros.static_transform_broadcaster import StaticTransformBroadcaster
+from hello_helpers.joy_conversion import (
+    unpack_joy_to_gamepad_state,
+    unpack_gamepad_state_to_joy,
+    get_default_joy_msg,
+)
 
 
 class Stretch4ROSDriver(Node, ABC):
@@ -184,6 +189,13 @@ class Stretch4ROSDriver(Node, ABC):
             type=ParameterType.PARAMETER_DOUBLE,
             description='Velocity threshold (rad/s or m/s) below which a joint is considered settled',
         ))
+        # Gamepad parameters
+        self.declare_parameter("gamepad.dt", 1.0)
+        for joint in self.command_joints:
+            self.declare_parameter(f"gamepad.max_vel.{joint}", 0.1)
+            self.declare_parameter(f"gamepad.deadzone.{joint}", 0.05)
+
+    
 
     def _setup_common_pubs(self):
         latching_qos = QoSProfile(
@@ -614,6 +626,10 @@ class Stretch4ROSDriver(Node, ABC):
             return
         
         goal = self.joy_to_joint_cmd(joy_msg)
+        if goal is None:
+            self.logger.error(f"Joystick mapping returned None.  Check your code.")
+            return
+
         for i in range(len(goal.name)):
             joint_name = goal.name[i]
             joint_mode = self.get_parameter(f"joint_mode.{joint_name}").value
@@ -621,19 +637,68 @@ class Stretch4ROSDriver(Node, ABC):
                 case "position":
                     if len(goal.position) < len(goal.name):
                         self.logger.error(f"Joystick command mapping for position has length {len(goal.position)} (expected length {len(goal.name)} to set target for joint {joint_name} in position control mode)")
-                    self.check_and_set_pos(joint_name, goal.position[i])
+                    else:
+                        self.check_and_set_pos(joint_name, goal.position[i])
                 case "velocity":
                     if len(goal.velocity) < len(goal.name):
                         self.logger.error(f"Joystick command mapping for velocity has length {len(goal.velocity)} (expected length {len(goal.name)} to set target for joint {joint_name} in velocity control mode)")
-                    self.check_and_set_vel(joint_name, goal.velocity[i])
+                    else:
+                        self.check_and_set_vel(joint_name, goal.velocity[i])
                 case _:
                     self.logger.warn(f"Joint in unsupported mode {joint_mode}.  Joint must be in position or velocity mode to accept joystick control.  Skipping this joint.")
             
         
+    # optionally re-implement this to get different joy behavior
+    def joy_to_joint_cmd(self, joy):
+        state = unpack_joy_to_gamepad_state(joy)
         
-    @abstractmethod
-    def joy_to_joint_cmd(self, joy_msg: Joy) -> JointState:
-        pass
+        # Read parameters dynamically
+        dt = self.get_parameter("gamepad.dt").value
+        
+        def get_val(axis_name, joint_name):
+            val = state.get(axis_name, 0.0)
+            max_vel = self.get_parameter(f"gamepad.max_vel.{joint_name}").value
+            deadzone = self.get_parameter(f"gamepad.deadzone.{joint_name}").value
+            
+            if val > deadzone:
+                effective = (val - deadzone) / (1.0 - deadzone)
+                return effective * max_vel
+            elif val < -deadzone:
+                effective = (val + deadzone) / (1.0 - deadzone)
+                return effective * max_vel
+            else:
+                return 0.0
+
+        def get_button_vel(joint_name, pos_btn, neg_btn):
+            max_vel = self.get_parameter(f"gamepad.max_vel.{joint_name}").value
+            if state.get(pos_btn, False):
+                return max_vel
+            elif state.get(neg_btn, False):
+                return -max_vel
+            return 0.0
+        
+        # Define targets dictionary mapping joints to velocities
+        targets = {
+            "lift": get_val('left_stick_y', 'lift'),
+            "arm": get_val('left_stick_x', 'arm'),
+            "wrist_yaw": get_val('right_stick_x', 'wrist_yaw'),
+            "wrist_pitch": get_val('right_stick_y', 'wrist_pitch'),
+            "wrist_roll": get_button_vel('wrist_roll', 'right_shoulder_button_pressed', 'left_shoulder_button_pressed'),
+            "stretch_gripper": get_button_vel('stretch_gripper', 'top_button_pressed', 'bottom_button_pressed')
+        }
+
+        goal = JointState()
+        for joint, vel in targets.items():
+            if joint in self.command_joints:
+                goal.name.append(joint)
+                goal.velocity.append(vel)
+                # Compute integrated position target
+                curr_pos = self.cmd_joint_position(joint)
+                new_pos = curr_pos + vel * dt
+                goal.position.append(new_pos)
+
+        self.logger.info(f"goal: {goal}")
+        return goal
 
     @abstractmethod
     def publish_child_info(self):
