@@ -847,6 +847,7 @@ class StretchTrajectoryActionServer:
     def cancel_callback(self, cancel_request):
         """Accept or reject a request to cancel the current goal."""
         self.driver.get_logger().info('Received cancel request.')
+        
         return CancelResponse.ACCEPT
 
     def execute_callback(self, goal_handle):
