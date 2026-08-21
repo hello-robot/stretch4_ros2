@@ -39,6 +39,8 @@ class Stretch4ROSDriver(Node, ABC):
 
     def __init__(self,name):
         super().__init__(name)
+        self.startup_robot()
+        
         self.node_name = self.get_name()
         self.logger = self.get_logger()
         self.logger.info("For use with S T R E T C H (TM) RESEARCH EDITION from Hello Robot Inc.")
@@ -119,8 +121,14 @@ class Stretch4ROSDriver(Node, ABC):
         
     @abstractmethod
     def declare_node_params(self):
+        #happens immediately after declaring superclass (this) params
         pass
 
+    @abstractmethod
+    def startup_robot(self):
+        #happens after node setup but before everything else
+        pass
+    
     def _declare_common_params(self):
         self.declare_parameter('mode',self.default_mode)
         self.declare_parameter('sensitivity','default')

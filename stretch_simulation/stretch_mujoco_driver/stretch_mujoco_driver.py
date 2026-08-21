@@ -18,7 +18,7 @@ from stretch4_mujoco.pointcloud_utils import depth_to_points
 
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 # from stretch_core.rwlock import RWLock
-from stretch_mujoco_driver.joint_trajectory_server import JointTrajectoryAction
+#from stretch_mujoco_driver.joint_trajectory_server import JointTrajectoryAction
 import tf2_ros
 from tf_transformations import quaternion_from_euler
 
@@ -314,8 +314,9 @@ class StretchMujocoDriver(Stretch4ROSDriver):
         elif scene_name:
             self.scene_xml = models_path / (scene_name + '.xml')
 
-
-        
+    def startup_robot(self):
+        pass
+    
     def robocasa_setup(self):
 
         from stretch4_mujoco.robocasa_gen import (
