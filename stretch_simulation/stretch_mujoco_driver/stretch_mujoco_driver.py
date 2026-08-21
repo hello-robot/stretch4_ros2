@@ -209,6 +209,18 @@ class StretchMujocoDriver(Stretch4ROSDriver):
             qos_profile=QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT),
         )
 
+        self.lidar_left_pub = self.create_publisher(
+            PointCloud2,
+            "/lidar_points_left",
+            qos_profile=QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT),
+        )
+        self.lidar_right_pub = self.create_publisher(
+            PointCloud2,
+            "/lidar_points_right",
+            qos_profile=QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT),
+        )
+
+
         self.camera_publishers = {
             camera.name: self.create_publisher(
                 Image,
@@ -272,7 +284,7 @@ class StretchMujocoDriver(Stretch4ROSDriver):
         self.declare_parameter("default_goal_timeout_s", rclpy.Parameter.Type.DOUBLE)
 
         # Gamepad parameters
-        self.declare_parameter("gamepad.dt", 0.1)
+        self.declare_parameter("gamepad.dt", 1.0)
         for joint in self.command_joints:
             self.declare_parameter(f"gamepad.max_vel.{joint}", 0.2)
             self.declare_parameter(f"gamepad.deadzone.{joint}", 0.05)
@@ -388,14 +400,18 @@ class StretchMujocoDriver(Stretch4ROSDriver):
                 goal.velocity.append(vel)
                 # Compute integrated position target
                 curr_pos = self.cmd_joint_position(joint)
-                goal.position.append(curr_pos + vel * dt)
-                
+                new_pos = curr_pos + vel * dt
+                goal.position.append(0.3)#curr_pos)#new_pos)
+                self.logger.info(f"joint {joint} in position {curr_pos}. Sending position {new_pos} and velocity {vel}")
+
+        self.logger.info(f"goal: {goal}")
         return goal
         
     def set_base_velocity(self, x, y, theta):
         self.sim.base.set_velocity(x, y, theta)
 
-    def set_joint_position(self, joint, target):   
+    def set_joint_position(self, joint, target):  
+        self.logger.info(f"Driver setting joint {joint} to position {target}. current position is {self.cmd_joint_position(joint)}.") 
         subsys = None
          
         if hasattr(self.sim, joint):
@@ -415,7 +431,7 @@ class StretchMujocoDriver(Stretch4ROSDriver):
         subsys.move_to(target)
 
     def set_joint_velocity(self, joint, target):
-        self.logger.info(f"Setting joint {joint} to velocity {target}")
+        self.logger.info(f"Driver setting joint {joint} to velocity {target}")
         
         subsys = None
         
@@ -676,6 +692,11 @@ class StretchMujocoDriver(Stretch4ROSDriver):
         for camera, frame in camera_data.get_all(
             auto_rotate=False, auto_correct_rgb=True
         ).items():
+            if camera.name not in self.camera_publishers:
+                self.logger.warning(f"Camera {camera.name} not in cameras_to_use although it was retrieved from the simulation, skipping", throttle_duration_sec=5.0)
+                continue
+                
+            
             header = Header()
             header.frame_id = get_camera_frame(camera)
             header.stamp = current_time
@@ -713,6 +734,32 @@ class StretchMujocoDriver(Stretch4ROSDriver):
             if camera.is_depth:
                 pointcloud_msg = create_pointcloud_msg(camera_info, frame)
                 self.pointcloud_publishers[camera.name].publish(pointcloud_msg)
+        try:
+            hesai_pts = self.sim.pull_lidar_points()
+            try:
+                left_pts = hesai_pts.get("left")
+                right_pts = hesai_pts.get("right")
+            except:
+                self.logger.warning("Error reading lidar point dictionary. Not publishing.")
+                left_pts = None
+                right_pts = None
+            
+            if left_pts is not None and len(left_pts) > 0:
+                header = Header()
+                header.frame_id = "base_footprint"
+                header.stamp = current_time
+                cloud_msg_left = pc2.create_cloud_xyz32(header, left_pts)
+                self.lidar_left_pub.publish(cloud_msg_left)
+
+            if right_pts is not None and len(right_pts) > 0:
+                header = Header()
+                header.frame_id = "base_footprint"
+                header.stamp = current_time
+                cloud_msg_right = pc2.create_cloud_xyz32(header, right_pts)
+                self.lidar_right_pub.publish(cloud_msg_right)
+        except Exception as e:
+            self.logger.error(f"Error publishing Hesai lidar points: {e}")  
+            
 
     def update_child_parameter(self, parameter:Parameter) -> bool:
         match parameter.name:

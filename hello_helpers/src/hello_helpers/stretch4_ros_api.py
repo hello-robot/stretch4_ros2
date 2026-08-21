@@ -18,6 +18,7 @@ from rclpy.node import Node
 from rclpy.parameter import Parameter
 from rclpy.qos import QoSProfile, QoSDurabilityPolicy
 from rclpy.publisher import Publisher
+from rclpy.exceptions import ParameterNotDeclaredException
 
 from std_srvs.srv import Trigger, SetBool
 
@@ -492,7 +493,7 @@ class Stretch4ROSDriver(Node, ABC):
         self.logger.info(f"Got velocity command request: names: {target.name} velocities: {target.velocity} position: {target.position} (NB: position not used in velocity command!)")
         current_mode = self.get_parameter('mode').value
         if current_mode != 'active':
-            self.logger.warn(f"Cannot send position commands while robot is in mode {current_mode}.  Must be in mode 'active'")
+            self.logger.warn(f"Cannot send velocity commands while robot is in mode {current_mode}.  Must be in mode 'active'")
             return
             
         for i in range(len(target.name)):
@@ -503,20 +504,27 @@ class Stretch4ROSDriver(Node, ABC):
         pass
 
     def check_and_set_vel(self, joint_name, goal):
+        self.logger.info(f"Setting joint {joint_name} to velocity {goal}")
+        
         if (self.trajectory_server is not None and 
             self.trajectory_server.active_joints is not None and 
             joint_name in self.trajectory_server.active_joints and 
             not self.trajectory_command_active.is_set()):
             self.trajectory_server.direct_command_preempted = True
 
-        mode = self.get_parameter(f"joint_mode.{joint_name}").value
+        try:
+            mode = self.get_parameter(f"joint_mode.{joint_name}").value
+        except ParameterNotDeclaredException:
+            self.logger.error(f"Joint name {joint_name} not found in mode parameters.  Joint name is probably incorrect.")
+            mode = "<< joint unknown >>"
+            
         succeeded = False
         if mode != "velocity":
             self.logger.warn(f"Cannot send velocity command to joint {joint_name} while in {mode} mode (must be in 'velocity' mode).")
         else:
             robot_mode = self.get_parameter('mode').value
-            if robot_mode != 'active':
-                self.logger.warn(f"Cannot send velocity command to joint {joint_name} because robot mode is {robot_mode} (must be 'active').")
+            if robot_mode not in ["active", "teleop"]:
+                self.logger.warn(f"Cannot send velocity command to joint {joint_name} because robot mode is {robot_mode} (must be 'active' or 'teleop').")
             else:
                 try:
                     vel_limit = self.get_parameter(f"joint_limit.{joint_name}.velocity").value
@@ -532,6 +540,8 @@ class Stretch4ROSDriver(Node, ABC):
         
         
     def check_and_set_pos(self, joint_name, goal):
+        self.logger.info(f"Setting joint {joint_name} to position {goal}.")
+        
         if (self.trajectory_server is not None and 
             self.trajectory_server.active_joints is not None and 
             joint_name in self.trajectory_server.active_joints and 
@@ -549,8 +559,8 @@ class Stretch4ROSDriver(Node, ABC):
                 
             if (ul is None or goal <= ul) and (ll is None or goal >= ll):
                 robot_mode = self.get_parameter('mode').value
-                if robot_mode != 'active':
-                    self.logger.warn(f"Cannot send position command to joint {joint_name} because robot mode is {robot_mode} (must be 'active').")
+                if robot_mode not in ["active","teleop"]:
+                    self.logger.warn(f"Cannot send position command to joint {joint_name} because robot mode is {robot_mode} (must be 'active' or 'teleop').")
                 else:
                     self.last_position_target[joint_name]=goal
                     self.set_joint_position(joint_name, goal)
@@ -587,7 +597,7 @@ class Stretch4ROSDriver(Node, ABC):
         
         current_mode = self.get_parameter('mode').value
         if current_mode != 'teleop':
-            self.logger.warn(f"Cannot send joystick commands while robot is in mode {current_mode}.  Must be in mode 'active'")
+            self.logger.warn(f"Cannot send joystick commands while robot is in mode {current_mode}.  Must be in mode 'teleop'")
             return
         
         goal = self.joy_to_joint_cmd(joy_msg)
@@ -601,7 +611,7 @@ class Stretch4ROSDriver(Node, ABC):
                     self.check_and_set_pos(joint_name, goal.position[i])
                 case "velocity":
                     if len(goal.velocity) < len(goal.name):
-                        self.logger.error(f"Joystick command mapping for velocity has length {len(goal.velocity)} (expected length {len(goal.name)} to set target for joint {joint_name} in veloctiy control mode)")
+                        self.logger.error(f"Joystick command mapping for velocity has length {len(goal.velocity)} (expected length {len(goal.name)} to set target for joint {joint_name} in velocity control mode)")
                     self.check_and_set_vel(joint_name, goal.velocity[i])
                 case _:
                     self.logger.warn(f"Joint in unsupported mode {joint_mode}.  Joint must be in position or velocity mode to accept joystick control.  Skipping this joint.")
@@ -610,7 +620,6 @@ class Stretch4ROSDriver(Node, ABC):
         
     @abstractmethod
     def joy_to_joint_cmd(self, joy_msg: Joy) -> JointState:
-        #joint state returned must contain ONLY velocity or position
         pass
 
     @abstractmethod
