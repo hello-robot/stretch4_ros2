@@ -85,7 +85,8 @@ class Stretch4ROSDriver(Node, ABC):
         mode=self.get_parameter('mode').value
         if mode not in self.control_modes:
             self.logger.warn(f'given invalid mode={mode}, using {self.default_mode} instead')
-            mode = self.default_mode
+            self.set_parameters([Parameter("mode",Parameter.Type.STRING,self.default_mode)])
+            mode = self.get_parameter("mode").value
             
         self.logger.info('mode = ' + str(mode))
         
@@ -456,7 +457,6 @@ class Stretch4ROSDriver(Node, ABC):
             case n if n in [f"joint_acceleration.{joint}" for joint in self.command_joints] or \
                       n in ["joint_acceleration.omnibase.linear", "joint_acceleration.omnibase.angular"]:
                 found = True
-                reason = f"Parameter '{parameter.name}' is read-only after startup."
             case _:
                 reason=f"Parameter {parameter.name} not mutable or not found."
         return found,reason
@@ -513,7 +513,7 @@ class Stretch4ROSDriver(Node, ABC):
 
     def check_and_set_vel(self, joint_name, goal):
         self.logger.info(f"Setting joint {joint_name} to velocity {goal}")
-        
+                
         if (self.trajectory_server is not None and 
             self.trajectory_server.active_joints is not None and 
             joint_name in self.trajectory_server.active_joints and 
@@ -556,7 +556,12 @@ class Stretch4ROSDriver(Node, ABC):
             not self.trajectory_command_active.is_set()):
             self.trajectory_server.direct_command_preempted = True
 
-        mode = self.get_parameter(f"joint_mode.{joint_name}").value
+        try:
+            mode = self.get_parameter(f"joint_mode.{joint_name}").value
+        except ParameterNotDeclaredException:
+            self.logger.error(f"Joint name {joint_name} not found in mode parameters.  Joint name is probably incorrect.")
+            mode = "<< joint unknown >>"
+
         succeeded = False
         if mode != "position":
             self.logger.warn(f"Cannot send position command to joint {joint_name} while in {mode} mode (must be in 'position' mode).")
@@ -660,6 +665,7 @@ class Stretch4ROSDriver(Node, ABC):
         pass
 
     def control_loop(self):
+        self.logger.info(f"Control loop active. Mode is {self.robot_mode()}", throttle_duration_sec=5.0)
         # Capture driver mode
         current_mode = self.get_parameter('mode').value
 

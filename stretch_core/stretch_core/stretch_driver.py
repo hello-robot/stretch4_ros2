@@ -1,4 +1,8 @@
 #! /usr/bin/env python3
+from threading import Lock
+import importlib
+import copy
+import time
 
 import stretch4_body.robot.robot_client as rc
 import rclpy
@@ -24,42 +28,26 @@ from rcl_interfaces.msg import ParameterDescriptor, ParameterType, SetParameters
 from sensor_msgs.msg import BatteryState, JointState, Joy
 from std_msgs.msg import Bool, String
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
+from trajectory_msgs.msg import JointTrajectoryPoint
 
 from hello_helpers.stretch4_ros_api import Stretch4ROSDriver
 
-class StretchDriver(Stretch4ROSDriver):
 
+import tf2_ros
+from tf_transformations import quaternion_from_euler
+
+class StretchDriver(Stretch4ROSDriver):
+    
     def __init__(self):
         super().__init__('stretch_driver')
         self.get_logger().info("For use with S T R E T C H (TM) RESEARCH EDITION from Hello Robot Inc.")
 
-        # Low level API
-        self.robot = rc.RobotClient(client_id="ros2_driver")
-
-        if not self.robot.startup():
-            self.robot.logger.fatal('Robot startup failed.')
-            rclpy.shutdown()
-            sys.exit(1)
-
-        # Warn if robot isn't homed
-        if not self.robot.is_homed():
-            self.robot.logger.warn('Robot is not homed.')
-
-        self.joint_command_groups: list[BaseCommandGroup] = []
-        self.command_joints = []
-        for joint_params in self.node.robot.robot_params['ros']['joints']:
-            module_name = joint_params['py_module_name']
-            class_name = joint_params['py_class_name']
-            module = importlib.import_module(module_name)
-            class_obj = getattr(module, class_name)
-            cg = class_obj()
-            self.joint_command_groups.append(cg)
-            self.command_joints.append(cg.name)
-            self.node.get_logger().debug(f"Discovered {class_name}")
         
-        limits = self.robot.pull_joint_limits()
+        #TODO: pull joint limits on real robot    
+        '''limits = self.robot.pull_joint_limits()
 
         for joint in self.command_joints:
+
             if "stretch_gripper" in joint: #stretch gripper has its fingers modeled separately in sim
                 if Actuators["gripper_right_finger"] in limits and Actuators["gripper_left_finger"] in limits:
                     (rll, rul) = limits[Actuators["gripper_right_finger"]]
@@ -77,30 +65,74 @@ class StretchDriver(Stretch4ROSDriver):
                                  Parameter(f"joint_limit.{joint}.lower", Parameter.Type.DOUBLE, ll)])
                 success = list(map(lambda x: x.successful, results))
                 reasons = list(map(lambda x: x.reason, results))
-                self.logger.info(f"Setting joint limits for joint {joint} as ({ll},{ul}).  Success: {success}, reasons: {reasons}")
+                self.logger.info(f"Setting joint limits for joint {joint} as ({ll},{ul}).  Success: {success}, reasons: {reasons}")'''
 
         # Velocity Control
         self.set_vel_functions = {}
 
+
+        accel_params = []
         if hasattr(self.robot, 'lift'):
-            self.set_vel_functions['lift_joint'] = lambda v, a:  self.robot.lift.set_velocity(v, a_m=a)
-            self.declare_parameter("joint_acceleration.lift",self.robot.robot_params['lift']['motion']['default']['accel_m'])
+            self.set_vel_functions['lift'] = lambda v, a:  self.robot.lift.set_velocity(v, a_m=a)
+            accel_params.append(Parameter("joint_acceleration.lift",Parameter.Type.DOUBLE,self.robot.robot_params['lift']['motion']['default']['accel_m']))
         if hasattr(self.robot, 'arm'):
-            self.set_vel_functions['arm_joint'] = lambda v, a:  self.robot.arm.set_velocity(v, a_m=a)
-            self.declare_parameter("joint_acceleration.arm",self.robot.robot_params['arm']['motion']['default']['accel_m'])
+            self.set_vel_functions['arm'] = lambda v, a:  self.robot.arm.set_velocity(v, a_m=a)
+            accel_params.append(Parameter("joint_acceleration.arm",Parameter.Type.DOUBLE, self.robot.robot_params['arm']['motion']['default']['accel_m']))
         if hasattr(self.robot, 'end_of_arm') and hasattr(self.robot.end_of_arm, 'joints'):
             for joint in self.robot.end_of_arm.joints: 
-                self.set_vel_functions[f'{joint}_joint']= lambda d, a, j=joint: self.robot.end_of_arm.quick_stop(j) if d == 0.0 else self.robot.end_of_arm.move_by(j, d, a_r = a)
-                self.declare_parameter(f"joint_acceleration.{joint}",self.robot.robot_params[joint]['motion']['default']['accel'])
+                self.set_vel_functions[f'{joint}']= lambda d, a, j=joint: self.robot.end_of_arm.quick_stop(j) if d == 0.0 else self.robot.end_of_arm.move_by(j, d, a_r = a)
+                accel_params.append(Parameter(f"joint_acceleration.{joint}",Parameter.Type.DOUBLE,self.robot.robot_params[joint]['motion']['default']['accel']))
 
-        self.declare_parameter("joint_acceleration.omnibase.linear", self.robot.robot_params['omnibase']['motion']['default']['accel_xy_m'])
-        self.declare_parameter("joint_acceleration.omnibase.angular", self.robot.robot_params['omnibase']['motion']['default']['accel_w_r'])
+        accel_params.append(Parameter("joint_acceleration.omnibase.linear", Parameter.Type.DOUBLE,self.robot.robot_params['omnibase']['motion']['default']['accel_xy_m']))
+        accel_params.append(Parameter("joint_acceleration.omnibase.angular", Parameter.Type.DOUBLE,self.robot.robot_params['omnibase']['motion']['default']['accel_w_r']))
 
-        self.declare_parameter("sensitivity","default")
+        #succeeded = self.set_parameters(accel_params)
+        
+        results = self.set_parameters(accel_params)
+        for i in range(len(results)):
+            param = accel_params[i]
+            result = results[0]
+            reason = result.reason
+            check = result.successful
+            
+            if not check:
+                self.logger.warning(f"Unable to set parameter {param.name}.  Reason: {reason}")
+
+        
         self.robot.set_guarded_contact_sensitivity(self.get_parameter("sensitivity").value)
 
-    self.driver_mode_lock = Lock()
-    
+        self.driver_mode_lock = Lock()
+        self.start()
+
+    def startup_robot(self):
+        # Low level API
+        self.robot = rc.RobotClient(client_id="ros2_driver")
+
+        if not self.robot.startup():
+            self.robot.logger.fatal('Robot startup failed.')
+            rclpy.shutdown()
+            sys.exit(1)
+
+        # Warn if robot isn't homed
+        if not self.robot.is_homed():
+            self.robot.logger.warn('Robot is not homed.')
+
+        self.joint_command_groups: list[BaseCommandGroup] = []
+        self.command_joints = []
+        for joint_params in self.robot.robot_params['ros']['joints']:
+            module_name = joint_params['py_module_name']
+            class_name = joint_params['py_class_name']
+            module = importlib.import_module(module_name)
+            class_obj = getattr(module, class_name)
+            cg = class_obj()
+            self.joint_command_groups.append(cg)
+            joint_name = cg.name.split("_joint")[0]
+            if joint_name == "gripper":
+                joint_name = "stretch_gripper"
+            self.command_joints.append(joint_name)
+            self.get_logger().debug(f"Discovered {class_name}")
+
+        
     def push_robot_command(self):
         self.robot.push_command()
 
@@ -186,7 +218,7 @@ class StretchDriver(Stretch4ROSDriver):
                 joint_state.velocity.append(vel)
                 joint_state.effort.append(eff)
 
-    return joint_state
+        return joint_state
 
 
     #this function is needed because the published joint state splits up the
@@ -256,11 +288,11 @@ class StretchDriver(Stretch4ROSDriver):
         match parameter.name:
             case "joint_mode.stretch_gripper":
                 found = True
-                if parameter.value = "velocity":
+                if parameter.value == "velocity":
                     reason = f"Velocity mode results in unsafe behavior from the gripper and is not allowed."
             case "joint_mode.parallel_gripper":
                 found = True
-                if parameter.value = "velocity":
+                if parameter.value == "velocity":
                     reason = f"Velocity mode results in unsafe behavior from the gripper and is not allowed."
             case "sensitivity":
                 found = True
@@ -289,26 +321,22 @@ class StretchDriver(Stretch4ROSDriver):
                                         )
 
     def set_joint_velocity(self, joint, target):
-        acceleration_param = self.get_parameter_or(f"joint_acceleration.{joint.split("_joint")[0]}",None).value
+        acceleration_param = self.get_parameter_or(f"joint_acceleration.{joint}",None).value
         self.set_vel_functions[joint](target, acceleration_param)
 
     def set_joint_position(self, joint, target):
-        c = None
-        for g in self.joint_command_groups:
-            if g.name = joint:
-                c = g
-                
-        if c is None:
-            self.logger.error(f"Command joint {joint} not found")
-        else:
-            pt = JointTrajectoryPoint()
-            pt.positions = [0 for i in range(c.index+1)]
-            pt.positions[c.index] = target
-            ok = c.set_goal(pt, lambda x: pass)
-            if ok:
-                c.queue_execution(self.robot)
-            else:
-                self.logger.error(f"Invalid goal for command joint {joint}")
+        a = self.get_parameter_or(f"joint_acceleration.{joint}",None).value
+        v = self.get_parameter_or(f"joint_default_velocity.{joint}",None).value
+        
+        match joint:
+            case "lift":
+                self.robot.lift.move_to(target,v_m = v, a_m = a)
+            case "arm":
+                self.robot.arm.move_to(target,v_m = v, a_m = a)
+            case "wrist_pitch"|"wrist_roll"|"wrist_yaw"|"stretch_gripper"|"parallel_gripper":
+                self.robot.end_of_arm.move_to(joint, target, v, a)
+            case _:
+                self.logger.warn(f"Unable to set position for unknown joint {joint}.")
         
     
     def joy_to_joint_cmd(self, joy_msg: Joy) -> JointState:
@@ -389,8 +417,8 @@ class StretchDriver(Stretch4ROSDriver):
     
     def home_the_robot(self):
         with self.driver_mode_lock:
-            can_home = self.driver_mode in self.control_modes
-            last_driver_mode = copy.copy(self.driver_mode)
+            can_home = self.robot_mode() in self.control_modes
+            last_driver_mode = copy.copy(self.robot_mode())
         if not can_home:
             errmsg = f'Cannot home while in mode={last_driver_mode}.'
             self.robot.logger.error(errmsg)
@@ -402,8 +430,8 @@ class StretchDriver(Stretch4ROSDriver):
 
     def stow_the_robot(self):
         with self.driver_mode_lock:
-            can_stow = self.driver_mode in self.control_modes
-            last_driver_mode = copy.copy(self.driver_mode)
+            can_stow = self.robot_mode() in self.control_modes
+            last_driver_mode = copy.copy(self.robot_mode())
         if not can_stow:
             errmsg = f'Cannot stow while in mode={last_driver_mode}.'
             self.robot.logger.error(errmsg)
@@ -416,9 +444,9 @@ class StretchDriver(Stretch4ROSDriver):
     def runstop_the_robot(self, runstopped, just_change_mode=False):
         if runstopped:
             with self.driver_mode_lock:
-                already_runstopped = self.driver_mode == 'runstopped'
+                already_runstopped = self.robot_mode() == 'runstopped'
                 if not already_runstopped:
-                    self.prerunstop_mode = copy.copy(self.driver_mode)
+                    self.prerunstop_mode = copy.copy(self.robot_mode())
             if already_runstopped:
                 return
             self.change_mode('runstopped')
@@ -426,7 +454,7 @@ class StretchDriver(Stretch4ROSDriver):
                 self.robot.power_periph.trigger_runstop()
         else:
             with self.driver_mode_lock:
-                already_not_runstopped = self.driver_mode != 'runstopped'
+                already_not_runstopped = self.robot_mode() != 'runstopped'
             if already_not_runstopped:
                 return
             self.change_mode(self.prerunstop_mode)
@@ -435,7 +463,7 @@ class StretchDriver(Stretch4ROSDriver):
 
     def get_battery(self, robot_status, status_time) -> BatteryState:
         battery_state = BatteryState()
-        battery_state.header.stamp = current_time
+        battery_state.header.stamp = status_time
         battery_state.voltage = float(robot_status['power_periph']['voltage'])
         battery_state.current = float(robot_status['power_periph']['battery_current'])
         battery_state.temperature = float(robot_status['power_periph']['temp'])
@@ -457,7 +485,7 @@ class StretchDriver(Stretch4ROSDriver):
     def get_diagnostics(self, robot_status, status_time) -> DiagnosticArray:
         # publish safety layer diagnostics
         diag_msg = DiagnosticArray()
-        diag_msg.header.stamp = current_time
+        diag_msg.header.stamp = status_time
 
         safety_status = robot_status.get('safety_layer', {})
         if safety_status:
@@ -513,7 +541,7 @@ class StretchDriver(Stretch4ROSDriver):
 
     def get_joint_state_diagnostics(self, robot_status, status_time) -> DiagnosticArray:
         joint_state_diagnostics = DiagnosticArray()
-        joint_state_diagnostics.header.stamp = current_time
+        joint_state_diagnostics.header.stamp = status_time
 
         at_limit_msg = DiagnosticStatus(name="at_limit")
         soft_limits_msg = DiagnosticStatus(name="soft_motion_limits")
@@ -560,3 +588,24 @@ class StretchDriver(Stretch4ROSDriver):
 
     def get_safety_diagnostics(self, robot_status, status_time) -> DiagnosticArray:
         pass
+
+def main():
+    try:
+        rclpy.init()
+        node = StretchDriver()
+        executor = rclpy.executors.MultiThreadedExecutor(num_threads=5)
+        executor.add_node(node)
+        try:
+            executor.spin()
+        finally:
+            executor.shutdown()
+            node.destroy_node()
+    except KeyboardInterrupt:
+        print("Detecting KeyboardInterrupt")
+    finally:
+        if rclpy.ok():
+            rclpy.shutdown()
+
+
+if __name__ == "__main__":
+    main()
