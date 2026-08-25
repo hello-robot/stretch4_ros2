@@ -88,7 +88,8 @@ class StretchMujocoDriver(Stretch4ROSDriver):
                       #"gripper_right_finger",
                       #"gripper_left_finger",
                       ]
-        
+    velocity_joints = ["arm", "lift", "wrist_yaw", "wrist_roll", "wrist_pitch","stretch_gripper"]
+    
     def __init__(self):
         super().__init__('stretch_mujoco_driver')
 
@@ -283,13 +284,7 @@ class StretchMujocoDriver(Stretch4ROSDriver):
         self.declare_parameter("timeout", rclpy.Parameter.Type.DOUBLE)
         self.declare_parameter("default_goal_timeout_s", rclpy.Parameter.Type.DOUBLE)
 
-        # Gamepad parameters
-        self.declare_parameter("gamepad.dt", 1.0)
-        for joint in self.command_joints:
-            self.declare_parameter(f"gamepad.max_vel.{joint}", 0.2)
-            self.declare_parameter(f"gamepad.deadzone.{joint}", 0.05)
 
-    
          
     def check_and_load_params(self):
         self.use_robocasa: bool = self.get_parameter("use_robocasa").value
@@ -355,26 +350,6 @@ class StretchMujocoDriver(Stretch4ROSDriver):
             style=self.robocasa_style,
         )
         return model, xml, objects_info
-
-    def joy_to_joint_cmd(self, joy):
-        state = unpack_joy_to_gamepad_state(joy)
-        
-        # Read parameters dynamically
-        dt = self.get_parameter("gamepad.dt").value
-
-        def get_val(axis_name, joint_name):
-            val = state.get(axis_name, 0.0)
-            max_vel = self.get_parameter(f"gamepad.max_vel.{joint_name}").value
-            deadzone = self.get_parameter(f"gamepad.deadzone.{joint_name}").value
-            
-            if val > deadzone:
-                effective = (val - deadzone) / (1.0 - deadzone)
-                return effective * max_vel
-            elif val < -deadzone:
-                effective = (val + deadzone) / (1.0 - deadzone)
-                return effective * max_vel
-            else:
-                return 0.0
 
         def get_button_vel(joint_name, pos_btn, neg_btn):
             max_vel = self.get_parameter(f"gamepad.max_vel.{joint_name}").value
