@@ -3,6 +3,7 @@ from threading import Lock
 import importlib
 import copy
 import time
+from math import copysign
 
 import stretch4_body.robot.robot_client as rc
 import rclpy
@@ -13,6 +14,7 @@ from rclpy.node import Node
 from rclpy.parameter import Parameter
 from rclpy.qos import QoSProfile, QoSDurabilityPolicy
 from rclpy.publisher import Publisher
+from rclpy.exceptions import ParameterNotDeclaredException
 
 from geometry_msgs.msg import Twist
 from geometry_msgs.msg import TransformStamped
@@ -67,9 +69,13 @@ class StretchDriver(Stretch4ROSDriver):
                 reasons = list(map(lambda x: x.reason, results))
                 self.logger.info(f"Setting joint limits for joint {joint} as ({ll},{ul}).  Success: {success}, reasons: {reasons}")'''
 
+        self.velocity_commands = {joint: None for joint in self.command_joints}
+            
+
         # Velocity Control
         self.set_vel_functions = {}
 
+        self.vel_increment = self.robot.robot_params["wrist_roll"]["motion"]["max"]["vel"]*self._get_push_interval()*0.5 #assume it takes half of the distance to reach steady vel
 
         accel_params = []
         if hasattr(self.robot, 'lift'):
@@ -80,7 +86,12 @@ class StretchDriver(Stretch4ROSDriver):
             accel_params.append(Parameter("joint_acceleration.arm",Parameter.Type.DOUBLE, self.robot.robot_params['arm']['motion']['default']['accel_m']))
         if hasattr(self.robot, 'end_of_arm') and hasattr(self.robot.end_of_arm, 'joints'):
             for joint in self.robot.end_of_arm.joints: 
-                self.set_vel_functions[f'{joint}']= lambda d, a, j=joint: self.robot.end_of_arm.quick_stop(j) if d == 0.0 else self.robot.end_of_arm.move_by(j, d, a_r = a)
+
+                # velocity control of gripper is unsafe; for other joints velocity control is ok
+                if "gripper" in f'{joint}':
+                    self.set_vel_functions[f'{joint}']= lambda d, a, j=joint: self.robot.end_of_arm.quick_stop(j) if d == 0.0 else self.robot.end_of_arm.move_by(j, d, a_r = a)
+                else:
+                    self.set_vel_functions[f'{joint}']= lambda v, a, j=joint: self.robot.end_of_arm.quick_stop(j) if v == 0.0 else self.robot.end_of_arm.move_by(j, copysign(self.vel_increment,v), v_r=v, a_r = a)
                 accel_params.append(Parameter(f"joint_acceleration.{joint}",Parameter.Type.DOUBLE,self.robot.robot_params[joint]['motion']['default']['accel']))
 
         accel_params.append(Parameter("joint_acceleration.omnibase.linear", Parameter.Type.DOUBLE,self.robot.robot_params['omnibase']['motion']['default']['accel_xy_m']))
@@ -131,9 +142,26 @@ class StretchDriver(Stretch4ROSDriver):
                 joint_name = "stretch_gripper"
             self.command_joints.append(joint_name)
             self.get_logger().debug(f"Discovered {class_name}")
-
-        
+        self.velocity_joints = ["arm", "lift", "wrist_yaw", "wrist_roll", "wrist_pitch"]
+            
+    def _get_push_interval(self):
+        return 0.1
+            
     def push_robot_command(self):
+        for joint in self.velocity_commands:
+            try:
+                mode = self.get_parameter(f"joint_mode.{joint}").value
+            except ParameterNotDeclaredException:
+                self.logger.error(f"Joint name {joint} not found in mode parameters while pushing command to robot.  Make sure you're calling check_and_set_joint_vel not set_joint_velocity.")
+                mode = "<< joint unknown >>"
+
+            if mode == "velocity" and self.velocity_commands[joint] is not None:
+                last_sent = self.velocity_commands[joint]["last_sent"]
+                target = self.velocity_commands[joint]["target"]
+                if self.get_clock().now() - last_sent > Duration(seconds=self._get_push_interval()):
+                    self.logger.warn(f"Sending velocity {target} to joint {joint}")
+                    self.set_joint_velocity(joint,target)                
+        
         self.robot.push_command()
 
     def get_robot_status(self):
@@ -178,7 +206,10 @@ class StretchDriver(Stretch4ROSDriver):
         return self.get_parameter("sensitivity").value
 
     def get_runstop(self, robot_status, status_time) -> Bool:
-        return bool(robot_status['power_periph']['runstop_event'])
+        is_runstopped = bool(robot_status['power_periph']['runstop_event'])
+        if self.robot_mode()!="runstopped" and is_runstopped or self.robot_mode()=="runstopped" and not is_runstopped:
+            self.runstop_the_robot(runstopped=is_runstopped,just_change_mode=True)
+        return self.robot_mode()=="runstopped"
                                       
     def get_joint_state(self, robot_status, status_time) -> JointState:
         joint_state = JointState()
@@ -313,18 +344,21 @@ class StretchDriver(Stretch4ROSDriver):
     def set_base_velocity(self, x, y, theta):
         linear_acc = self.get_parameter_or("joint_acceleration.omnibase.linear",None).value
         angular_acc = self.get_parameter_or("joint_acceleration.omnibase.angular",None).value
-        self.robot.omnibase.set_velocity(vx_m = twist.linear.x, 
-                                         vy_m = twist.linear.y, 
-                                         w_r = twist.angular.z, 
+        self.robot.omnibase.set_velocity(vx_m = x, 
+                                         vy_m = y, 
+                                         w_r = theta, 
                                          a_m = linear_acc, 
                                          a_r = angular_acc
                                         )
 
     def set_joint_velocity(self, joint, target):
+        self.velocity_commands[joint]={"target":target,
+                                       "last_sent":self.get_clock().now()}
         acceleration_param = self.get_parameter_or(f"joint_acceleration.{joint}",None).value
         self.set_vel_functions[joint](target, acceleration_param)
 
     def set_joint_position(self, joint, target):
+        self.velocity_commands[joint] = None
         a = self.get_parameter_or(f"joint_acceleration.{joint}",None).value
         v = self.get_parameter_or(f"joint_default_velocity.{joint}",None).value
         

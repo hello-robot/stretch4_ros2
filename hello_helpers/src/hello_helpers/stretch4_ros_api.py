@@ -41,7 +41,8 @@ from hello_helpers.joy_conversion import (
 class Stretch4ROSDriver(Node, ABC):
     command_joints = None
     joint_modes = ["position", "velocity", "settling"]
-
+    velocity_joints = None
+    
     def __init__(self,name):
         super().__init__(name)
         self.startup_robot()
@@ -116,6 +117,7 @@ class Stretch4ROSDriver(Node, ABC):
         self.last_joint_mode = {joint: "position" for joint in self.command_joints}
         self.position_tolerance = self.get_parameter('position_tolerance').value
 
+        
         self.trajectory_command_active = threading.Event()
         
     def start(self): #called by subclasses once setup for control loop is done
@@ -399,9 +401,10 @@ class Stretch4ROSDriver(Node, ABC):
                 # Settling not enabled: warn if switching modes while joint is still moving
                 if current_vel is not None and abs(current_vel) > vel_threshold:
                     self.logger.warning(
-                        f"Changing joint mode for {joint} from {prev_mode} to {mode} while joint is still moving! "
+                        f"Changing joint mode for {joint} from {prev_mode} to {mode} while joint is still moving!"
                         f"Current velocity: {current_vel:.4f} (threshold: {vel_threshold:.4f}) and settling is not enabled."
                     )
+                    self.set_joint_velocity(joint, 0.0)
                 elif current_vel is None:
                     self.logger.warning(f"Changing joint mode for {joint} from {prev_mode} to {mode} but current joint velocity is unknown.")
 
@@ -450,8 +453,11 @@ class Stretch4ROSDriver(Node, ABC):
                     reason = "settling.vel_threshold cannot be less than 0.0."
             case n if n in [f"joint_mode.{joint}" for joint in self.command_joints]:
                 found = True
+                joint_name = n.split(".")[1]
                 if parameter.value not in self.joint_modes:
-                    reason=f"Joint mode must be in {self.joint_modes}." 
+                    reason=f"Joint mode must be in {self.joint_modes}."
+                if parameter.value == "velocity" and joint_name not in self.velocity_joints:
+                    reason=f"Velocity control not currently available for joint {joint_name}."
             case n if n in [f"joint_limit.{joint}.upper" for joint in self.command_joints]:
                 found = True
             case n if n in [f"joint_limit.{joint}.lower" for joint in self.command_joints]:
@@ -524,7 +530,7 @@ class Stretch4ROSDriver(Node, ABC):
         pass
 
     def check_and_set_vel(self, joint_name, goal):
-        self.logger.info(f"Setting joint {joint_name} to velocity {goal}")
+        #self.logger.info(f"Setting joint {joint_name} to velocity {goal}")
                 
         if (self.trajectory_server is not None and 
             self.trajectory_server.active_joints is not None and 
@@ -560,7 +566,7 @@ class Stretch4ROSDriver(Node, ABC):
         
         
     def check_and_set_pos(self, joint_name, goal):
-        self.logger.info(f"Setting joint {joint_name} to position {goal}.")
+        #self.logger.info(f"Setting joint {joint_name} to position {goal}.")
         
         if (self.trajectory_server is not None and 
             self.trajectory_server.active_joints is not None and 
@@ -912,7 +918,7 @@ class StretchTrajectoryActionServer:
         add_param("kd", 0.01)
         add_param("offset", 0.0)
         add_param("threshold", 0.05)
-        add_param("loop_rate", 30.0)
+        add_param("loop_rate", 100.0)
 
     def get_param(self, short_name):
         return self.driver.get_parameter(f"{self.param_prefix}.{short_name}").value
@@ -1112,7 +1118,7 @@ class StretchTrajectoryActionServer:
                             result.error_string = f"Velocity limit exceeded for joint {joint_name}"
                             return result
 
-                        self.driver.get_logger().warn(f"[PID Debug] joint={joint_name} target={target_pos} current={current_pos} error={error} vel_cmd={vel_cmd} last_known_state={self.driver.last_known_state}")
+                        #self.driver.get_logger().warn(f"[PID Debug] joint={joint_name} target={target_pos} current={current_pos} error={error} vel_cmd={vel_cmd} last_known_state={self.driver.last_known_state}")
 
                         # Send velocity command
                         self.driver.trajectory_command_active.set()
