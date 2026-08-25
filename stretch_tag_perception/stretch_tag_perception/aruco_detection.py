@@ -47,7 +47,7 @@ class ArucoDetector:
             )
             if len(detected_corners) > 0:
                 corners.extend(detected_corners)
-                aruco_ids.extend(detected_ids.flatten())
+                aruco_ids.extend(int(i) for i in detected_ids.flatten())
         
         return corners, aruco_ids
 
@@ -196,7 +196,7 @@ class ArucoMarker:
 
         self.marker.header.frame_id = self.frame_id
         self.marker.header.stamp = self.timestamp
-        self.marker.id = self.aruco_id
+        self.marker.id = int(self.aruco_id)
         self.marker.ns = f"aruco_{self.camera_name}"
 
         # scale of 1,1,1 would result in a 1m x 1m x 1m cube
