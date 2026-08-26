@@ -305,7 +305,7 @@ class StretchDriver(Node):
                 joint_clean = joint.split('_joint')[0]
                 joint_enum = RobotJoints.get_joint_by_name(joint_clean)
                 if joint_enum:
-                    joint_velocity = joint_enum.urdf_to_subsystem(joint_velocity)
+                    joint_velocity = joint_enum.urdf_to_actuator(joint_velocity)
 
             if "wrist" in joint:
                 # account for move_by (lack of velocity control)
@@ -477,17 +477,10 @@ class StretchDriver(Node):
                     joint_state.position.append(pos/4.0)
                     joint_state.velocity.append(vel/4.0)
                     joint_state.effort.append(eff)
-            elif cg.name == "gripper_joint":
+            elif cg.name == "gripper_joint" or cg.name == f"{RobotJoints.gripper.value}_joint":
                 for link in RobotJoints.gripper.tool_joints:
                     joint_state.name.append(link)
                     joint_state.position.append(pos)
-                    joint_state.velocity.append(vel)
-                    joint_state.effort.append(eff)
-            elif cg.name == "parallel_gripper_joint":
-                finger_pos = -pos / 2.0
-                for link in RobotJoints.gripper.tool_joints:
-                    joint_state.name.append(link)
-                    joint_state.position.append(finger_pos)
                     joint_state.velocity.append(vel)
                     joint_state.effort.append(eff)
             elif cg.name == "translate_mobile_base":
