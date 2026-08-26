@@ -66,7 +66,7 @@ class JointTrajectoryAction:
         goal: FollowJointTrajectory.Goal = goal_handle.request
         commanded_joint_names = goal.trajectory.joint_names
         self.node.get_logger().debug(f"New goal with joint_names = {commanded_joint_names}")
-        ready = [c.activate(commanded_joint_names, self.invalid_joints_callback)
+        ready = [c.activate(commanded_joint_names, self.invalid_joints_callback, robot=self.node.robot)
                  for c in self.command_groups]
         if not all(ready):
             # The joint names violated at least one of the command group's requirements.
