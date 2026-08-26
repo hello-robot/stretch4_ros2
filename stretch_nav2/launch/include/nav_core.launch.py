@@ -8,6 +8,7 @@ from launch.launch_context import LaunchContext
 from launch_ros.substitutions import FindPackageShare
 import rclpy
 
+from hello_helpers.launch_utils import _remove_qt_plugin_env_vars
 
 def generate_launch_description():
     logger = rclpy.logging.get_logger('navigation_launch')
@@ -20,6 +21,11 @@ def generate_launch_description():
         default_value=PathJoinSubstitution([stretch_navigation_path,
                                             'maps', 'dual_ds3.yaml']),
         description='Full path to the map.yaml file to use for navigation')
+
+    use_localization = DeclareLaunchArgument(
+        'use_localization', default_value='True',
+        description='Whether to enable localization or not'
+    )
 
     use_slam = DeclareLaunchArgument(
         'use_slam',
@@ -45,6 +51,12 @@ def generate_launch_description():
 
     rviz_param = DeclareLaunchArgument('use_rviz', default_value='true', choices=['true', 'false'])
 
+    rviz_config_param = DeclareLaunchArgument(
+        'rviz_config',
+        default_value=PathJoinSubstitution([stretch_navigation_path, 'rviz', 'navigation.rviz']),
+        description='Full path to the RViz config file',
+    )
+
     params_file = DeclareLaunchArgument(
         'params_file',
         description='Full path to the ROS2 parameters file to use for Nav2',
@@ -64,25 +76,26 @@ def generate_launch_description():
             'slam': LaunchConfiguration('use_slam'),
             'params_file': LaunchConfiguration('params_file'),
             'use_composition': LaunchConfiguration('use_composition'),
+            'use_localization': LaunchConfiguration('use_localization'),     
         }.items())
 
     rviz_launch = IncludeLaunchDescription(
         PathJoinSubstitution([navigation_bringup_path, 'launch', 'rviz_launch.py']),
         launch_arguments={
-            'rviz_config': PathJoinSubstitution([stretch_navigation_path, 'rviz', 'navigation.rviz']),
+            'rviz_config': LaunchConfiguration('rviz_config'),
         }.items(),
         condition=IfCondition(LaunchConfiguration('use_rviz')))
 
     return LaunchDescription([
         map_path_param,
         use_slam,
+        use_localization,
         rviz_param,
+        rviz_config_param,
         params_file,
         use_composition_param,
         navigation_bringup_launch,
-        UnsetEnvironmentVariable('QT_QPA_PLATFORM_PLUGIN_PATH'),
-        UnsetEnvironmentVariable('QT_QPA_FONTDIR'),
-        UnsetEnvironmentVariable('QT_PLUGIN_PATH'),
+        *_remove_qt_plugin_env_vars(),
         rviz_launch,
         map_path_check_action,
     ])

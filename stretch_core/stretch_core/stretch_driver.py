@@ -1,41 +1,39 @@
-#! /usr/bin/env python3
 
-import sys
+
 import copy
+import math
+import sys
 import time
-from typing import Any
-from threading import Lock
 from functools import partial
-
-from .joint_trajectory_server import JointTrajectoryAction
-import stretch4_body.robot.robot_client as rc
-
-import rclpy
-from rclpy.duration import Duration
-from rclpy.executors import MultiThreadedExecutor
-from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
-from rclpy.node import Node
-from rclpy.parameter import Parameter
-from rclpy.qos import QoSProfile, QoSDurabilityPolicy
-from rclpy.publisher import Publisher
-
-from std_srvs.srv import Trigger, SetBool
-
-from geometry_msgs.msg import Twist
-from geometry_msgs.msg import TransformStamped
-from nav_msgs.msg import Odometry
-from rcl_interfaces.msg import ParameterDescriptor, ParameterType, SetParametersResult
-from sensor_msgs.msg import BatteryState, JointState, Imu, MagneticField, Joy
-from std_msgs.msg import Bool, String
-from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
-from control_msgs.msg import JointJog
-
-import tf2_ros
-from tf_transformations import quaternion_from_euler
+from threading import Lock
+from typing import Any
 
 import hello_helpers.joy_conversion as jc
-from stretch4_body.core.robot_params import nominal_system_params
+import rclpy
+import stretch4_body.robot.robot_client as rc
+import tf2_ros
+from control_msgs.msg import JointJog
+from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
+from geometry_msgs.msg import TransformStamped, Twist
+from nav_msgs.msg import Odometry
+from rcl_interfaces.msg import ParameterDescriptor, ParameterType, SetParametersResult
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
+from rclpy.duration import Duration
+from rclpy.executors import MultiThreadedExecutor
+from rclpy.node import Node
+from rclpy.parameter import Parameter
+from rclpy.publisher import Publisher
+from rclpy.qos import QoSDurabilityPolicy, QoSProfile
+from sensor_msgs.msg import BatteryState, Imu, JointState, Joy, MagneticField
+from std_msgs.msg import Bool, String
+from std_srvs.srv import SetBool, Trigger
+from stretch4_body.core.gamepad_control_mappings import ControlMapping
+from stretch4_body.core.gamepad_teleop import GamePadTeleop
 from stretch4_body.utils.stretch_pose_models import RobotJoints
+from tf_transformations import quaternion_from_euler
+
+from .joint_trajectory_server import JointTrajectoryAction
+
 
 class StretchDriver(Node):
 
@@ -180,6 +178,8 @@ class StretchDriver(Node):
 
         self.add_on_set_parameters_callback(self.parameter_callback)
 
+        self.gamepad_teleop = GamePadTeleop(self.robot)
+
         # Actions
         self.joint_trajectory_action = JointTrajectoryAction(self)
 
@@ -293,18 +293,25 @@ class StretchDriver(Node):
         for i, joint in enumerate(jointjog_msg.joint_names):
             
             if joint not in self.set_vel_functions.keys():
-                raise AttributeError(f"Received velocity command for unexpected joint: {joint}")
+                self.robot.logger.warn(f"Received velocity command for unexpected joint: {joint}")
+                continue
 
             acceleration_param = self.get_parameter_or(f"joint_acceleration.{joint.split("_joint")[0]}",None).value
 
-            velocity_val = jointjog_msg.velocities[i]
+            joint_velocity = jointjog_msg.velocities[i]
+            duration = jointjog_msg.duration
+
             if "gripper" in joint:
                 joint_clean = joint.split('_joint')[0]
                 joint_enum = RobotJoints.get_joint_by_name(joint_clean)
                 if joint_enum:
-                    velocity_val = joint_enum.urdf_to_subsystem(velocity_val)
+                    joint_velocity = joint_enum.urdf_to_subsystem(joint_velocity)
 
-            self.set_vel_functions[joint](velocity_val, acceleration_param)
+            if "wrist" in joint:
+                # account for move_by (lack of velocity control)
+                joint_velocity *= duration
+
+            self.set_vel_functions[joint](joint_velocity, acceleration_param)
 
         # Set timeout (TODO)
         self.robot.logger.debug(str(self.robot.cmd_dict))
@@ -320,40 +327,20 @@ class StretchDriver(Node):
                 return
 
         state = jc.unpack_joy_to_gamepad_state(joy_msg)
-        tool_name = self.robot.params['tool']
-        Idx = jc.get_Idx(tool_name)
 
-        # Standard Scaling
-        MAX_VEL = 0.2
-        DEADZONE = 0.05
+        self.gamepad_teleop.controller_state = state
+            
 
-        def get_val(axis_name, scale):
-            val = state.get(axis_name, 0.0)
-            return val * scale if abs(val) > DEADZONE else 0.0
+        ControlMapping.JOINT_SPACE.do_motion(self.robot, self.gamepad_teleop)
 
-        self.robot.lift.set_velocity(get_val('left_stick_y', MAX_VEL))
 
-        if hasattr(self.robot, 'arm'):
-            self.robot.arm.set_velocity(get_val('left_stick_x', MAX_VEL))
 
-        if hasattr(Idx, 'WRIST_YAW'):
-            self.robot.end_of_arm.set_velocity('wrist_yaw', get_val('right_stick_x', MAX_VEL))        
-        if hasattr(Idx, 'WRIST_PITCH'):
-            # Dex Wrist or DW4 tools
-            self.robot.end_of_arm.set_velocity('wrist_pitch', get_val('right_stick_y', MAX_VEL))
-        if hasattr(Idx, 'WRIST_ROLL'):
-            roll_vel = 0.0
-            if state['right_shoulder_button_pressed']: roll_vel = MAX_VEL
-            if state['left_shoulder_button_pressed']: roll_vel = -MAX_VEL
-            self.robot.end_of_arm.set_velocity('wrist_roll', roll_vel)
-        if hasattr(Idx, 'GRIPPER') and 'stretch_gripper' in self.robot.end_of_arm.joints:
-            grip_vel = 0.0
-            if state['top_button_pressed']: grip_vel = MAX_VEL   # Open
-            if state['bottom_button_pressed']: grip_vel = -MAX_VEL # Close
-            self.robot.end_of_arm.set_velocity('stretch_gripper', grip_vel)
 
-        # --- Base Control ---
-        # self.robot.base.set_velocity(drive, turn) # TODO
+        # if hasattr(self.robot, 'omnibase'):
+        #     linear_acc = self.get_parameter_or("joint_acceleration.omnibase.linear", None).value
+        #     angular_acc = self.get_parameter_or("joint_acceleration.omnibase.angular", None).value
+        #     self.robot.omnibase.set_velocity(vx_m=vx, vy_m=vy, w_r=w, a_m=linear_acc, a_r=angular_acc)
+
 
     def twist_callback(self, twist: Twist):
         with self.driver_mode_lock:
@@ -477,6 +464,9 @@ class StretchDriver(Node):
         is_homed_msg = DiagnosticStatus(name="is_homed")
         is_homing_msg = DiagnosticStatus(name="is_homing")
         is_runstopped_msg = DiagnosticStatus(name="is_runstopped")
+        in_collision_msg = DiagnosticStatus(name="in_collision")
+
+        end_of_arm_joint_names = [j.value for j in RobotJoints.get_end_of_arm_joints() if j.value]
 
         for cg in self.joint_trajectory_action.command_groups:
             pos, vel, eff = cg.joint_state(robot_status)
@@ -484,18 +474,18 @@ class StretchDriver(Node):
             if cg.name == "arm_joint":
                 for link in ['arm_l4_joint', 'arm_l3_joint', 'arm_l2_joint', 'arm_l1_joint']:
                     joint_state.name.append(link)
-                    joint_state.position.append(pos/5.0)
-                    joint_state.velocity.append(vel/5.0)
+                    joint_state.position.append(pos/4.0)
+                    joint_state.velocity.append(vel/4.0)
                     joint_state.effort.append(eff)
             elif cg.name == "gripper_joint":
-                for link in ['gripper_finger_left_joint', 'gripper_finger_right_joint']:
+                for link in RobotJoints.gripper.tool_joints:
                     joint_state.name.append(link)
                     joint_state.position.append(pos)
                     joint_state.velocity.append(vel)
                     joint_state.effort.append(eff)
             elif cg.name == "parallel_gripper_joint":
                 finger_pos = -pos / 2.0
-                for link in ['finger_left_joint', 'finger_right_joint']:
+                for link in RobotJoints.gripper.tool_joints:
                     joint_state.name.append(link)
                     joint_state.position.append(finger_pos)
                     joint_state.velocity.append(vel)
@@ -517,9 +507,9 @@ class StretchDriver(Node):
 
             joint_status_key = cg.name.replace("_joint","")
             if joint_status_key == "gripper":
-                joint_status_key = "stretch_gripper"
+                joint_status_key = RobotJoints.gripper.value
 
-            if joint_status_key in ["wrist_roll", "wrist_pitch", "wrist_yaw", "stretch_gripper", "parallel_gripper"]:
+            if joint_status_key in end_of_arm_joint_names:
                 status_dict = robot_status["end_of_arm"][joint_status_key]
                 is_homed = bool(status_dict.get('pos_calibrated', False))
                 is_homing = bool(status_dict.get('is_homing', False))
@@ -535,6 +525,7 @@ class StretchDriver(Node):
             is_homed_msg.values.append(KeyValue(key=cg.name, value=f"{is_homed}"))
             is_homing_msg.values.append(KeyValue(key=cg.name, value=f"{is_homing}"))
             is_runstopped_msg.values.append(KeyValue(key=cg.name, value=f"{is_runstopped}"))
+            in_collision_msg.values.append(KeyValue(key=cg.name, value=f"{status_dict['in_collision_stop']}"))
 
         joint_state_diagnostics.status.append(is_runstopped_msg)
         joint_state_diagnostics.status.append(is_homed_msg)
@@ -542,6 +533,7 @@ class StretchDriver(Node):
         joint_state_diagnostics.status.append(at_limit_msg)
         joint_state_diagnostics.status.append(soft_limits_msg)
         joint_state_diagnostics.status.append(braking_distance_msg)
+        joint_state_diagnostics.status.append(in_collision_msg)
 
         self.joint_state_pub.publish(joint_state)
         self.joint_state_diagnostics_pub.publish(joint_state_diagnostics)

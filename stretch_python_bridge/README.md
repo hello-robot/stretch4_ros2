@@ -16,12 +16,12 @@ ros2 launch stretch_core gripper_camera.launch.py
 
 ## Features
 
-- **Generators for ROS 2 Topics**: Access the latest message from a topic directly without defining subscriptions or explicit callbacks.
-- **Image Bridge**: Convert ROS 2 `sensor_msgs/Image` topis to NumPy arrays seamlessly. Yields a numpy array.
-- **PointCloud2 Bridge**: Convert ROS 2 `sensor_msgs/PointCloud2` streams to structured NumPy arrays, making it easy to access fields like x, y, z, and intensity. Yields a numpy array.
-- **Transforms Bridge**: Query TF2 transforms asynchronously and yield the 4x4 homogenous transformation matrix from a base frame to a target frame. Yields a 4x4 tracking numpy ndarray.
-- **CameraInfo Bridge**: Convert `sensor_msgs/CameraInfo` streams to fetch identical timestamped intrinsic parameter arrays cleanly.
-- **IMU Bridge**: Convert `sensor_msgs/Imu` streams to fetch identical timestamped IMU data arrays cleanly.
+* **Generators for ROS 2 Topics**: Access the latest message from a topic directly without defining subscriptions or explicit callbacks.
+* **Image Bridge**: Convert ROS 2 `sensor_msgs/Image` topis to NumPy arrays seamlessly. Yields a numpy array.
+* **PointCloud2 Bridge**: Convert ROS 2 `sensor_msgs/PointCloud2` streams to structured NumPy arrays, making it easy to access fields like x, y, z, and intensity. Yields a numpy array.
+* **Transforms Bridge**: Query TF2 transforms asynchronously and yield the 4x4 homogenous transformation matrix from a base frame to a target frame. Yields a 4x4 tracking numpy ndarray.
+* **CameraInfo Bridge**: Convert `sensor_msgs/CameraInfo` streams to fetch identical timestamped intrinsic parameter arrays cleanly.
+* **IMU Bridge**: Convert `sensor_msgs/Imu` streams to fetch identical timestamped IMU data arrays cleanly.
 
 ## Installation
 
@@ -39,23 +39,23 @@ source install/setup.bash
 
 To make scripts exceptionally concise, all primary robot cameras and lidars have prepared wrapper methods inside the module export that stream the payloads locally. They natively support `(timeout: float | None = 10.0, blocking: bool = True)`.
 
-- `stream_camera_center()` → `/cameras_head/center/image_raw`
-- `stream_camera_center_rotated()` → `/cameras_head/center/rotated_image`
-- `stream_camera_center_info()` → `/cameras_head/center/camera_info`
-- `stream_camera_left()` → `/cameras_head/left/image_raw`
-- `stream_camera_left_rotated()` → `/cameras_head/left/rotated_image`
-- `stream_camera_left_info()` → `/cameras_head/left/camera_info`
-- `stream_camera_right()` → `/cameras_head/right/image_raw`
-- `stream_camera_right_rotated()` → `/cameras_head/right/rotated_image`
-- `stream_camera_right_info()` → `/cameras_head/right/camera_info`
-- `stream_lidar_points_left()` → `/lidar_points_left`
-- `stream_lidar_points_right()` → `/lidar_points_right`
-- `stream_gripper_imu()` → `/cameras_gripper/imu/data`
-- `stream_gripper_right_info()` → `/cameras_gripper/right/camera_info`
-- `stream_gripper_right()` → `/cameras_gripper/right/image_raw`
-- `stream_gripper_stereo_info()` → `/cameras_gripper/stereo/camera_info`
-- `stream_gripper_stereo()` → `/cameras_gripper/stereo/image_raw`
-- `stream_gripper_stereo_points()` → `/cameras_gripper/stereo_left_rgbd/points`
+* `stream_camera_center()` → `/cameras_head/center/image_raw`
+* `stream_camera_center_rotated()` → `/cameras_head/center/rotated_image`
+* `stream_camera_center_info()` → `/cameras_head/center/camera_info`
+* `stream_camera_left()` → `/cameras_head/left/image_raw`
+* `stream_camera_left_rotated()` → `/cameras_head/left/rotated_image`
+* `stream_camera_left_info()` → `/cameras_head/left/camera_info`
+* `stream_camera_right()` → `/cameras_head/right/image_raw`
+* `stream_camera_right_rotated()` → `/cameras_head/right/rotated_image`
+* `stream_camera_right_info()` → `/cameras_head/right/camera_info`
+* `stream_lidar_points_left()` → `/lidar_points_left`
+* `stream_lidar_points_right()` → `/lidar_points_right`
+* `stream_gripper_imu()` → `/cameras_gripper/imu/data`
+* `stream_gripper_right_info()` → `/cameras_gripper/right/camera_info`
+* `stream_gripper_right()` → `/cameras_gripper/right/image_raw`
+* `stream_gripper_stereo_info()` → `/cameras_gripper/stereo/camera_info`
+* `stream_gripper_stereo()` → `/cameras_gripper/stereo/image_raw`
+* `stream_gripper_stereo_points()` → `/cameras_gripper/stereo_left_rgbd/points`
 
 ```
 import cv2
@@ -81,13 +81,14 @@ for pc_frame in stream_lidar_points_left():
 ```
 
 ### Examples:
-- [Lidar Pointcloud with intensity coloring](examples/lidar_pointcloud.py)
-- [Gripper Colored Pointcloud](examples/gripper_pointcloud.py)
-- [Right camera image with cv2](examples/right_camera_image.py)
 
-### 1. Typical usage using Stream Manager 
+* [Lidar Pointcloud with intensity coloring](https://github.com/hello-robot/stretch4_ros2/blob/jazzy/stretch_python_bridge/examples/lidar_pointcloud.py)
+* [Gripper Colored Pointcloud](https://github.com/hello-robot/stretch4_ros2/blob/jazzy/stretch_python_bridge/examples/gripper_pointcloud.py)
+* [Right camera image with cv2](https://github.com/hello-robot/stretch4_ros2/blob/jazzy/stretch_python_bridge/examples/right_camera_image.py)
 
-If your script requires monitoring multiple ROS topics simultaneously (e.g., streaming images from 3 cameras and a TF listener at the same time), using the individual generator methods will spawn heavy background threads for each topic. 
+### 1. Typical usage using Stream Manager
+
+If your script requires monitoring multiple ROS topics simultaneously (e.g., streaming images from 3 cameras and a TF listener at the same time), using the individual generator methods will spawn heavy background threads for each topic.
 
 Instead, use `StreamManager` to monitor an unlimited number of topics using only a single internal execution thread.
 
@@ -158,13 +159,12 @@ if __name__ == '__main__':
 
 ## For custom topics, you can use your own stream generators
 
-
 ### Blocking vs Non-blocking Generators
 
 The bridging functions are split into two variants for each data type:
-- **Blocking Generators** (e.g. `image_stream_blocking`, `tf_stream_blocking`): Guarantee a non-`None` return. Calling `next()` or using them in a `for` loop will block indefinitely until a *new* frame or message arrives.
-- **Non-blocking Generators** (e.g. `image_stream`): Can be configured to be completely non-blocking, or blocking with a specific timeout window. They yield `Frame | None`.
 
+* **Blocking Generators** (e.g. `image_stream_blocking`, `tf_stream_blocking`): Guarantee a non-`None` return. Calling `next()` or using them in a `for` loop will block indefinitely until a _new_ frame or message arrives.
+* **Non-blocking Generators** (e.g. `image_stream`): Can be configured to be completely non-blocking, or blocking with a specific timeout window. They yield `Frame | None`.
 
 ### 1. Image Stream Example
 
@@ -276,30 +276,40 @@ All generator wrappers from this bridge yield native Python dataclasses, providi
 Here is the structure and available bindings for each underlying datum:
 
 ### `ImageFrame`
+
 Returned by `image_stream`, `stream_camera_center`, etc.
-- `image: np.ndarray`: A standard NumPy array representing the image data. Its dimensions and encoding match the original topic config.
-- `timestamp: float`: The absolute floating-point timestamp acquired from the ROS 2 message header (`sec + nanosec * 1e-9`).
+
+* `image: np.ndarray`: A standard NumPy array representing the image data. Its dimensions and encoding match the original topic config.
+* `timestamp: float`: The absolute floating-point timestamp acquired from the ROS 2 message header (`sec + nanosec * 1e-9`).
 
 ### `PointCloudFrame`
+
 Returned by `pointcloud_stream`, `stream_lidar_points_left`, etc.
-- `points: np.ndarray`: A structured NumPy array output from `ros2_numpy`. Common accessible channels include `.points['x']`, `.points['y']`, `.points['z']`, and `.points['intensity']`.
-- `timestamp: float`: The absolute floating-point timestamp acquired from the ROS 2 message header.
+
+* `points: np.ndarray`: A structured NumPy array output from `ros2_numpy`. Common accessible channels include `.points['x']`, `.points['y']`, `.points['z']`, and `.points['intensity']`.
+* `timestamp: float`: The absolute floating-point timestamp acquired from the ROS 2 message header.
 
 ### `TransformsFrame`
+
 Returned by `tf_stream`.
-- `transform_4x4: np.ndarray`: A 4x4 homogenous affine transformation matrix containing the resolved translation and rotation from the queried base frame to target frame. 
-- `timestamp: float`: The absolute floating-point timestamp acquired from the ROS 2 TF buffer.
+
+* `transform_4x4: np.ndarray`: A 4x4 homogenous affine transformation matrix containing the resolved translation and rotation from the queried base frame to target frame.
+* `timestamp: float`: The absolute floating-point timestamp acquired from the ROS 2 TF buffer.
 
 ### `ImuFrame`
+
 Returned by `imu_stream`, `stream_gripper_imu`.
-- `orientation: np.ndarray`: 1D array natively ordered as `[x, y, z, w]`.
-- `angular_velocity: np.ndarray`: 1D array ordered as `[x, y, z]`.
-- `linear_acceleration: np.ndarray`: 1D array ordered as `[x, y, z]`.
-- `timestamp: float`: The absolute floating-point timestamp acquired from the ROS 2 message header.
+
+* `orientation: np.ndarray`: 1D array natively ordered as `[x, y, z, w]`.
+* `angular_velocity: np.ndarray`: 1D array ordered as `[x, y, z]`.
+* `linear_acceleration: np.ndarray`: 1D array ordered as `[x, y, z]`.
+* `timestamp: float`: The absolute floating-point timestamp acquired from the ROS 2 message header.
 
 ### `CameraInfoFrame`
+
 Returned by `camera_info_stream`, `stream_camera_center_info`, etc.
-- `camera_matrix: np.ndarray`: A 3x3 NumPy array of the intrinsic `K` parameters.
-- `distortion_coefficients: np.ndarray`: A 1D NumPy array covering the `D` vector.
-- `distortion_model: str`: The specific distortion model (e.g. `plumb_bob`) utilized by this camera logic.
-- `timestamp: float`: The absolute floating-point timestamp acquired from the ROS 2 message header.
+
+* `camera_matrix: np.ndarray`: A 3x3 NumPy array of the intrinsic `K` parameters.
+* `distortion_coefficients: np.ndarray`: A 1D NumPy array covering the `D` vector.
+* `distortion_model: str`: The specific distortion model (e.g. `plumb_bob`) utilized by this camera logic.
+* `timestamp: float`: The absolute floating-point timestamp acquired from the ROS 2 message header.

@@ -39,6 +39,9 @@ install(PROGRAMS
   stretch_nav2/switch_controller_config.py
   stretch_nav2/binary_filter_switch.py
   stretch_nav2/global_plan_demo.py
+  stretch_nav2/gripper_interceptor.py
+  stretch_nav2/aruco_tag_localization.py
+  stretch_nav2/calibrate_tag_cli.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

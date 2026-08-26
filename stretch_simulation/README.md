@@ -7,7 +7,7 @@ Use this package to use ROS2 with Stretch in Mujoco.
 Stretch Simulation supports the following environments:
 
 1. Native Ubuntu 24.04 workstation with an Nvidia GPU
-2. Docker environment with GPU support 
+2. Docker environment with GPU support
 
 Minimum: 16GB RAM. Recommended: 32GB RAM.
 
@@ -20,31 +20,34 @@ The main launch file is `stretch_mujoco_driver.launch.py` which you can invoke b
 ```shell
 ros2 launch stretch_simulation stretch_mujoco_driver.launch.py
 ```
+
 This launch file has many arguments that you can pass via the command-line.
 
 ### Driver Options
- * `mode` (default=`position`, options: `position`, `navigation`, `trajectory`, `gamepad`) - command mode for the robot
- * `use_cameras` (default=false) - Enabling the cameras uses a bit of CPU
+
+* `mode` (default=`position`, options: `position`, `navigation`, `trajectory`, `gamepad`) - command mode for the robot
+* `use_cameras` (default=false) - Enabling the cameras uses a bit of CPU
 
 ### Scene Options
- * By default, the Stretch spawns into a simple three-walled scene with objects on a table.
- * By setting `use_robocasa` to True, you can spawn into a number of different [RoboCasa](https://robocasa.ai/) environments.
- * You can also use your own custom scene by providing the absolute path to its XML to the `scene_xml` path. The Stretch 4 robot will be included at the origin if you have `<include file="stretch_4/stretch_4.xml"/>` in the scene xml.
+
+* By default, the Stretch spawns into a simple three-walled scene with objects on a table.
+* By setting `use_robocasa` to True, you can spawn into a number of different [RoboCasa](https://robocasa.ai/) environments.
+* You can also use your own custom scene by providing the absolute path to its XML to the `scene_xml` path. The Stretch 4 robot will be included at the origin if you have `<include file="stretch_4/stretch_4.xml"/>` in the scene xml.
 
 ### Visualization Options
- * `use_mujoco_viewer` (default=true)
- * `use_rviz` (default=true)
 
+* `use_mujoco_viewer` (default=true)
+* `use_rviz` (default=true)
 
 > Note: If using zenoh middleware, you should run `ros2 run rmw_zenoh_cpp rmw_zenohd` in its own terminal.
 
 ## Nav2
 
-First go through the [Getting Started](#getting-started) guide to set up your environment.
+First go through the [Getting Started](./#getting-started) guide to set up your environment.
 
 ### Mapping
 
-This section is similar to https://docs.hello-robot.com/0.3/ros2/navigation_stack/#mapping, but uses the Stretch simulation environment.
+This section is similar to https://docs.hello-robot.com/0.3/ros2/navigation\_stack/#mapping, but uses the Stretch simulation environment.
 
 To map the simulated environment, run the following:
 
@@ -87,7 +90,7 @@ ros2 service call /switch_to_navigation_mode std_srvs/srv/Trigger
 ros2 launch stretch_nav2 navigation_mppi.launch.py map:=${HELLO_FLEET_PATH}/maps/<map_name>.yaml use_sim_time:=true use_rviz:=true teleop_type:=none
 ```
 
-You may want to dynamically reduce the cost_map inflation radius for most Robocasa environments:
+You may want to dynamically reduce the cost\_map inflation radius for most Robocasa environments:
 
 ```shell
 ros2 param get /global_costmap/global_costmap inflation_layer.inflation_radius
@@ -99,7 +102,7 @@ ros2 param set /local_costmap/local_costmap  inflation_layer.inflation_radius 0.
 
 #### Pre-mapped scene
 
-There are [maps](./maps/) included in this package that you can use with navigation out of the box.
+There are [maps](https://github.com/hello-robot/stretch4_ros2/blob/jazzy/stretch_simulation/maps/README.md) included in this package that you can use with navigation out of the box.
 
 Launch the pre-mapped environment using the following commands:
 
@@ -120,11 +123,10 @@ ros2 param set /local_costmap/local_costmap  inflation_layer.inflation_radius 0.
 
 You can use Stretch Web Teleop with the Stretch Simulation environment!
 
-
-Before you start, install the dependencies for Stretch Web Teleop by following these [instructions](#setting-up-stretch-web-teleop).
-
+Before you start, install the dependencies for Stretch Web Teleop by following these [instructions](./#setting-up-stretch-web-teleop).
 
 Use the following commands to start Stretch Mujoco with Web Teleop:
+
 ```shell
 parallel_terminal="gnome-terminal --tab -- /bin/bash -c " # or "xterm -e"
 
@@ -149,14 +151,14 @@ $parallel_terminal "cd ~/ament_ws/src/stretch4_web_teleop; node start_robot_brow
 Please use the `use_cameras:=true` argument to enable cameras and pointclouds. e.g. `ros2 launch stretch_simulation stretch_mujoco_driver.launch.py use_mujoco_viewer:=true mode:=navigation use_cameras:=true`
 
 There are five camera topics being published:
-- RGB and Depth for the D405 camera in the gripper.
-- RGB and Depth or the D435i camera in the head.
-- RGB for the wide-lens camera in the head.
+
+* RGB and Depth for the D405 camera in the gripper.
+* RGB and Depth or the D435i camera in the head.
+* RGB for the wide-lens camera in the head.
 
 The RGB and Depth frames are used to create two PointCloud2 topics as well.
 
-<img src="camera.png" width=600 />
-
+<img src="../.gitbook/assets/camera.png" alt="" width="600">
 
 ## Stretch Drivers
 
@@ -225,4 +227,4 @@ If you are on Linux or Windows, you can use the [Docker setup](README_DOCKER.md)
 
 ### Native Install
 
-If you would like to install Stretch Simulation directly on your host machine, please follow the [README_SETUP](README_SETUP.md) instructions.
+If you would like to install Stretch Simulation directly on your host machine, please follow the [README\_SETUP](README_SETUP.md) instructions.

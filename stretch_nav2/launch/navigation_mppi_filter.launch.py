@@ -25,7 +25,7 @@ def generate_launch_description():
     hlidar_launch = IncludeLaunchDescription(
         PathJoinSubstitution([stretch_core_path, 'launch', 'dual_hesai.launch.py']),
         launch_arguments={
-            'filter_type': 'sor',
+            'filter_type': 'sor_ransac',
             'tool_preset': LaunchConfiguration('tool_preset'),
         }.items(),
     )
@@ -52,8 +52,8 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument(
             'tool_preset',
-            default_value='sg4',
-            description='Mounted tool preset for lidar self-filter: sg4, pg4, tablet, or nil',
+            default_value='auto',
+            description='Mounted tool preset for lidar self-filter: auto, sg4, pg4, tablet, or nil',
         ),
         DeclareLaunchArgument(
             'use_rviz',

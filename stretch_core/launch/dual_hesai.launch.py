@@ -1,6 +1,6 @@
 from ament_index_python.packages import get_package_share_directory
 from launch.substitutions import LaunchConfiguration, PythonExpression
-from launch.actions import DeclareLaunchArgument, LogInfo, OpaqueFunction, UnsetEnvironmentVariable
+from launch.actions import DeclareLaunchArgument, LogInfo, OpaqueFunction
 from launch.conditions import IfCondition, UnlessCondition
 from launch import LaunchDescription
 from launch_ros.actions import Node
@@ -10,6 +10,8 @@ import sys
 import yaml
 import tempfile
 from pathlib import Path
+
+from hello_helpers.launch_utils import get_rviz_node
 
 sys.path.insert(0, os.path.dirname(__file__))
 from self_filter_config import dual_lidar_self_filter_parameters, validate_tool_preset
@@ -36,6 +38,8 @@ def launch_setup(context, *args, **kwargs):
         yaml.dump(cfg, tmp_file, sort_keys=False)
         temp_yaml_path = tmp_file.name
 
+    pub_pointcloud = LaunchConfiguration('pub_pointcloud').perform(context).lower() == 'true'
+
     hesai_node = Node(
         package='hesai_ros_driver',
         executable='hesai_ros_driver_node',
@@ -44,6 +48,7 @@ def launch_setup(context, *args, **kwargs):
     )
 
     filter_type = LaunchConfiguration('filter_type')
+    scan_angle_increment_deg = LaunchConfiguration('scan_angle_increment_deg')
     launch_filter_node = LaunchConfiguration('launch_filter_node')
 
     dual_lidar_filter_node = Node(
@@ -55,39 +60,28 @@ def launch_setup(context, *args, **kwargs):
             *self_filter_params,
             {
                 'filter_type': filter_type,
+                'scan_angle_increment_deg': scan_angle_increment_deg,
                 'lidar1_frame': 'lidar_right_link',
                 'lidar2_frame': 'lidar_left_link',
+                'pub_pointcloud': pub_pointcloud,
             },
         ],
         condition=IfCondition(launch_filter_node),
     )
 
-    use_rviz = LaunchConfiguration('use_rviz')
     rviz_config_path = os.path.join(stretch_core, 'rviz', 'lidars.rviz')
-    rviz_node = Node(
-        package="rviz2",
-        executable="rviz2",
-        name="rviz2",
-        output="screen",
-        arguments=["-d", rviz_config_path],
-        condition=IfCondition(use_rviz),
-    )
-
     return [
         hesai_node,
         dual_lidar_filter_node,
-        UnsetEnvironmentVariable('QT_QPA_PLATFORM_PLUGIN_PATH'),
-        UnsetEnvironmentVariable('QT_QPA_FONTDIR'),
-        UnsetEnvironmentVariable('QT_PLUGIN_PATH'),
-        rviz_node,
+        *get_rviz_node(rviz_config_path),
     ]
 
 
 def generate_launch_description():
     filter_type_arg = DeclareLaunchArgument(
         'filter_type',
-        default_value='region',
-        description='Pipeline preset: region | sor | sor_ransac',
+        default_value='sor',
+        description='Pipeline preset: region | sor | sor_ransac | self | none | custom',
     )
 
     filter_type = LaunchConfiguration('filter_type')
@@ -98,9 +92,9 @@ def generate_launch_description():
 
     error_log = LogInfo(
         condition=UnlessCondition(PythonExpression([
-            "'", filter_type, "' in ['region', 'sor', 'sor_ransac']"
+            "'", filter_type, "' in ['region', 'sor', 'sor_ransac', 'self', 'none', 'custom']"
         ])),
-        msg="Invalid filter_type! Must be region, sor, or sor_ransac.",
+        msg="Invalid filter_type! Must be region, sor, sor_ransac, self, none, or custom.",
     )
 
     use_rviz_arg = DeclareLaunchArgument(
@@ -117,15 +111,25 @@ def generate_launch_description():
 
     tool_preset_arg = DeclareLaunchArgument(
         'tool_preset',
-        default_value='sg4',
-        description='Self-filter attachment preset: sg4, pg4, tablet, or nil.',
+        default_value='auto',
+        description='Self-filter attachment preset: auto, sg4, pg4, tablet, or nil.',
     )
+
+    scan_angle_increment_arg = DeclareLaunchArgument(
+        'scan_angle_increment_deg',
+        default_value='0.1',
+        description='LaserScan angular bin width in degrees. Try 0.1 or 0.2 for Nav2.',
+    )
+
+    pub_pointcloud_arg = DeclareLaunchArgument('pub_pointcloud', default_value='false', description='Publish a pointcloud from the filter node.')
 
     return LaunchDescription([
         filter_type_arg,
         tool_preset_arg,
         print_filter_cmd,
         error_log,
+        scan_angle_increment_arg,
+        pub_pointcloud_arg,
         use_rviz_arg,
         launch_filter_node_arg,
         OpaqueFunction(function=launch_setup),

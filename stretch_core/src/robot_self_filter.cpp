@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <stdexcept>
 
 namespace stretch_core
 {
@@ -41,6 +42,42 @@ geometry_msgs::msg::Quaternion eigenQuatToMsg(const Eigen::Quaternionf & q)
   return msg;
 }
 
+float boxBroadphaseRadiusSq(const Eigen::Vector3f & half_extents, float buffer)
+{
+  // Conservative sphere around an OBB. Points outside this sphere cannot be
+  // inside the exact box, so we avoid the more expensive inverse transform.
+  const Eigen::Vector3f padded(
+    half_extents.x() + buffer,
+    half_extents.y() + buffer,
+    half_extents.z() + buffer);
+  return padded.squaredNorm();
+}
+
+Eigen::Matrix3f rpyToRotation(float roll, float pitch, float yaw)
+{
+  const Eigen::AngleAxisf roll_angle(roll, Eigen::Vector3f::UnitX());
+  const Eigen::AngleAxisf pitch_angle(pitch, Eigen::Vector3f::UnitY());
+  const Eigen::AngleAxisf yaw_angle(yaw, Eigen::Vector3f::UnitZ());
+  return (yaw_angle * pitch_angle * roll_angle).toRotationMatrix();
+}
+
+float groupFilterBuffer(const RobotSelfFilterConfig & config, const std::string & group_name)
+{
+  if (group_name == "arm") {
+    return config.self_filter_arm_buffer;
+  }
+  if (group_name == "wrist") {
+    return config.self_filter_wrist_buffer;
+  }
+  if (group_name == "gripper_camera" || group_name == "gripper_cam") {
+    return config.self_filter_gripper_cam_buffer;
+  }
+  if (group_name == "tool") {
+    return config.self_filter_tool_buffer;
+  }
+  throw std::runtime_error("Unknown self-filter box group: " + group_name);
+}
+
 geometry_msgs::msg::Point eigenVecToPoint(const Eigen::Vector3f & v)
 {
   geometry_msgs::msg::Point p;
@@ -50,14 +87,14 @@ geometry_msgs::msg::Point eigenVecToPoint(const Eigen::Vector3f & v)
   return p;
 }
 
-void wristChainDebugColor(size_t index, float & r, float & g, float & b)
+void selfFilterBoxDebugColor(size_t index, float & r, float & g, float & b)
 {
   static constexpr std::array<std::array<float, 3>, 5> kPalette = {{
-    {0.95f, 0.20f, 0.20f},  // 0 wrist_link — red
-    {0.20f, 0.90f, 0.20f},  // 1 wrist_yaw_link — green
-    {0.20f, 0.40f, 0.95f},  // 2 wrist_pitch_link — blue
-    {0.95f, 0.75f, 0.10f},  // 3 wrist_roll_link — amber
-    {0.10f, 0.85f, 0.85f},  // 4 gripper_camera_link — cyan
+    {0.95f, 0.20f, 0.20f},  // 0 red
+    {0.20f, 0.90f, 0.20f},  // 1 green
+    {0.20f, 0.40f, 0.95f},  // 2 blue
+    {0.95f, 0.75f, 0.10f},  // 3 amber
+    {0.10f, 0.85f, 0.85f},  // 4 cyan
   }};
   const size_t slot = index % kPalette.size();
   r = kPalette[slot][0];
@@ -70,21 +107,13 @@ void wristChainDebugColor(size_t index, float & r, float & g, float & b)
 void RobotSelfFilter::setConfig(const RobotSelfFilterConfig & config)
 {
   config_ = config;
-  normalizeWristChainArrays(config_);
+  validateSelfFilterBoxArrays(config_);
+  for (const auto & group_name : config_.self_filter_box_groups) {
+    (void)groupFilterBuffer(config_, group_name);
+  }
   base_radius_sq_ = config_.base_radius * config_.base_radius;
   const float arm_radius = config_.arm_filter_radius + config_.arm_filter_radius_buffer;
   arm_radius_sq_ = arm_radius * arm_radius;
-  arm_shoulder_half_extents_ = Eigen::Vector3f(
-    config_.arm_shoulder_half_extents_x,
-    config_.arm_shoulder_half_extents_y,
-    config_.arm_shoulder_half_extents_z);
-  arm_shoulder_buffer_ = config_.arm_shoulder_buffer;
-  wrist_chain_buffer_ = config_.wrist_chain_buffer;
-  attachment_half_extents_ = Eigen::Vector3f(
-    config_.attachment_half_extents_x,
-    config_.attachment_half_extents_y,
-    config_.attachment_half_extents_z);
-  attachment_buffer_ = config_.attachment_buffer;
   gate_radius_sq_ = config_.self_filter_gate_radius_m * config_.self_filter_gate_radius_m;
 }
 
@@ -156,13 +185,9 @@ bool RobotSelfFilter::updateArmSegment(
   const std::string & target_frame,
   const tf2::TimePoint & time,
   rclcpp::Logger logger,
-  const rclcpp::Clock & clock,
-  bool force)
+  const rclcpp::Clock & clock)
 {
   arm_valid_ = false;
-  if (!config_.filter_arm && !force) {
-    return false;
-  }
 
   Eigen::Vector3f arm_l0_pos;
   Eigen::Vector3f lift_pos;
@@ -191,144 +216,82 @@ bool RobotSelfFilter::updateArmSegment(
     lift_pos.z() + config_.arm_line_height_offset_z);
   arm_end_ = Eigen::Vector3f(
     end.x(), end.y(), end.z() + config_.arm_line_height_offset_z);
+
+  // Conservative sphere around the capsule for fast reject.
+  arm_broadphase_center_ = 0.5f * (arm_start_ + arm_end_);
+  const float broadphase_radius = 0.5f * (arm_end_ - arm_start_).norm() + std::sqrt(arm_radius_sq_);
+  arm_broadphase_radius_sq_ = broadphase_radius * broadphase_radius;
   arm_valid_ = true;
   return true;
 }
 
-bool RobotSelfFilter::updateArmShoulderBox(
+bool RobotSelfFilter::updateSelfFilterBoxes(
   tf2_ros::Buffer & buffer,
   const std::string & target_frame,
   const tf2::TimePoint & time,
   rclcpp::Logger logger,
-  const rclcpp::Clock & clock,
-  bool force)
+  const rclcpp::Clock & clock)
 {
-  arm_shoulder_valid_ = false;
-  if (!config_.filter_arm_shoulder && !force) {
+  self_filter_boxes_valid_ = false;
+  self_filter_boxes_.clear();
+  const size_t box_count = config_.self_filter_box_frames.size();
+  if (box_count == 0) {
     return false;
   }
 
-  Eigen::Affine3f box_pose;
-  if (!lookupTransform(
-      buffer, target_frame, config_.arm_shoulder_box_frame, time,
-      config_.tf_timeout_sec, box_pose, logger, clock))
-  {
-    return false;
-  }
-
-  const Eigen::Vector3f local_origin(
-    config_.arm_shoulder_box_origin_x,
-    config_.arm_shoulder_box_origin_y,
-    config_.arm_shoulder_box_origin_z);
-  arm_shoulder_pose_ = box_pose;
-  arm_shoulder_pose_.translation() += box_pose.rotation() * local_origin;
-  arm_shoulder_inverse_pose_ = arm_shoulder_pose_.inverse();
-  arm_shoulder_valid_ = true;
-  return true;
-}
-
-bool RobotSelfFilter::updateWristChain(
-  tf2_ros::Buffer & buffer,
-  const std::string & target_frame,
-  const tf2::TimePoint & time,
-  rclcpp::Logger logger,
-  const rclcpp::Clock & clock,
-  bool force)
-{
-  wrist_chain_valid_ = false;
-  wrist_chain_boxes_.clear();
-  if (!config_.filter_wrist && !force) {
-    return false;
-  }
-  const size_t link_count = config_.wrist_chain_frames.size();
-  if (link_count == 0) {
-    return false;
-  }
-
-  wrist_chain_boxes_.reserve(link_count);
-  for (size_t i = 0; i < link_count; ++i) {
-    const auto & frame = config_.wrist_chain_frames[i];
+  self_filter_boxes_.reserve(box_count);
+  for (size_t i = 0; i < box_count; ++i) {
+    const auto & frame = config_.self_filter_box_frames[i];
     Eigen::Affine3f link_pose;
     if (!lookupTransform(
         buffer, target_frame, frame, time,
         config_.tf_timeout_sec, link_pose, logger, clock))
     {
-      wrist_chain_boxes_.clear();
-      return false;
+      continue;
     }
 
-    const float origin_x = (i < config_.wrist_chain_box_origin_x.size()) ?
-      config_.wrist_chain_box_origin_x[i] : 0.0f;
-    const float origin_y = (i < config_.wrist_chain_box_origin_y.size()) ?
-      config_.wrist_chain_box_origin_y[i] : 0.0f;
-    const float origin_z = (i == 0 && i < config_.wrist_chain_box_origin_z.size()) ?
-      config_.wrist_chain_box_origin_z[i] : 0.0f;
+    const float origin_x = config_.self_filter_box_origin_x[i];
+    const float origin_y = config_.self_filter_box_origin_y[i];
+    const float origin_z = config_.self_filter_box_origin_z[i];
+    const float roll = config_.self_filter_box_rpy_roll[i];
+    const float pitch = config_.self_filter_box_rpy_pitch[i];
+    const float yaw = config_.self_filter_box_rpy_yaw[i];
 
-    const Eigen::Vector3f local_origin(origin_x, origin_y, origin_z);
-    link_pose.translation() += link_pose.rotation() * local_origin;
+    Eigen::Affine3f local_box_pose = Eigen::Affine3f::Identity();
+    local_box_pose.linear() = rpyToRotation(roll, pitch, yaw);
+    local_box_pose.translation() = Eigen::Vector3f(origin_x, origin_y, origin_z);
 
-    WristChainBoxState box;
+    SelfFilterBoxState box;
     box.frame_name = frame;
-    box.pose = link_pose;
-    box.inverse_pose = link_pose.inverse();
+    box.display_name = config_.self_filter_box_names[i];
+    box.group_name = config_.self_filter_box_groups[i];
+    box.pose = link_pose * local_box_pose;
+    box.inverse_pose = box.pose.inverse();
     box.half_extents = Eigen::Vector3f(
-      (i < config_.wrist_chain_half_extents_x.size()) ?
-      config_.wrist_chain_half_extents_x[i] : 0.06f,
-      (i < config_.wrist_chain_half_extents_y.size()) ?
-      config_.wrist_chain_half_extents_y[i] : 0.06f,
-      (i < config_.wrist_chain_half_extents_z.size()) ?
-      config_.wrist_chain_half_extents_z[i] : 0.06f);
-    if (config_.wrist_chain_buffers.empty()) {
-      box.filter_buffer = wrist_chain_buffer_;
-    } else if (i < config_.wrist_chain_buffers.size()) {
-      box.filter_buffer = config_.wrist_chain_buffers[i];
+      config_.self_filter_box_half_extents_x[i],
+      config_.self_filter_box_half_extents_y[i],
+      config_.self_filter_box_half_extents_z[i]);
+    if (config_.self_filter_box_buffers.empty()) {
+      box.filter_buffer = groupFilterBuffer(config_, box.group_name);
     } else {
-      box.filter_buffer = wrist_chain_buffer_;
+      box.filter_buffer = config_.self_filter_box_buffers[i];
     }
-    wrist_chain_boxes_.push_back(box);
+    // Keep Nav2 conservative by default: the footprint uses the same buffer that
+    // removes self returns, unless an expert footprint override is explicitly set.
+    box.footprint_buffer = box.filter_buffer;
+    if (i < config_.self_filter_box_footprint_buffers.size()) {
+      box.footprint_buffer = config_.self_filter_box_footprint_buffers[i];
+    }
+    box.broadphase_radius_sq = boxBroadphaseRadiusSq(box.half_extents, box.filter_buffer);
+    self_filter_boxes_.push_back(box);
   }
 
-  wrist_chain_valid_ = !wrist_chain_boxes_.empty();
-  return wrist_chain_valid_;
-}
-
-bool RobotSelfFilter::updateAttachmentBox(
-  tf2_ros::Buffer & buffer,
-  const std::string & target_frame,
-  const tf2::TimePoint & time,
-  rclcpp::Logger logger,
-  const rclcpp::Clock & clock,
-  bool force)
-{
-  attachment_valid_ = false;
-  if (!config_.filter_attachment && !force) {
-    return false;
-  }
-
-  Eigen::Affine3f pose;
-  if (!lookupTransform(
-      buffer, target_frame, config_.attachment_frame, time,
-      config_.tf_timeout_sec, pose, logger, clock))
-  {
-    return false;
-  }
-
-  const Eigen::Vector3f local_origin(
-    config_.attachment_box_origin_x,
-    config_.attachment_box_origin_y,
-    config_.attachment_box_origin_z);
-  attachment_pose_ = pose;
-  attachment_pose_.translation() += pose.rotation() * local_origin;
-  attachment_inverse_pose_ = attachment_pose_.inverse();
-  attachment_valid_ = true;
-  return true;
+  self_filter_boxes_valid_ = !self_filter_boxes_.empty();
+  return self_filter_boxes_valid_;
 }
 
 bool RobotSelfFilter::isInsideBaseCylinder(const Eigen::Vector3f & point) const
 {
-  if (!config_.filter_base) {
-    return false;
-  }
   const float xy_sq = point.x() * point.x() + point.y() * point.y();
   return xy_sq <= base_radius_sq_;
 }
@@ -357,18 +320,18 @@ bool RobotSelfFilter::isSelfFiltered(const Eigen::Vector3f & point) const
   if (isInsideBaseCylinder(point)) {
     return true;
   }
-  if (config_.filter_arm && isInsideArmCapsule(point)) {
+
+  if (arm_valid_ &&
+    (point - arm_broadphase_center_).squaredNorm() <= arm_broadphase_radius_sq_ &&
+    squaredDistancePointToSegment(point, arm_start_, arm_end_) <= arm_radius_sq_)
+  {
     return true;
   }
-  if (config_.filter_arm_shoulder && isInsideArmShoulderBox(point)) {
+
+  if (isInsideSelfFilterBoxes(point)) {
     return true;
   }
-  if (config_.filter_wrist && isInsideWristChain(point)) {
-    return true;
-  }
-  if (config_.filter_attachment && isInsideAttachmentBox(point)) {
-    return true;
-  }
+
   return false;
 }
 
@@ -377,31 +340,21 @@ bool RobotSelfFilter::isInsideArmCapsule(const Eigen::Vector3f & point) const
   if (!arm_valid_) {
     return false;
   }
+  if ((point - arm_broadphase_center_).squaredNorm() > arm_broadphase_radius_sq_) {
+    return false;
+  }
   return squaredDistancePointToSegment(point, arm_start_, arm_end_) <= arm_radius_sq_;
 }
 
-bool RobotSelfFilter::isInsideArmShoulderBox(const Eigen::Vector3f & point) const
+bool RobotSelfFilter::isInsideSelfFilterBoxes(const Eigen::Vector3f & point) const
 {
-  if (!arm_shoulder_valid_) {
+  if (!self_filter_boxes_valid_) {
     return false;
   }
-
-  const Eigen::Vector3f local = arm_shoulder_inverse_pose_ * point;
-  const float limit_x = arm_shoulder_half_extents_.x() + arm_shoulder_buffer_;
-  const float limit_y = arm_shoulder_half_extents_.y() + arm_shoulder_buffer_;
-  const float limit_z = arm_shoulder_half_extents_.z() + arm_shoulder_buffer_;
-
-  return std::abs(local.x()) <= limit_x &&
-         std::abs(local.y()) <= limit_y &&
-         std::abs(local.z()) <= limit_z;
-}
-
-bool RobotSelfFilter::isInsideWristChain(const Eigen::Vector3f & point) const
-{
-  if (!wrist_chain_valid_) {
-    return false;
-  }
-  for (const auto & box : wrist_chain_boxes_) {
+  for (const auto & box : self_filter_boxes_) {
+    if ((point - box.pose.translation()).squaredNorm() > box.broadphase_radius_sq) {
+      continue;
+    }
     const Eigen::Vector3f local = box.inverse_pose * point;
     const float limit_x = box.half_extents.x() + box.filter_buffer;
     const float limit_y = box.half_extents.y() + box.filter_buffer;
@@ -414,21 +367,6 @@ bool RobotSelfFilter::isInsideWristChain(const Eigen::Vector3f & point) const
     }
   }
   return false;
-}
-
-bool RobotSelfFilter::isInsideAttachmentBox(const Eigen::Vector3f & point) const
-{
-  if (!attachment_valid_) {
-    return false;
-  }
-
-  const Eigen::Vector3f local = attachment_inverse_pose_ * point;
-  const float limit_x = attachment_half_extents_.x() + attachment_buffer_;
-  const float limit_y = attachment_half_extents_.y() + attachment_buffer_;
-  const float limit_z = attachment_half_extents_.z() + attachment_buffer_;
-  return std::abs(local.x()) <= limit_x &&
-         std::abs(local.y()) <= limit_y &&
-         std::abs(local.z()) <= limit_z;
 }
 
 std::vector<Eigen::Vector2f> RobotSelfFilter::convexHull(std::vector<Eigen::Vector2f> points)
@@ -482,7 +420,7 @@ std::vector<Eigen::Vector2f> RobotSelfFilter::convexHull(std::vector<Eigen::Vect
 
 void RobotSelfFilter::appendArmCapsuleSamples2d(std::vector<Eigen::Vector2f> & points) const
 {
-  if (!config_.filter_arm || !arm_valid_) {
+  if (!arm_valid_) {
     return;
   }
 
@@ -516,16 +454,16 @@ void RobotSelfFilter::appendArmCapsuleSamples2d(std::vector<Eigen::Vector2f> & p
   }
 }
 
-void RobotSelfFilter::appendWristChainSamples2d(std::vector<Eigen::Vector2f> & points) const
+void RobotSelfFilter::appendSelfFilterBoxSamples2d(std::vector<Eigen::Vector2f> & points) const
 {
-  if (!config_.filter_wrist || !wrist_chain_valid_) {
+  if (!self_filter_boxes_valid_) {
     return;
   }
 
-  for (const auto & box : wrist_chain_boxes_) {
-    const float ex = box.half_extents.x();
-    const float ey = box.half_extents.y();
-    const float ez = box.half_extents.z();
+  for (const auto & box : self_filter_boxes_) {
+    const float ex = box.half_extents.x() + box.footprint_buffer;
+    const float ey = box.half_extents.y() + box.footprint_buffer;
+    const float ez = box.half_extents.z() + box.footprint_buffer;
     const std::array<Eigen::Vector3f, 8> corners = {
       Eigen::Vector3f(-ex, -ey, -ez),
       Eigen::Vector3f(ex, -ey, -ez),
@@ -544,32 +482,6 @@ void RobotSelfFilter::appendWristChainSamples2d(std::vector<Eigen::Vector2f> & p
   }
 }
 
-void RobotSelfFilter::appendAttachmentSamples2d(std::vector<Eigen::Vector2f> & points) const
-{
-  if (!config_.filter_attachment || !attachment_valid_) {
-    return;
-  }
-
-  const float ex = attachment_half_extents_.x();
-  const float ey = attachment_half_extents_.y();
-  const float ez = attachment_half_extents_.z();
-  const std::array<Eigen::Vector3f, 8> corners = {
-    Eigen::Vector3f(-ex, -ey, -ez),
-    Eigen::Vector3f(ex, -ey, -ez),
-    Eigen::Vector3f(-ex, ey, -ez),
-    Eigen::Vector3f(ex, ey, -ez),
-    Eigen::Vector3f(-ex, -ey, ez),
-    Eigen::Vector3f(ex, -ey, ez),
-    Eigen::Vector3f(-ex, ey, ez),
-    Eigen::Vector3f(ex, ey, ez),
-  };
-
-  for (const auto & corner : corners) {
-    const Eigen::Vector3f world = attachment_pose_ * corner;
-    points.emplace_back(world.x(), world.y());
-  }
-}
-
 std::vector<Eigen::Vector2f> RobotSelfFilter::computeFootprintPolygon2d(
   const std::vector<Eigen::Vector2f> & base_polygon) const
 {
@@ -577,16 +489,14 @@ std::vector<Eigen::Vector2f> RobotSelfFilter::computeFootprintPolygon2d(
   samples.reserve(base_polygon.size() + 64);
   samples.insert(samples.end(), base_polygon.begin(), base_polygon.end());
   appendArmCapsuleSamples2d(samples);
-  appendWristChainSamples2d(samples);
-  appendAttachmentSamples2d(samples);
+  appendSelfFilterBoxSamples2d(samples);
   return convexHull(std::move(samples));
 }
 
 void RobotSelfFilter::appendSelfFilterMarkers(
   visualization_msgs::msg::MarkerArray & markers,
   const std::string & target_frame,
-  const rclcpp::Time & stamp,
-  bool markers_only_viz) const
+  const rclcpp::Time & stamp) const
 {
   visualization_msgs::msg::Marker clear;
   clear.header.frame_id = target_frame;
@@ -654,7 +564,7 @@ void RobotSelfFilter::appendSelfFilterMarkers(
     markers.markers.push_back(ring_marker);
   }
 
-  if (config_.filter_base || markers_only_viz) {
+  {
     const float diameter = 2.0f * config_.base_radius;
     visualization_msgs::msg::Marker base_marker;
     base_marker.header.frame_id = target_frame;
@@ -709,72 +619,57 @@ void RobotSelfFilter::appendSelfFilterMarkers(
     markers.markers.push_back(arm_marker);
   }
 
-  if (arm_shoulder_valid_) {
-    visualization_msgs::msg::Marker shoulder_marker;
-    shoulder_marker.header.frame_id = target_frame;
-    shoulder_marker.header.stamp = stamp;
-    shoulder_marker.ns = "self_filter/arm_shoulder";
-    shoulder_marker.id = marker_id++;
-    shoulder_marker.type = visualization_msgs::msg::Marker::CUBE;
-    shoulder_marker.action = visualization_msgs::msg::Marker::ADD;
-
-    const Eigen::Quaternionf q(arm_shoulder_pose_.rotation());
-    shoulder_marker.pose.position = eigenVecToPoint(arm_shoulder_pose_.translation());
-    shoulder_marker.pose.orientation = eigenQuatToMsg(q);
-    shoulder_marker.scale.x = 2.0f * arm_shoulder_half_extents_.x() + 2.0f * arm_shoulder_buffer_;
-    shoulder_marker.scale.y = 2.0f * arm_shoulder_half_extents_.y() + 2.0f * arm_shoulder_buffer_;
-    shoulder_marker.scale.z = 2.0f * arm_shoulder_half_extents_.z() + 2.0f * arm_shoulder_buffer_;
-    shoulder_marker.color.r = 0.95f;
-    shoulder_marker.color.g = 0.55f;
-    shoulder_marker.color.b = 0.1f;
-    shoulder_marker.color.a = 0.35f;
-    markers.markers.push_back(shoulder_marker);
-  }
-
-  if (wrist_chain_valid_) {
-    for (size_t i = 0; i < wrist_chain_boxes_.size(); ++i) {
-      const auto & box = wrist_chain_boxes_[i];
-      visualization_msgs::msg::Marker wrist_marker;
-      wrist_marker.header.frame_id = target_frame;
-      wrist_marker.header.stamp = stamp;
-      wrist_marker.ns = "self_filter/wrist/" + box.frame_name;
-      wrist_marker.id = static_cast<int>(i);
-      wrist_marker.type = visualization_msgs::msg::Marker::CUBE;
-      wrist_marker.action = visualization_msgs::msg::Marker::ADD;
-
+  if (self_filter_boxes_valid_) {
+    for (size_t i = 0; i < self_filter_boxes_.size(); ++i) {
+      const auto & box = self_filter_boxes_[i];
       const Eigen::Quaternionf q(box.pose.rotation());
-      wrist_marker.pose.position = eigenVecToPoint(box.pose.translation());
-      wrist_marker.pose.orientation = eigenQuatToMsg(q);
-      wrist_marker.scale.x = 2.0f * (box.half_extents.x() + box.filter_buffer);
-      wrist_marker.scale.y = 2.0f * (box.half_extents.y() + box.filter_buffer);
-      wrist_marker.scale.z = 2.0f * (box.half_extents.z() + box.filter_buffer);
-      wristChainDebugColor(i, wrist_marker.color.r, wrist_marker.color.g, wrist_marker.color.b);
-      wrist_marker.color.a = 0.35f;
-      markers.markers.push_back(wrist_marker);
+      float color_r = 0.0f;
+      float color_g = 0.0f;
+      float color_b = 0.0f;
+      selfFilterBoxDebugColor(i, color_r, color_g, color_b);
+
+      if (config_.publish_raw_urdf_self_filter_markers) {
+        visualization_msgs::msg::Marker raw_marker;
+        raw_marker.header.frame_id = target_frame;
+        raw_marker.header.stamp = stamp;
+        raw_marker.ns = "self_filter/urdf_raw/" + box.group_name + "/" + box.display_name;
+        raw_marker.id = marker_id++;
+        raw_marker.type = visualization_msgs::msg::Marker::CUBE;
+        raw_marker.action = visualization_msgs::msg::Marker::ADD;
+        raw_marker.pose.position = eigenVecToPoint(box.pose.translation());
+        raw_marker.pose.orientation = eigenQuatToMsg(q);
+        raw_marker.scale.x = 2.0f * box.half_extents.x();
+        raw_marker.scale.y = 2.0f * box.half_extents.y();
+        raw_marker.scale.z = 2.0f * box.half_extents.z();
+        raw_marker.color.r = color_r;
+        raw_marker.color.g = color_g;
+        raw_marker.color.b = color_b;
+        raw_marker.color.a = 0.18f;
+        markers.markers.push_back(raw_marker);
+      }
+
+      if (config_.publish_buffered_self_filter_markers) {
+        visualization_msgs::msg::Marker buffered_marker;
+        buffered_marker.header.frame_id = target_frame;
+        buffered_marker.header.stamp = stamp;
+        buffered_marker.ns = "self_filter/urdf_buffered/" + box.group_name + "/" + box.display_name;
+        buffered_marker.id = marker_id++;
+        buffered_marker.type = visualization_msgs::msg::Marker::CUBE;
+        buffered_marker.action = visualization_msgs::msg::Marker::ADD;
+        buffered_marker.pose.position = eigenVecToPoint(box.pose.translation());
+        buffered_marker.pose.orientation = eigenQuatToMsg(q);
+        buffered_marker.scale.x = 2.0f * (box.half_extents.x() + box.filter_buffer);
+        buffered_marker.scale.y = 2.0f * (box.half_extents.y() + box.filter_buffer);
+        buffered_marker.scale.z = 2.0f * (box.half_extents.z() + box.filter_buffer);
+        buffered_marker.color.r = color_r;
+        buffered_marker.color.g = color_g;
+        buffered_marker.color.b = color_b;
+        buffered_marker.color.a = 0.35f;
+        markers.markers.push_back(buffered_marker);
+      }
     }
   }
 
-  if (attachment_valid_) {
-    visualization_msgs::msg::Marker attachment_marker;
-    attachment_marker.header.frame_id = target_frame;
-    attachment_marker.header.stamp = stamp;
-    attachment_marker.ns = "self_filter/attachment";
-    attachment_marker.id = marker_id++;
-    attachment_marker.type = visualization_msgs::msg::Marker::CUBE;
-    attachment_marker.action = visualization_msgs::msg::Marker::ADD;
-
-    const Eigen::Quaternionf q(attachment_pose_.rotation());
-    attachment_marker.pose.position = eigenVecToPoint(attachment_pose_.translation());
-    attachment_marker.pose.orientation = eigenQuatToMsg(q);
-    attachment_marker.scale.x = 2.0f * (attachment_half_extents_.x() + attachment_buffer_);
-    attachment_marker.scale.y = 2.0f * (attachment_half_extents_.y() + attachment_buffer_);
-    attachment_marker.scale.z = 2.0f * (attachment_half_extents_.z() + attachment_buffer_);
-    attachment_marker.color.r = 0.85f;
-    attachment_marker.color.g = 0.2f;
-    attachment_marker.color.b = 0.85f;
-    attachment_marker.color.a = 0.35f;
-    markers.markers.push_back(attachment_marker);
-  }
 }
 
 }  // namespace stretch_core

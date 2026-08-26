@@ -30,6 +30,7 @@
   <depend>std_msgs</depend>
   <depend>std_srvs</depend>
   <depend>tf2_eigen</depend>
+  <depend>tf2_geometry_msgs</depend>
   <depend>tf2_ros</depend>
   <depend>tf2_sensor_msgs</depend>
   <depend>tf_transformations</depend>
@@ -45,6 +46,9 @@
   <exec_depend>depthai_ros_driver</exec_depend>
   <exec_depend>hesai_ros_driver</exec_depend>
   <exec_depend>joy</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-trimesh-pip</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
   <exec_depend>rclcpp_components</exec_depend>
   <exec_depend>realsense2_camera</exec_depend>
   <exec_depend>robot_state_publisher</exec_depend>

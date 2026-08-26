@@ -1,0 +1,30 @@
+
+
+/**:
+  ros__parameters:
+    aruco_marker_info:
+      '29':
+        name: "tag_29"
+        length_mm: 20.0
+        tag_dictionary: "DICT_6X6_100"
+        link: None
+      '30':
+        name: "cube"
+        length_mm: 40.0
+        tag_dictionary: "DICT_6X6_100"
+        link: None
+      '31':
+        name: "tag_31"
+        length_mm: 64.0
+        tag_dictionary: "DICT_6X6_100"
+        link: None
+      '32':
+        name: "tag_32"
+        length_mm: 80.0
+        tag_dictionary: "DICT_6X6_100"
+        link: None
+      '33':
+        name: "tag_33"
+        length_mm: 100.0
+        tag_dictionary: "DICT_6X6_100"
+        link: None

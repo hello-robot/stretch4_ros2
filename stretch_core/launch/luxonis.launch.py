@@ -74,7 +74,7 @@ from stretch_core.vision.vision_topics import (
     VisionTopics,
     get_camera_calibration_file_path,
 )
-
+from hello_helpers.launch_utils import get_rviz_node
 
 def is_launch_config_true(context, name):
     return LaunchConfiguration(name).perform(context) == "true"
@@ -271,7 +271,6 @@ def launch_setup(context, *args, **kwargs):
                 parameters=[
                     params,
                 ],
-                # The ribbon cables are swapped in the head, so left is right and right is left.
                 # This is a remapping of the topics published by the node.
                 # This also remaps luxonis's rgb topic to our center topic.
                 # Lastly, these topic are published with the Luxonis config params in this file; changing these params may yield different topics that could break this remapping.
@@ -281,44 +280,8 @@ def launch_setup(context, *args, **kwargs):
         output="both",
     )
 
-    # The driver ignores i_tf_base_frame, so as a hack, we publish a static transform to connect the driver frame to the optical link.
-    static_tf_nodes = []
-    for camera_name in camera_names:
-        if is_launch_config_true(context, f"use_{camera_name}"):
-            swapped_position = (
-                "center"
-                if camera_name == "center"
-                else "right" if camera_name == "left" else "left"
-            )
-            static_tf_nodes.append(
-                Node(
-                    package="tf2_ros",
-                    executable="static_transform_publisher",
-                    name="static_tf_right_camera",
-                    arguments=[
-                        "0",
-                        "0",
-                        "0",
-                        "0",
-                        "0",
-                        "0",
-                        f"camera_{camera_name}_optical_link",
-                        f"{VisionTopics.cameras_namespace()}_{swapped_position}_camera_optical_frame",  # This is the name published by the driver
-                    ],
-                )
-            )
-
     rviz_config_path = os.path.join(
         get_package_share_directory("stretch_core"), "rviz", "cameras.rviz"
     )
 
-    rviz_node = Node(
-        package="rviz2",
-        executable="rviz2",
-        name="rviz2",
-        output="screen",
-        arguments=["-d", rviz_config_path],
-        condition=IfCondition(LaunchConfiguration("use_rviz")),
-    )
-
-    return [camera_node, rviz_node] + camera_info_nodes + static_tf_nodes
+    return [camera_node] + camera_info_nodes + get_rviz_node(rviz_config_path)

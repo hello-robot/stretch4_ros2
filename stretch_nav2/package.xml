@@ -24,7 +24,8 @@
   <depend>slam_toolbox</depend>
   <depend>tf2_ros</depend>
   <depend>visualization_msgs</depend>
-
+  
+  <exec_depend>hello_helpers</exec_depend>
   <exec_depend>nav2_lifecycle_manager</exec_depend>
   <exec_depend>nav2_planner</exec_depend>
   <exec_depend>rviz2</exec_depend>
