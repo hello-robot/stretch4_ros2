@@ -234,7 +234,6 @@ class Stretch4ROSDriver(Node, ABC):
         
         self.diagnostics_pub = self.create_publisher(DiagnosticArray, '/diagnostics', 1) # Diagnostics are centralized, so we publish to a single global /diagnostics topic, but set up separate get functions for regular and safety diagnostics
         self.unlatched_publishers.append((self.diagnostics_pub, self.get_diagnostics))
-        self.unlatched_publishers.append((self.diagnostics_pub, self.get_safety_diagnostics))
                 
         self.lease_holder_pub = self.create_publisher(DiagnosticStatus, 'server_lease_holder', 1)
         self.unlatched_publishers.append((self.lease_holder_pub, self.get_lease_holder))
@@ -858,9 +857,6 @@ class Stretch4ROSDriver(Node, ABC):
     def get_joint_state_diagnostics(self, robot_status, status_time) -> DiagnosticArray:
         pass
     
-    @abstractmethod
-    def get_safety_diagnostics(self, robot_status, status_time) -> DiagnosticArray:
-        pass
     
 
 class StretchTrajectoryActionServer:

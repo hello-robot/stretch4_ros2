@@ -989,6 +989,21 @@ class StretchMujocoDriver(Stretch4ROSDriver):
         status.values.append(KeyValue(key="sim_to_real_time_ratio", value=str(robot_status.sim_to_real_time_ratio_msg)))
         status.values.append(KeyValue(key="is_self_colliding", value=str(robot_status.is_self_colliding)))
         diagnostics.status.append(status)
+
+        smm_diag = DiagnosticStatus()
+        smm_diag.name = self.prefix + 'safety_layer/safe_motion_manager'
+        smm_diag.level = DiagnosticStatus.OK
+        smm_diag.message = 'OK'
+        smm_diag.values.append(KeyValue(key="safe_motions_triggered", value="[]"))
+        smm_diag.values.append(KeyValue(key="active/cliff_sentry", value="False"))
+        diagnostics.status.append(smm_diag)
+        
+        sm_diag = DiagnosticStatus()
+        sm_diag.name = self.prefix + 'safety_layer/sentry_manager'
+        sm_diag.level = DiagnosticStatus.OK
+        sm_diag.message = 'OK'
+        sm_diag.values.append(KeyValue(key="active/collision_sentry", value="False"))
+        diagnostics.status.append(sm_diag)
         
         return diagnostics
 
@@ -1047,27 +1062,6 @@ class StretchMujocoDriver(Stretch4ROSDriver):
         joint_state_diagnostics.status.append(braking_distance_msg)
         
         return joint_state_diagnostics
-
-    def get_safety_diagnostics(self, robot_status, status_time):
-        safety_diagnostics = DiagnosticArray()
-        safety_diagnostics.header.stamp = status_time
-        
-        smm_diag = DiagnosticStatus()
-        smm_diag.name = self.prefix + 'safety_layer/safe_motion_manager'
-        smm_diag.level = DiagnosticStatus.OK
-        smm_diag.message = 'OK'
-        smm_diag.values.append(KeyValue(key="safe_motions_triggered", value="[]"))
-        smm_diag.values.append(KeyValue(key="active/cliff_sentry", value="False"))
-        safety_diagnostics.status.append(smm_diag)
-        
-        sm_diag = DiagnosticStatus()
-        sm_diag.name = self.prefix + 'safety_layer/sentry_manager'
-        sm_diag.level = DiagnosticStatus.OK
-        sm_diag.message = 'OK'
-        sm_diag.values.append(KeyValue(key="active/collision_sentry", value="False"))
-        safety_diagnostics.status.append(sm_diag)
-        
-        return safety_diagnostics
 
 
 

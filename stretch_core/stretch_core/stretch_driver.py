@@ -585,9 +585,6 @@ class StretchDriver(Stretch4ROSDriver):
         return joint_state_diagnostics
     
 
-    def get_safety_diagnostics(self, robot_status, status_time) -> DiagnosticArray:
-        pass
-
 def main():
     try:
         rclpy.init()
