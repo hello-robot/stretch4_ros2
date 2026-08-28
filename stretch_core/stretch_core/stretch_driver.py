@@ -30,6 +30,7 @@ from std_srvs.srv import SetBool, Trigger
 from stretch4_body.core.gamepad_control_mappings import ControlMapping
 from stretch4_body.core.gamepad_teleop import GamePadTeleop
 from stretch4_body.utils.stretch_pose_models import RobotJoints
+from stretch4_body.utils.tool_metadata import ToolConfigurationError, get_tool_metadata
 from tf_transformations import quaternion_from_euler
 
 from .joint_trajectory_server import JointTrajectoryAction
@@ -93,8 +94,8 @@ class StretchDriver(Node):
         self.battery_pub = self.create_publisher(BatteryState, 'battery', 1)
         self.diagnostics_pub = self.create_publisher(DiagnosticArray, '/diagnostics', 1) # Diagnostics are centralized, so we publish to a single global /diagnostics topic
         self.lease_holder_pub = self.create_publisher(DiagnosticStatus, 'server_lease_holder', 1)
-        self.joint_state_diagnostics_pub = self.create_publisher(DiagnosticArray, 'joint_states_diagnostics', 1) 
-    
+        self.joint_state_diagnostics_pub = self.create_publisher(DiagnosticArray, 'joint_states_diagnostics', 1)
+
         # Saved Message States (for latched topics)
         self.last_published_value = {}
 
@@ -113,12 +114,26 @@ class StretchDriver(Node):
             self.set_vel_functions['arm_joint'] = lambda v, a:  self.robot.arm.set_velocity(v, a_m=a)
             self.declare_parameter("joint_acceleration.arm",self.robot.robot_params['arm']['motion']['default']['accel_m'])
         if hasattr(self.robot, 'end_of_arm') and hasattr(self.robot.end_of_arm, 'joints'):
-            for joint in self.robot.end_of_arm.joints: 
+            for joint in self.robot.end_of_arm.joints:
                 self.set_vel_functions[f'{joint}_joint']= lambda d, a, j=joint: self.robot.end_of_arm.quick_stop(j) if d == 0.0 else self.robot.end_of_arm.move_by(j, d, a_r = a)
                 self.declare_parameter(f"joint_acceleration.{joint}",self.robot.robot_params[joint]['motion']['default']['accel'])
 
         self.declare_parameter("joint_acceleration.omnibase.linear", self.robot.robot_params['omnibase']['motion']['default']['accel_xy_m'])
         self.declare_parameter("joint_acceleration.omnibase.angular", self.robot.robot_params['omnibase']['motion']['default']['accel_w_r'])
+
+        # tool info params
+        tool_name = self.robot.params.get('tool')
+        try:
+            tool_metadata = get_tool_metadata(tool_name)
+            tool_is_actuated = bool(tool_metadata.tool_joints)
+            tool_joints = tool_metadata.tool_joints
+        except ToolConfigurationError:
+            # No tool configured, or a passive tool (e.g. a tablet) with no ToolMetadata.
+            tool_is_actuated = False
+            tool_joints = []
+        self.declare_parameter("tool_info.name", tool_name or "unknown")
+        self.declare_parameter("tool_info.is_actuated", tool_is_actuated)
+        self.declare_parameter("tool_info.tool_joints", tool_joints)
 
         # Services
         self.stop_the_robot_service = self.create_service(
@@ -291,7 +306,7 @@ class StretchDriver(Node):
 
         # Queue velocity commands
         for i, joint in enumerate(jointjog_msg.joint_names):
-            
+
             if joint not in self.set_vel_functions.keys():
                 self.robot.logger.warn(f"Received velocity command for unexpected joint: {joint}")
                 continue
@@ -331,7 +346,7 @@ class StretchDriver(Node):
         state = jc.unpack_joy_to_gamepad_state(joy_msg)
 
         self.gamepad_teleop.controller_state = state
-            
+
 
         ControlMapping.JOINT_SPACE.do_motion(self.robot, self.gamepad_teleop)
 
@@ -351,10 +366,10 @@ class StretchDriver(Node):
                 return
         linear_acc = self.get_parameter_or("joint_acceleration.omnibase.linear",None).value
         angular_acc = self.get_parameter_or("joint_acceleration.omnibase.angular",None).value
-        self.robot.omnibase.set_velocity(vx_m = twist.linear.x, 
-                                         vy_m = twist.linear.y, 
-                                         w_r = twist.angular.z, 
-                                         a_m = linear_acc, 
+        self.robot.omnibase.set_velocity(vx_m = twist.linear.x,
+                                         vy_m = twist.linear.y,
+                                         w_r = twist.angular.z,
+                                         a_m = linear_acc,
                                          a_r = angular_acc
                                         )
 
@@ -508,7 +523,7 @@ class StretchDriver(Node):
                 status_dict = robot_status["end_of_arm"][joint_status_key]
                 is_homed = bool(status_dict.get('pos_calibrated', False))
                 is_homing = bool(status_dict.get('is_homing', False))
-            else: 
+            else:
                 status_dict = robot_status[joint_status_key]
                 is_homed = bool(status_dict['motor'].get('pos_calibrated', False))
                 is_homing = bool(status_dict['motor'].get('is_homing', False))
