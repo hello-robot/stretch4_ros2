@@ -106,16 +106,28 @@ class StretchDriver(Node):
 
         # Velocity Control
         self.set_vel_functions = {}
+        self.joint_metadata_cache: dict[str, RobotJoints | None] = {}
 
         if hasattr(self.robot, 'lift'):
             self.set_vel_functions['lift_joint'] = lambda v, a:  self.robot.lift.set_velocity(v, a_m=a)
+            self.joint_metadata_cache['lift_joint'] = RobotJoints.lift
             self.declare_parameter("joint_acceleration.lift",self.robot.robot_params['lift']['motion']['default']['accel_m'])
         if hasattr(self.robot, 'arm'):
             self.set_vel_functions['arm_joint'] = lambda v, a:  self.robot.arm.set_velocity(v, a_m=a)
+            self.joint_metadata_cache['arm_joint'] = RobotJoints.arm
             self.declare_parameter("joint_acceleration.arm",self.robot.robot_params['arm']['motion']['default']['accel_m'])
         if hasattr(self.robot, 'end_of_arm') and hasattr(self.robot.end_of_arm, 'joints'):
-            for joint in self.robot.end_of_arm.joints:
-                self.set_vel_functions[f'{joint}_joint']= lambda d, a, j=joint: self.robot.end_of_arm.quick_stop(j) if d == 0.0 else self.robot.end_of_arm.move_by(j, d, a_r = a)
+            end_of_arm = self.robot.end_of_arm
+            for joint in end_of_arm.joints:
+                joint_client = getattr(end_of_arm, joint, None)
+                if joint_client is None:
+                    continue
+                self.set_vel_functions[f'{joint}_joint'] = lambda d, a, j=joint, c=joint_client: end_of_arm.quick_stop(j) if d == 0.0 else c.move_by(d, a_r=a)
+                self.joint_metadata_cache[f'{joint}_joint'] = RobotJoints.get_joint_by_name(joint)
+                # add a generic gripper joint for utility
+                if self.joint_metadata_cache[f'{joint}_joint'] is RobotJoints.gripper:
+                    self.set_vel_functions['gripper_joint'] = self.set_vel_functions[f'{joint}_joint']
+                    self.joint_metadata_cache['gripper_joint'] = RobotJoints.gripper
                 self.declare_parameter(f"joint_acceleration.{joint}",self.robot.robot_params[joint]['motion']['default']['accel'])
 
         self.declare_parameter("joint_acceleration.omnibase.linear", self.robot.robot_params['omnibase']['motion']['default']['accel_xy_m'])
@@ -311,20 +323,19 @@ class StretchDriver(Node):
                 self.robot.logger.warn(f"Received velocity command for unexpected joint: {joint}")
                 continue
 
-            acceleration_param = self.get_parameter_or(f"joint_acceleration.{joint.split("_joint")[0]}",None).value
+            joint_metadata = self.joint_metadata_cache.get(joint)
+            acceleration_key = joint_metadata.value if joint_metadata else joint.split('_joint')[0]
+            acceleration_param = self.get_parameter_or(f"joint_acceleration.{acceleration_key}",None).value
 
             joint_velocity = jointjog_msg.velocities[i]
             duration = jointjog_msg.duration
 
-            if "gripper" in joint:
-                joint_clean = joint.split('_joint')[0]
-                joint_enum = RobotJoints.get_joint_by_name(joint_clean)
-                if joint_enum:
-                    # move_by() below takes this tool's own command units (Pct for SG4,
-                    # aperture meters for PG4), not true raw actuator units.
-                    joint_velocity = joint_enum.urdf_to_command(joint_velocity)
+            if joint_metadata is RobotJoints.gripper:
+                # move_by() below takes this tool's own command units (Pct for SG4,
+                # aperture meters for PG4), not true raw actuator units.
+                joint_velocity = joint_metadata.urdf_to_command(joint_velocity)
 
-            if "wrist" in joint:
+            if joint_metadata in (RobotJoints.wrist_pitch, RobotJoints.wrist_roll, RobotJoints.wrist_yaw):
                 # account for move_by (lack of velocity control)
                 joint_velocity *= duration
 
@@ -495,7 +506,10 @@ class StretchDriver(Node):
                     joint_state.velocity.append(vel/4.0)
                     joint_state.effort.append(eff)
             elif cg.name == "gripper_joint" or cg.name == f"{RobotJoints.gripper.value}_joint":
-                for link in RobotJoints.gripper.tool_joints:
+                tool_joint_names = list(RobotJoints.gripper.tool_joints)
+                if "gripper_joint" not in tool_joint_names:
+                    tool_joint_names.append("gripper_joint")
+                for link in tool_joint_names:
                     joint_state.name.append(link)
                     joint_state.position.append(pos)
                     joint_state.velocity.append(vel)

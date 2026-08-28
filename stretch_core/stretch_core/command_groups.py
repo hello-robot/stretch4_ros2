@@ -27,7 +27,7 @@ class WristYawCommandGroup(BaseCommandGroup):
 
     @override
     @check_active()
-    def monitor_execution(self, robot_status: Dict[str, Any], **kwargs: Any) -> Tuple[str, float]:
+    def monitor_execution(self, robot_status: Dict[str, Any], **kwargs: Any) -> Tuple[str, float, float, float]:
         desired = self.goal['position']
         actual = robot_status['end_of_arm']['wrist_yaw']['pos']
         self.error: float = desired - actual
@@ -68,7 +68,7 @@ class WristPitchCommandGroup(BaseCommandGroup):
 
     @override
     @check_active()
-    def monitor_execution(self, robot_status: Dict[str, Any], **kwargs: Any) -> Tuple[str, float]:
+    def monitor_execution(self, robot_status: Dict[str, Any], **kwargs: Any) -> Tuple[str, float, float, float]:
         desired = self.goal['position']
         actual = robot_status['end_of_arm']['wrist_pitch']['pos']
         self.error: float = desired - actual
@@ -109,7 +109,7 @@ class WristRollCommandGroup(BaseCommandGroup):
 
     @override
     @check_active()
-    def monitor_execution(self, robot_status: Dict[str, Any], **kwargs: Any) -> Tuple[str, float]:
+    def monitor_execution(self, robot_status: Dict[str, Any], **kwargs: Any) -> Tuple[str, float, float, float]:
         desired = self.goal['position']
         actual = robot_status['end_of_arm']['wrist_roll']['pos']
         self.error: float = desired - actual
@@ -144,6 +144,13 @@ class GripperCommandGroup(BaseCommandGroup):
         names.extend(['gripper_joint', f"{RobotJoints.gripper.value}_joint", RobotJoints.gripper.value])
         return names
 
+    @staticmethod
+    def tool_client(robot: Any) -> Any:
+        """
+        The attached tool's client, or None if no tool is attached. 
+        """
+        return getattr(getattr(robot, 'end_of_arm', None), 'gripper', None)
+
     @override
     def activate(self, commanded_joint_names: List[str], invalid_joints_callback: Callable[[str], None], **kwargs: Any) -> bool:
         self.active = False
@@ -152,7 +159,7 @@ class GripperCommandGroup(BaseCommandGroup):
 
         for name in commanded_joint_names:
             if name in self.gripper_joint_names:
-                if robot and hasattr(robot, 'end_of_arm') and RobotJoints.gripper.value not in robot.end_of_arm.joints:
+                if robot is not None and self.tool_client(robot) is None:
                     invalid_joints_callback(f"Commanded joint '{name}', but no active gripper tool is attached.")
                     return False
                 self.index = commanded_joint_names.index(name)
@@ -163,33 +170,29 @@ class GripperCommandGroup(BaseCommandGroup):
     @override
     @check_active()
     def queue_execution(self, robot: StretchDriver, **kwargs: Any) -> None:
-        if hasattr(robot, 'end_of_arm') and RobotJoints.gripper.value in robot.end_of_arm.joints:
-            # JointTrajectory goals arrive in URDF units; move_to() expects each tool's own
-            # command units (Pct for SG4, fingertip aperture in meters for PG4), so convert
-            # via RobotJoints.gripper.urdf_to_command() before handing off, uniformly across
-            # gripper types.
-            to_command = RobotJoints.gripper.urdf_to_command
-            robot.end_of_arm.move_to(
-                RobotJoints.gripper.value,
-                to_command(self.goal['position']),
-                to_command(self.goal['velocity']) if self.goal['velocity'] is not None else None,
-                to_command(self.goal['acceleration']) if self.goal['acceleration'] is not None else None,
-            )
+        tool = self.tool_client(robot)
+        if tool is None:
+            return
+
+        zero_command = RobotJoints.gripper.urdf_to_command(0.0)
+        goal_v = self.goal['velocity']
+        goal_a = self.goal['acceleration']
+
+        tool.move_to(
+            RobotJoints.gripper.urdf_to_command(self.goal['position']),
+            RobotJoints.gripper.urdf_to_command(goal_v) - zero_command if goal_v is not None else None,
+            RobotJoints.gripper.urdf_to_command(goal_a) - zero_command if goal_a is not None else None,
+        )
 
     @override
     @check_active()
-    def monitor_execution(self, robot_status: Dict[str, Any], **kwargs: Any) -> Tuple[str, float]:
+    def monitor_execution(self, robot_status: Dict[str, Any], **kwargs: Any) -> Tuple[str, float, float, float]:
         desired = self.goal['position']
         tool_status = robot_status.get('end_of_arm', {}).get(RobotJoints.gripper.value)
         if tool_status is None:
             self.error = 0.0
             return self.name, desired, 0.0, 0.0
 
-        # `desired` is in URDF units (straight from the incoming JointTrajectoryPoint), so
-        # `actual` must be too. Reuse joint_state()'s existing gripper_conversion/finger_pos/
-        # pos_mm handling -- the same URDF-unit conversion already trusted for JointState
-        # publishing -- instead of reading raw actuator status directly, which previously
-        # compared a URDF-space `desired` against an actuator-space `actual`.
         actual, _, _ = self.joint_state(robot_status)
         self.error: float = desired - actual
         return self.name, desired, actual, self.error
@@ -197,8 +200,9 @@ class GripperCommandGroup(BaseCommandGroup):
     @override
     @check_active()
     def cancel_execution(self, robot: Any, **kwargs: Any) -> None:
-        if hasattr(robot, 'end_of_arm') and RobotJoints.gripper.value in robot.end_of_arm.joints:
-            robot.end_of_arm.move_by(RobotJoints.gripper.value, 0)
+        tool = self.tool_client(robot)
+        if tool is not None:
+            tool.move_by(0)
 
     @override
     @check_active()
@@ -245,7 +249,7 @@ class ArmCommandGroup(BaseCommandGroup):
 
     @override
     @check_active()
-    def monitor_execution(self, robot_status: Dict[str, Any], **kwargs: Any) -> Tuple[str, float]:
+    def monitor_execution(self, robot_status: Dict[str, Any], **kwargs: Any) -> Tuple[str, float, float, float]:
         desired = self.goal['position']
         actual = robot_status['arm']['pos']
         self.error: float = desired - actual
@@ -303,7 +307,7 @@ class LiftCommandGroup(BaseCommandGroup):
 
     @override
     @check_active()
-    def monitor_execution(self, robot_status: Dict[str, Any], **kwargs: Any) -> Tuple[str, float]:
+    def monitor_execution(self, robot_status: Dict[str, Any], **kwargs: Any) -> Tuple[str, float, float, float]:
         desired = self.goal['position']
         actual = robot_status['lift']['pos']
         self.error: float = desired - actual
@@ -361,7 +365,7 @@ class MobileBaseCommandGroup(BaseCommandGroup):
 
     @override
     @check_active()
-    def monitor_execution(self, robot_status: Dict[str, Any], **kwargs: Any) -> Tuple[str, float]:
+    def monitor_execution(self, robot_status: Dict[str, Any], **kwargs: Any) -> Tuple[str, float, float, float]:
         desired = self.goal['position']
         actual = robot_status['omnibase']['x'] - self.initx
         self.error: float = desired - actual
