@@ -147,7 +147,7 @@ class GripperCommandGroup(BaseCommandGroup):
     @staticmethod
     def tool_client(robot: Any) -> Any:
         """
-        The attached tool's client, or None if no tool is attached.
+        The attached tool's client, or None if no tool is attached. 
         """
         return getattr(getattr(robot, 'end_of_arm', None), 'gripper', None)
 
@@ -209,11 +209,7 @@ class GripperCommandGroup(BaseCommandGroup):
     def is_finished(self, robot_status: Dict[str, Any], **kwargs: Any) -> bool:
         if self.error is None:
             return True
-        tolerance = RobotJoints.gripper.position_tolerance
-        # Return True to prevent hanging on trajectory execution if a tool has not been configured
-        if tolerance is None:
-            return True
-        return abs(self.error) < tolerance
+        return abs(self.error) < 0.5
 
     @override
     def joint_state(self, robot_status: Dict[str, Any], **kwargs: Any) -> Tuple[float, float, float]:
