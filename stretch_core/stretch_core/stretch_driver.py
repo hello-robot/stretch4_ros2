@@ -159,7 +159,7 @@ class StretchDriver(Stretch4ROSDriver):
                 last_sent = self.velocity_commands[joint]["last_sent"]
                 target = self.velocity_commands[joint]["target"]
                 if self.get_clock().now() - last_sent > Duration(seconds=self._get_push_interval()):
-                    self.logger.warn(f"Sending velocity {target} to joint {joint}")
+                    #self.logger.warn(f"Sending velocity {target} to joint {joint}")
                     self.set_joint_velocity(joint,target)                
         
         self.robot.push_command()
