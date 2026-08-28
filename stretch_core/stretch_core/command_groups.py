@@ -164,11 +164,16 @@ class GripperCommandGroup(BaseCommandGroup):
     @check_active()
     def queue_execution(self, robot: StretchDriver, **kwargs: Any) -> None:
         if hasattr(robot, 'end_of_arm') and RobotJoints.gripper.value in robot.end_of_arm.joints:
+            # JointTrajectory goals arrive in URDF units; move_to() expects each tool's own
+            # command units (Pct for SG4, fingertip aperture in meters for PG4), so convert
+            # via RobotJoints.gripper.urdf_to_command() before handing off, uniformly across
+            # gripper types.
+            to_command = RobotJoints.gripper.urdf_to_command
             robot.end_of_arm.move_to(
                 RobotJoints.gripper.value,
-                self.goal['position'],
-                self.goal['velocity'],
-                self.goal['acceleration'],
+                to_command(self.goal['position']),
+                to_command(self.goal['velocity']) if self.goal['velocity'] is not None else None,
+                to_command(self.goal['acceleration']) if self.goal['acceleration'] is not None else None,
             )
 
     @override
@@ -180,7 +185,12 @@ class GripperCommandGroup(BaseCommandGroup):
             self.error = 0.0
             return self.name, desired, 0.0, 0.0
 
-        actual = tool_status.get('pos', tool_status.get('pos_mm', 0.0) / 1000.0)
+        # `desired` is in URDF units (straight from the incoming JointTrajectoryPoint), so
+        # `actual` must be too. Reuse joint_state()'s existing gripper_conversion/finger_pos/
+        # pos_mm handling -- the same URDF-unit conversion already trusted for JointState
+        # publishing -- instead of reading raw actuator status directly, which previously
+        # compared a URDF-space `desired` against an actuator-space `actual`.
+        actual, _, _ = self.joint_state(robot_status)
         self.error: float = desired - actual
         return self.name, desired, actual, self.error
 

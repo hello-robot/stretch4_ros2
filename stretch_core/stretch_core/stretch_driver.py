@@ -354,7 +354,9 @@ class StretchDriver(Node):
                 joint_clean = joint.split('_joint')[0]
                 joint_enum = RobotJoints.get_joint_by_name(joint_clean)
                 if joint_enum:
-                    joint_velocity = joint_enum.urdf_to_actuator(joint_velocity)
+                    # move_by() below takes this tool's own command units (Pct for SG4,
+                    # aperture meters for PG4), not true raw actuator units.
+                    joint_velocity = joint_enum.urdf_to_command(joint_velocity)
 
             if "wrist" in joint:
                 # account for move_by (lack of velocity control)
