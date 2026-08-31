@@ -1,0 +1,66 @@
+# Fused dual-lidar pipeline: one node, one pass, both /lidar_points and /scan_filtered.
+/**:
+  ros__parameters:
+    # ---- topics and frames -------------------------------------------------------------
+    lidar1_topic: /lidar_points_right
+    lidar2_topic: /lidar_points_left
+    lidar1_frame: lidar_right_link
+    lidar2_frame: lidar_left_link
+    cloud_topic: /lidar_points
+    scan_topic: /scan_filtered
+
+    # Both branches work in base_link. NOT called frame_id, because robot_self_filter.yaml
+    # sets frame_id: base_footprint under a /** wildcard and would clobber it.
+    target_frame: base_link
+    # The URDF pins `laser` to base_link with an identity joint, so projecting in base_link
+    # makes this stamp exact. The legacy node projects in base_footprint and stamps `laser`
+    # regardless, which is 28 mm out in z.
+    scan_frame: laser
+    param_z_frame: base_footprint
+
+    ring_field: ring
+    timestamp_field: timestamp
+    sync_slop_sec: 0.05
+
+    publish_cloud: true
+    publish_scan: true
+
+    # ---- voxelization ------------------------------------------------------------------
+    voxel_leaf_size: 0.05
+    # Radius inside which the self-filter can fire, and therefore the only region worth
+    # thinning before it. Negative means "follow self_filter_gate_radius_m".
+    near_field_radius: -1.0
+
+    # ---- laser scan --------------------------------------------------------------------
+    scan_range_max: 30.0
+    scan_angle_increment_deg: 0.1   # 3600 bins over the full turn
+    z_min: 0.135
+    z_max: 1.5
+
+    # ---- stages ------------------------------------------------------------------------
+    enable_self_robot_filter: true
+    enable_floor_ransac_filter: true
+    floor_ransac_sample_stride: 16
+    plane_fitting_threshold: 0.1
+    angle: 10.0
+    floor_detect_z_min: -0.05
+    floor_detect_z_max: 0.05
+
+    # StatisticalOutlierRemoval 
+    enable_sor_filter: false
+    dist_rob: 2.5
+    leaf_size: 0.05
+    sor_mean_k: 50
+    sor_stddev: 0.3
+
+    # Speckle_filter
+    speckle_filter_enabled: true
+    speckle_min_points: 2
+    speckle_neighbor_window: 3
+    speckle_min_neighbors: 2
+    speckle_range_tolerance: 0.15
+
+    # ---- debug -------------------------------------------------------------------------
+    pub_self_filter_markers: false
+    self_filter_markers_topic: /self_filter_markers
+    log_stats_period_sec: 0.0
