@@ -6,6 +6,7 @@ import threading
 from threading import Lock
 import time
 import copy
+import numpy as np
 
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.action.server import ServerGoalHandle
@@ -155,11 +156,16 @@ class Stretch4ROSDriver(Node, ABC):
             self.declare_parameter(f"joint_limit.{joint}.upper",None, desc)
             self.declare_parameter(f"joint_limit.{joint}.lower",None, desc)
             self.declare_parameter(f"joint_limit.{joint}.velocity",None, desc)
+            self.declare_parameter(f"joint_limit.{joint}.acceleration",None, desc)
             self.declare_parameter(f"joint_mode.{joint}","position", ParameterDescriptor(type=ParameterType.PARAMETER_STRING, description=f"Control mode for individual joint (valid options are: {self.joint_modes})"))
-            #default to position control mode            
+            #default to position control mode
             
         self.declare_parameter("joint_acceleration.omnibase.linear", None, desc)
         self.declare_parameter("joint_acceleration.omnibase.angular", None, desc)
+
+        self.declare_parameter("joint_limit.omnibase.linear.acceleration", None, desc)
+        self.declare_parameter("joint_limit.omnibase.angular.acceleration", None, desc)
+
         
         self.declare_parameter('action_timeout', 3.0, ParameterDescriptor(
             type=ParameterType.PARAMETER_DOUBLE,
@@ -170,7 +176,7 @@ class Stretch4ROSDriver(Node, ABC):
             description='Default timeout (sec) for velocity control',
         ))
         
-        self.declare_parameter('control_loop_rate', 100, ParameterDescriptor(
+        self.declare_parameter('control_loop_rate', 500, ParameterDescriptor(
             type=ParameterType.PARAMETER_DOUBLE,
             description='Target rate (hz) for main control loop',
         ))
@@ -527,10 +533,10 @@ class Stretch4ROSDriver(Node, ABC):
             self.check_and_set_vel(target.name[i],target.velocity[i])
 
     @abstractmethod
-    def set_joint_velocity(self, joint, target):
+    def set_joint_velocity(self, joint, target, v = None, a = None):
         pass
 
-    def check_and_set_vel(self, joint_name, goal):
+    def check_and_set_vel(self, joint_name, goal, a = None):
         #self.logger.info(f"Setting joint {joint_name} to velocity {goal}")
                 
         if (self.trajectory_server is not None and 
@@ -561,12 +567,12 @@ class Stretch4ROSDriver(Node, ABC):
                 if vel_limit is not None and abs(goal) > vel_limit:
                     self.logger.warn(f"Cannot send velocity command to joint {joint_name}: goal velocity {goal} exceeds limit ({vel_limit}).")
                 else:
-                    self.set_joint_velocity(joint_name, goal)
+                    self.set_joint_velocity(joint_name, goal, a = a)
                     succeeded = True
         return succeeded
         
         
-    def check_and_set_pos(self, joint_name, goal):
+    def check_and_set_pos(self, joint_name, goal, v = None, a = None):
         #self.logger.info(f"Setting joint {joint_name} to position {goal}.")
         
         if (self.trajectory_server is not None and 
@@ -595,7 +601,7 @@ class Stretch4ROSDriver(Node, ABC):
                     self.logger.warn(f"Cannot send position command to joint {joint_name} because robot mode is {robot_mode} (must be 'active' or 'teleop').")
                 else:
                     self.last_position_target[joint_name]=goal
-                    self.set_joint_position(joint_name, goal)
+                    self.set_joint_position(joint_name, goal, v=v, a=a)
                     succeeded = True
             else:
                 self.logger.warn(f"Cannot send position command to joint {joint_name}: goal pose {goal} outside of joint limits ({ll},{ul}).")
@@ -612,7 +618,7 @@ class Stretch4ROSDriver(Node, ABC):
             self.check_and_set_pos(target.name[i],target.position[i])
 
     @abstractmethod
-    def set_joint_position(self, joint, target):
+    def set_joint_position(self, joint, target, v, a):
         pass
 
     def cmd_joint_position(self, command_joint_name):
@@ -940,7 +946,7 @@ class StretchTrajectoryActionServer:
         add_param("ki", 0.001)
         add_param("kd", 0.01)
         add_param("threshold", 0.05)
-        add_param("loop_rate", 30.0)
+        add_param("loop_rate", 40.0)
 
     def get_param(self, short_name):
         return self.driver.get_parameter(f"{self.param_prefix}.{short_name}").value
@@ -1021,12 +1027,16 @@ class StretchTrajectoryActionServer:
 
         feedback_msg = self._get_feedback(trajectory.points[0], 0.0, trajectory.joint_names)
 
+        rate = self.driver.create_rate(self.get_param("loop_rate"))
+        last_timepoint =self.driver.get_clock().now()
+        counter = 0
+        
         while point_i < len(trajectory.points):
             active_point = trajectory.points[point_i]
             elapsed_time = self.driver.get_clock().now()-start_time
             first = True
             #self.driver.logger.warning(f"On point {point_i}")
-                
+        
             while True:
                 interrupt_result = self._check_for_interrupt(goal_handle)
                 if interrupt_result is not None:
@@ -1035,11 +1045,17 @@ class StretchTrajectoryActionServer:
                 elapsed_time = self.driver.get_clock().now()-start_time
                 
                 if first:
+                    #self.driver.logger.warning(f"Time: {self.driver.get_clock().now()-last_timepoint}")
+                    #last_timepoint =self.driver.get_clock().now()
                     pos, vel, acc = first_loop_command(active_point, prev_state, feedback_msg)
                     first = False
                 else:
+                    #self.driver.logger.warning(f"Time: {self.driver.get_clock().now()-last_timepoint}")
+                    #last_timepoint =self.driver.get_clock().now()
+                    t0 = time.perf_counter_ns()
                     pos, vel, acc = every_loop_command(active_point, prev_state, feedback_msg)
-
+                    
+                #t0 = time.perf_counter_ns()
                 command = JointState()
                 command.name = trajectory.joint_names
                 command.position = pos if pos is not None else []
@@ -1051,9 +1067,24 @@ class StretchTrajectoryActionServer:
                 succeeded = True
                 for joint_i, joint_name in enumerate(trajectory.joint_names):
                     if pos is not None:
-                        succeeded = succeeded and self.driver.check_and_set_pos(joint_name, pos[joint_i])
+                        if vel is not None:
+                            v = vel[joint_i]
+                        else:
+                            v = None
+
+                        if acc is not None:
+                            a = acc[joint_i]
+                        else:
+                            a = None
+                        
+                        succeeded = succeeded and self.driver.check_and_set_pos(joint_name, pos[joint_i], v, a)
                     elif vel is not None:
-                        succeeded = succeeded and self.driver.check_and_set_vel(joint_name, vel[joint_i])
+                        if acc is not None:
+                            a = acc[joint_i]
+                        else:
+                            a = None
+                        
+                        succeeded = succeeded and self.driver.check_and_set_vel(joint_name, vel[joint_i], a)
                     
 
                 if not succeeded and self.get_param("strict_mode"):
@@ -1081,12 +1112,15 @@ class StretchTrajectoryActionServer:
 
                 self.pub_actual_state.publish(actual)
                 self.pub_desired_state.publish(desired)
-                
+
+                #if counter % 10 == 0:
+                #        print(f"dt: {(time.perf_counter_ns()-t0)/1000.0}")
+                        
                 if next_point_condition(feedback_msg):
                     prev_state = copy.deepcopy(feedback_msg.actual)
                     break
                 
-                time.sleep(1.0/self.get_param("loop_rate"))
+                rate.sleep()
                             
             while point_i < len(trajectory.points): #zip through points until we get to the first unsatisfied point
                 active_point = trajectory.points[point_i]
@@ -1098,10 +1132,10 @@ class StretchTrajectoryActionServer:
                     return interrupt_result
 
                 if next_point_condition(feedback_msg):
-                    time.sleep(0.001)
                     point_i += 1
                 else:
                     break
+            rate.sleep()
         
                 
         # Successful Completion
@@ -1156,19 +1190,99 @@ class StretchTrajectoryActionServer:
         secs_remaining = end_t-now
         target_poses = []
         target_vels = []
-        for i, goal_pos in enumerate(active_point.positions):
-            # todo: account for acceleration limits
-            # and/or do more interpolation strategies
-            # right now: just command ideal velocity
-            current_pos = feedback_msg.actual.positions[i]
-            start_pos = prev_state.positions[i] if prev_state is not None else current_pos
-            delta = goal_pos - current_pos
-            target_vel = delta/secs_remaining if secs_remaining > 0 else feedback_msg.actual.velocities[i]
-            target_pos = (goal_pos-start_pos)*prop_elapsed
-            target_poses.append(target_pos)
-            target_vels.append(target_vel)
+        target_accs = []
 
-        return target_poses, target_vels, None
+        dt = 1.0/self.get_param("loop_rate")
+        
+        for i, goal_pos in enumerate(active_point.positions):
+            joint_name = feedback_msg.joint_names[i]
+            maxa = self.driver.get_parameter_or(f"joint_limit.{joint_name}.acceleration",None)
+            maxv = self.driver.get_parameter_or(f"joint_limit.{joint_name}.velocity",None)
+
+            if maxa is None or maxa.value is None:
+                maxa = 12.0
+            else:
+                maxa = maxa.value
+
+            if maxv is None or maxv.value is None:
+                maxv = 12.0
+            else:
+                maxv = maxv.value
+            
+            current_pos = feedback_msg.actual.positions[i]
+            current_vel = feedback_msg.actual.velocities[i]
+            
+            if active_point.velocities is not None and len(active_point.velocities) > 0:
+                end_vel = active_point.velocities[i]
+            else:
+                end_vel = 0.0
+
+            if prev_state is not None and prev_state.velocities is not None and len(prev_state.velocities) > 0:
+                start_vel = prev_state.velocities[i]
+            else:
+                start_vel = current_vel
+                
+            start_pos = prev_state.positions[i] if prev_state is not None else current_pos
+            end_pos = active_point.positions[i]
+
+            
+            
+            """
+            Calculates target velocity and commanded acceleration for the current timestep dt.
+            """
+            # 1. Determine total segment duration (h) and current normalized time (tau)
+            if secs_remaining > 0 and prop_elapsed < 1.0:
+                h = secs_remaining / (1.0 - prop_elapsed)
+            else:
+                h = max(end_t - start_t, 1e-6)
+
+            tau = np.clip(prop_elapsed, 0.0, 1.0)
+
+            # 2. Local Monotonicity Enforcement (Prevents position overshoot between start_pos and end_pos)
+            delta = (end_pos - start_pos) / h
+            max_monotonic_v = 3.0 * abs(delta)
+
+            v0 = np.clip(start_vel, -max_monotonic_v, max_monotonic_v)
+            v1 = np.clip(end_vel, -max_monotonic_v, max_monotonic_v)
+
+            # 3. Cubic Hermite Spline Evaluations
+            # Desired Position x_d(tau)
+            pos_d = ((2*tau**3 - 3*tau**2 + 1) * start_pos + 
+                     (tau**3 - 2*tau**2 + tau) * h * v0 + 
+                     (-2*tau**3 + 3*tau**2) * end_pos + 
+                     (tau**3 - tau**2) * h * v1)
+
+            # Desired Velocity v_d(tau)
+            vel_d = ((6*tau**2 - 6*tau) * start_pos + 
+                     (3*tau**2 - 4*tau + 1) * h * v0 + 
+                     (-6*tau**2 + 6*tau) * end_pos + 
+                     (3*tau**2 - 2*tau) * h * v1) / h
+
+            # Desired Acceleration Feedforward a_d(tau)
+            accel_ff = ((12*tau - 6) * start_pos + 
+                        (6*tau - 4) * h * v0 + 
+                        (-12*tau + 6) * end_pos + 
+                        (6*tau - 2) * h * v1) / (h**2)
+
+            # Clamp target velocity to maxv bound
+            next_vel = np.clip(vel_d, -maxv, maxv)
+
+            kp = 0.0
+            kd = 0.0
+            
+            # 4. Feedforward + Feedback Command Calculation
+            next_acc = accel_ff + kp * (pos_d - current_pos) + kd * (next_vel - current_vel)
+
+            # Enforce maximum acceleration limit maxa
+            next_acc = np.clip(next_acc, -maxa, maxa)
+
+            next_pos = current_pos + 0.5 * (current_vel + next_vel) * dt
+
+            target_poses.append(next_pos)
+            target_vels.append(next_vel)
+            target_accs.append(next_acc)
+
+        return target_poses, target_vels, target_accs
 
     def interpolate_poses(self, active_point, prev_state, feedback_msg):
         pos, vel, acc = self.interpolate(active_point, prev_state, feedback_msg)

@@ -4,6 +4,7 @@ import importlib
 import copy
 import time
 from math import copysign
+import pprint
 
 import stretch4_body.robot.robot_client as rc
 import rclpy
@@ -70,20 +71,32 @@ class StretchDriver(Stretch4ROSDriver):
                 self.logger.info(f"Setting joint limits for joint {joint} as ({ll},{ul}).  Success: {success}, reasons: {reasons}")'''
 
         self.velocity_commands = {joint: None for joint in self.command_joints}
-            
+
+        self.command_publishers = {}
+        qos_profile = 10
+        
+        for joint in self.command_joints:
+            self.command_publishers[joint] = self.create_publisher(
+                JointState, f"/joint_command_diagnostics/{joint}/command", qos_profile
+        )
+
+        #pprint.pprint(self.robot.robot_params)
 
         # Velocity Control
         self.set_vel_functions = {}
 
-        self.vel_increment = self.robot.robot_params["wrist_roll"]["motion"]["max"]["vel"]*self._get_push_interval()*0.5 #assume it takes half of the distance to reach steady vel
+        self.vel_increment = self.robot.robot_params["wrist_roll"]["motion"]["max"]["vel"]*0.1 #tenth of second of movement at max vel
 
         accel_params = []
         if hasattr(self.robot, 'lift'):
             self.set_vel_functions['lift'] = lambda v, a:  self.robot.lift.set_velocity(v, a_m=a)
+            #snelf.set_vel_functions['lift'] = lambda v, a: self.robot.lift.move_by(v*0.3, v_m = v, a_m = a)
             accel_params.append(Parameter("joint_acceleration.lift",Parameter.Type.DOUBLE,self.robot.robot_params['lift']['motion']['default']['accel_m']))
+            accel_params.append(Parameter("joint_limit.lift.acceleration",Parameter.Type.DOUBLE,self.robot.robot_params['lift']['motion']['max']['accel_m']))
         if hasattr(self.robot, 'arm'):
             self.set_vel_functions['arm'] = lambda v, a:  self.robot.arm.set_velocity(v, a_m=a)
             accel_params.append(Parameter("joint_acceleration.arm",Parameter.Type.DOUBLE, self.robot.robot_params['arm']['motion']['default']['accel_m']))
+            accel_params.append(Parameter("joint_limit.arm.acceleration",Parameter.Type.DOUBLE, self.robot.robot_params['arm']['motion']['max']['accel_m']))
         if hasattr(self.robot, 'end_of_arm') and hasattr(self.robot.end_of_arm, 'joints'):
             for joint in self.robot.end_of_arm.joints: 
 
@@ -93,10 +106,16 @@ class StretchDriver(Stretch4ROSDriver):
                 else:
                     self.set_vel_functions[f'{joint}']= lambda v, a, j=joint: self.robot.end_of_arm.quick_stop(j) if v == 0.0 else self.robot.end_of_arm.move_by(j, copysign(self.vel_increment,v), v_r=v, a_r = a)
                 accel_params.append(Parameter(f"joint_acceleration.{joint}",Parameter.Type.DOUBLE,self.robot.robot_params[joint]['motion']['default']['accel']))
+                accel_params.append(Parameter(f"joint_limit.{joint}.acceleration",Parameter.Type.DOUBLE,self.robot.robot_params[joint]['motion']['max']['accel']))
+                
 
         accel_params.append(Parameter("joint_acceleration.omnibase.linear", Parameter.Type.DOUBLE,self.robot.robot_params['omnibase']['motion']['default']['accel_xy_m']))
         accel_params.append(Parameter("joint_acceleration.omnibase.angular", Parameter.Type.DOUBLE,self.robot.robot_params['omnibase']['motion']['default']['accel_w_r']))
 
+        accel_params.append(Parameter("joint_limit.omnibase.linear.acceleration", Parameter.Type.DOUBLE,self.robot.robot_params['omnibase']['motion']['max']['accel_xy_m']))
+        accel_params.append(Parameter("joint_limit.omnibase.angular.acceleration", Parameter.Type.DOUBLE,self.robot.robot_params['omnibase']['motion']['max']['accel_w_r']))
+
+        
         #succeeded = self.set_parameters(accel_params)
         
         results = self.set_parameters(accel_params)
@@ -145,7 +164,7 @@ class StretchDriver(Stretch4ROSDriver):
         self.velocity_joints = ["arm", "lift", "wrist_yaw", "wrist_roll", "wrist_pitch"]
             
     def _get_push_interval(self):
-        return 0.1
+        return 0.01
             
     def push_robot_command(self):
         for joint in self.velocity_commands:
@@ -157,10 +176,10 @@ class StretchDriver(Stretch4ROSDriver):
 
             if mode == "velocity" and self.velocity_commands[joint] is not None:
                 last_sent = self.velocity_commands[joint]["last_sent"]
-                target = self.velocity_commands[joint]["target"]
+                target,a = self.velocity_commands[joint]["target"]
                 if self.get_clock().now() - last_sent > Duration(seconds=self._get_push_interval()):
                     #self.logger.warn(f"Sending velocity {target} to joint {joint}")
-                    self.set_joint_velocity(joint,target)                
+                    self.set_joint_velocity(joint,target,a)
         
         self.robot.push_command()
 
@@ -224,6 +243,7 @@ class StretchDriver(Stretch4ROSDriver):
                     joint_state.position.append(pos/5.0)
                     joint_state.velocity.append(vel/5.0)
                     joint_state.effort.append(eff)
+                    
             elif cg.name == "gripper_joint":
                 for link in ['gripper_finger_left_joint', 'gripper_finger_right_joint']:
                     joint_state.name.append(link)
@@ -351,17 +371,36 @@ class StretchDriver(Stretch4ROSDriver):
                                          a_r = angular_acc
                                         )
 
-    def set_joint_velocity(self, joint, target):
-        self.velocity_commands[joint]={"target":target,
+    def set_joint_velocity(self, joint, target, a=None):
+        if a is None:
+            a = self.get_parameter_or(f"joint_acceleration.{joint}",None).value
+        self.velocity_commands[joint]={"target":(target, a),
                                        "last_sent":self.get_clock().now()}
-        acceleration_param = self.get_parameter_or(f"joint_acceleration.{joint}",None).value
-        self.set_vel_functions[joint](target, acceleration_param)
-
-    def set_joint_position(self, joint, target):
-        self.velocity_commands[joint] = None
-        a = self.get_parameter_or(f"joint_acceleration.{joint}",None).value
-        v = self.get_parameter_or(f"joint_default_velocity.{joint}",None).value
         
+        command = JointState()
+        command.name = [joint]
+        command.position = []
+        command.velocity = [target] if target is not None else []
+        command.effort = [a] if a is not None else []
+        
+        self.command_publishers[joint].publish(command)
+        self.set_vel_functions[joint](target, a)
+
+    def set_joint_position(self, joint, target, v=None, a=None):
+        self.velocity_commands[joint] = None
+        if a is None:
+            a = self.get_parameter_or(f"joint_acceleration.{joint}",None).value
+        if v is None:
+            v = self.get_parameter_or(f"joint_default_velocity.{joint}",None).value
+
+        command = JointState()
+        command.name = [joint]
+        command.position = [target] if target is not None else []
+        command.velocity = [v] if v is not None else []
+        command.effort = [a] if a is not None else []
+        
+        self.command_publishers[joint].publish(command)
+            
         match joint:
             case "lift":
                 self.robot.lift.move_to(target,v_m = v, a_m = a)
@@ -548,7 +587,9 @@ class StretchDriver(Stretch4ROSDriver):
         is_homed_msg = DiagnosticStatus(name="is_homed")
         is_homing_msg = DiagnosticStatus(name="is_homing")
         is_runstopped_msg = DiagnosticStatus(name="is_runstopped")
+        current_msg = DiagnosticStatus(name="current")
 
+        
         for cg in self.joint_command_groups:
             pos, vel, eff = cg.joint_state(robot_status)
             if cg.name == "translate_mobile_base":
@@ -571,6 +612,11 @@ class StretchDriver(Stretch4ROSDriver):
             at_limit_msg.values.append(KeyValue(key=cg.name, value=f"{status_dict['at_limit']}"))
             soft_limits_msg.values.append(KeyValue(key=cg.name, value=f"{status_dict['soft_motion_limits']}"))
             braking_distance_msg.values.append(KeyValue(key=cg.name, value=f"{status_dict['braking_distance']}"))
+            
+            if 'motor' in status_dict:
+                current_msg.values.append(KeyValue(key=cg.name, value=f"{status_dict['motor']['current']}"))
+            else:
+                current_msg.values.append(KeyValue(key=cg.name, value=f"{status_dict['current_mA']}"))
             is_homed_msg.values.append(KeyValue(key=cg.name, value=f"{is_homed}"))
             is_homing_msg.values.append(KeyValue(key=cg.name, value=f"{is_homing}"))
             is_runstopped_msg.values.append(KeyValue(key=cg.name, value=f"{is_runstopped}"))
@@ -581,6 +627,7 @@ class StretchDriver(Stretch4ROSDriver):
         joint_state_diagnostics.status.append(at_limit_msg)
         joint_state_diagnostics.status.append(soft_limits_msg)
         joint_state_diagnostics.status.append(braking_distance_msg)
+        joint_state_diagnostics.status.append(current_msg)
 
         return joint_state_diagnostics
     
