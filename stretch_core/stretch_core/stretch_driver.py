@@ -137,7 +137,7 @@ class StretchDriver(Node):
         tool_name = self.robot.params.get('tool')
         try:
             tool_metadata = get_tool_metadata(tool_name)
-            tool_is_actuated = bool(tool_metadata.tool_joints)
+            tool_is_actuated = bool(tool_metadata.actuated_joints)
             tool_joints = tool_metadata.tool_joints
         except ToolConfigurationError:
             # No tool configured, or a passive tool (e.g. a tablet) with no ToolMetadata.
