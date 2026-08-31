@@ -38,6 +38,8 @@ Below is an unordered list of common or useful ROS2 commands:
 
 * Start Stretch Driver: `ros2 launch stretch_core stretch_driver.launch.py`
   * Teleop twist keyboard: `ros2 run teleop_twist_keyboard teleop_twist_keyboard`
+  * Driver parameters (`mode`, `tool_info.*`, `joint_velocity.*`, `joint_acceleration.*`) and joint state diagnostics: see [stretch\_core/README.md](stretch_core/README.md#stretch_driver)
+  * List/read them: `ros2 param list /stretch_driver` and `ros2 param get /stretch_driver joint_velocity.lift`
 * Start Lidars: `ros2 launch stretch_core dual_hesai.launch.py`
 * Start Cameras: `ros2 launch stretch_core luxonis.launch.py use_center:=true use_left:=true use_right:=true` for the head cameras and `ros2 launch stretch_core gripper_camera.launch.py` for the gripper camera.
 * Navigation (See [https://docs.hello-robot.com/stretch4\_docs/working-with-stretch/getting-started/demo-mapping-and-navigation#set-a-navigation-goal](https://docs.hello-robot.com/stretch4_docs/working-with-stretch/getting-started/demo-mapping-and-navigation#set-a-navigation-goal)):
