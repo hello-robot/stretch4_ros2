@@ -105,6 +105,21 @@ class StretchDriver(Node):
         self.create_subscription(JointJog, "joint_vel", self.velocity_callback, 1, callback_group=self.main_group)
         self.create_subscription(Joy, "joy", self.joy_callback, 1, callback_group=self.main_group)
 
+        # Tool Info Params
+        tool_name = self.robot.params.get('tool')
+        try:
+            tool_metadata = get_tool_metadata(tool_name)
+            tool_is_actuated = bool(tool_metadata.actuated_joints)
+            tool_joints = tool_metadata.tool_joints
+        except ToolConfigurationError:
+            # No tool configured, or a passive tool (e.g. a tablet) with no ToolMetadata.
+            tool_metadata = None
+            tool_is_actuated = False
+            tool_joints = []
+        self.declare_parameter("tool_info.name", tool_name or "unknown")
+        self.declare_parameter("tool_info.is_actuated", tool_is_actuated)
+        self.declare_parameter("tool_info.tool_joints", tool_joints)
+
         # Velocity Control
         self.set_vel_functions = {}
         self.joint_metadata_cache: dict[str, RobotJoints | None] = {}
@@ -113,40 +128,47 @@ class StretchDriver(Node):
             self.set_vel_functions['lift_joint'] = lambda v, a:  self.robot.lift.set_velocity(v, a_m=a)
             self.joint_metadata_cache['lift_joint'] = RobotJoints.lift
             self.declare_parameter("joint_acceleration.lift",self.robot.robot_params['lift']['motion']['default']['accel_m'])
+            self.declare_parameter("joint_velocity.lift",self.robot.robot_params['lift']['motion']['default']['vel_m'])
         if hasattr(self.robot, 'arm'):
             self.set_vel_functions['arm_joint'] = lambda v, a:  self.robot.arm.set_velocity(v, a_m=a)
             self.joint_metadata_cache['arm_joint'] = RobotJoints.arm
             self.declare_parameter("joint_acceleration.arm",self.robot.robot_params['arm']['motion']['default']['accel_m'])
+            self.declare_parameter("joint_velocity.arm",self.robot.robot_params['arm']['motion']['default']['vel_m'])
         if hasattr(self.robot, 'end_of_arm') and hasattr(self.robot.end_of_arm, 'joints'):
             end_of_arm = self.robot.end_of_arm
             for joint in end_of_arm.joints:
                 joint_client = getattr(end_of_arm, joint, None)
                 if joint_client is None:
                     continue
-                self.set_vel_functions[f'{joint}_joint'] = lambda d, a, j=joint, c=joint_client: end_of_arm.quick_stop(j) if d == 0.0 else c.move_by(d, a_r=a)
-                self.joint_metadata_cache[f'{joint}_joint'] = RobotJoints.get_joint_by_name(joint)
-                # add a generic gripper joint for utility
-                if self.joint_metadata_cache[f'{joint}_joint'] is RobotJoints.gripper:
-                    self.set_vel_functions['gripper_joint'] = self.set_vel_functions[f'{joint}_joint']
+                joint_metadata = RobotJoints.get_joint_by_name(joint)
+                is_gripper = joint_metadata is RobotJoints.gripper
+
+                set_vel_fn = lambda d, a, j=joint, c=joint_client: end_of_arm.quick_stop(j) if d == 0.0 else c.move_by(d, a_r=a)
+                self.set_vel_functions[f'{joint}_joint'] = set_vel_fn
+                self.joint_metadata_cache[f'{joint}_joint'] = joint_metadata
+
+                if is_gripper and not tool_is_actuated:
+                    continue
+
+                vel = self.robot.robot_params[joint]['motion']['default']['vel']
+
+                if is_gripper:
+                    # add a generic gripper joint for utility
+                    self.set_vel_functions['gripper_joint'] = set_vel_fn
                     self.joint_metadata_cache['gripper_joint'] = RobotJoints.gripper
+
+                    vel = abs(tool_metadata.actuator_to_urdf(vel))
+                    self.declare_parameter("joint_velocity.gripper", vel)
+
                 self.declare_parameter(f"joint_acceleration.{joint}",self.robot.robot_params[joint]['motion']['default']['accel'])
+                self.declare_parameter(f"joint_velocity.{joint}", vel)
+
+
 
         self.declare_parameter("joint_acceleration.omnibase.linear", self.robot.robot_params['omnibase']['motion']['default']['accel_xy_m'])
         self.declare_parameter("joint_acceleration.omnibase.angular", self.robot.robot_params['omnibase']['motion']['default']['accel_w_r'])
-
-        # tool info params
-        tool_name = self.robot.params.get('tool')
-        try:
-            tool_metadata = get_tool_metadata(tool_name)
-            tool_is_actuated = bool(tool_metadata.tool_joints)
-            tool_joints = tool_metadata.tool_joints
-        except ToolConfigurationError:
-            # No tool configured, or a passive tool (e.g. a tablet) with no ToolMetadata.
-            tool_is_actuated = False
-            tool_joints = []
-        self.declare_parameter("tool_info.name", tool_name or "unknown")
-        self.declare_parameter("tool_info.is_actuated", tool_is_actuated)
-        self.declare_parameter("tool_info.tool_joints", tool_joints)
+        self.declare_parameter("joint_velocity.omnibase.linear", self.robot.robot_params['omnibase']['motion']['default']['vel_xy_m'])
+        self.declare_parameter("joint_velocity.omnibase.angular", self.robot.robot_params['omnibase']['motion']['default']['vel_w_r'])
 
         # Services
         self.stop_the_robot_service = self.create_service(
