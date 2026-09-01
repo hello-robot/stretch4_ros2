@@ -200,10 +200,10 @@ class Stretch4ROSDriver(Node, ABC):
             description='Velocity threshold (rad/s or m/s) below which a joint is considered settled',
         ))
         # Gamepad parameters
-        self.declare_parameter("gamepad.dt", 1.0)
+        self.declare_parameter("gamepad.dt", 0.5)
         for joint in self.command_joints:
-            self.declare_parameter(f"gamepad.max_vel.{joint}", 0.1)
-            self.declare_parameter(f"gamepad.deadzone.{joint}", 0.05)
+            self.declare_parameter(f"gamepad.max_vel.{joint}", 0.5)
+            self.declare_parameter(f"gamepad.deadzone.{joint}", 0.0)
 
     
 
@@ -720,7 +720,7 @@ class Stretch4ROSDriver(Node, ABC):
                 new_pos = curr_pos + vel * dt
                 goal.position.append(new_pos)
 
-        self.logger.info(f"goal: {goal}")
+        #self.logger.info(f"goal: {goal}")
         return goal
 
     @abstractmethod
@@ -946,7 +946,11 @@ class StretchTrajectoryActionServer:
         add_param("ki", 0.001)
         add_param("kd", 0.01)
         add_param("threshold", 0.05)
-        add_param("loop_rate", 40.0)
+        add_param("loop_rate", 50.0)
+        # if velocity not specified, how to do interpolation
+        # options are 'zero' (stop between waypoints) or 'smooth'
+        # (average slope between prev and next points)
+        add_param("velocity_inference", "smooth")
 
     def get_param(self, short_name):
         return self.driver.get_parameter(f"{self.param_prefix}.{short_name}").value
@@ -1030,9 +1034,11 @@ class StretchTrajectoryActionServer:
         rate = self.driver.create_rate(self.get_param("loop_rate"))
         last_timepoint =self.driver.get_clock().now()
         counter = 0
+
         
         while point_i < len(trajectory.points):
             active_point = trajectory.points[point_i]
+            next_state = trajectory.points[point_i+1] if point_i < len(trajectory.points)-1 else None
             elapsed_time = self.driver.get_clock().now()-start_time
             first = True
             #self.driver.logger.warning(f"On point {point_i}")
@@ -1047,13 +1053,13 @@ class StretchTrajectoryActionServer:
                 if first:
                     #self.driver.logger.warning(f"Time: {self.driver.get_clock().now()-last_timepoint}")
                     #last_timepoint =self.driver.get_clock().now()
-                    pos, vel, acc = first_loop_command(active_point, prev_state, feedback_msg)
+                    pos, vel, acc = first_loop_command(active_point, prev_state, next_state, feedback_msg)
                     first = False
                 else:
                     #self.driver.logger.warning(f"Time: {self.driver.get_clock().now()-last_timepoint}")
                     #last_timepoint =self.driver.get_clock().now()
                     t0 = time.perf_counter_ns()
-                    pos, vel, acc = every_loop_command(active_point, prev_state, feedback_msg)
+                    pos, vel, acc = every_loop_command(active_point, prev_state, next_state, feedback_msg)
                     
                 #t0 = time.perf_counter_ns()
                 command = JointState()
@@ -1099,6 +1105,10 @@ class StretchTrajectoryActionServer:
                 feedback_msg = self._get_feedback(active_point, elapsed_time.nanoseconds*1e-9, trajectory.joint_names)
                 goal_handle.publish_feedback(feedback_msg)
 
+                feedback_msg.desired.positions = pos if pos is not None and len(pos)>0 else feedback_msg.desired.positions
+                feedback_msg.desired.velocities = vel if vel is not None and len(vel)>0 else feedback_msg.desired.velocities
+                feedback_msg.desired.accelerations = acc if acc is not None and len(acc)>0 else feedback_msg.desired.accelerations
+
                 actual = JointState()
                 desired = JointState()
                 
@@ -1117,7 +1127,8 @@ class StretchTrajectoryActionServer:
                 #        print(f"dt: {(time.perf_counter_ns()-t0)/1000.0}")
                         
                 if next_point_condition(feedback_msg):
-                    prev_state = copy.deepcopy(feedback_msg.actual)
+                    #prev_state = copy.deepcopy(feedback_msg.actual)
+                    prev_state = copy.deepcopy(feedback_msg.desired)
                     break
                 
                 rate.sleep()
@@ -1175,14 +1186,14 @@ class StretchTrajectoryActionServer:
 
         return all_joints_ok
 
-    def active_point_goal(self, active_point, prev_pt, feedback_msg):
+    def active_point_goal(self, active_point, prev_pt, next_pt, feedback_msg):
         pos = active_point.positions if len(active_point.positions) > 0 else None
         vel = active_point.velocities if len(active_point.velocities) > 0 else None
         acc = active_point.accelerations if len(active_point.accelerations) > 0 else None
 
         return pos, vel, acc
 
-    def interpolate(self, active_point, prev_state, feedback_msg):
+    def interpolate(self, active_point, prev_state, next_state, feedback_msg):
         now = feedback_msg.actual.time_from_start.sec + feedback_msg.actual.time_from_start.nanosec*1e-9
         end_t = active_point.time_from_start.sec + active_point.time_from_start.nanosec*1e-9
         start_t = prev_state.time_from_start.sec + prev_state.time_from_start.nanosec*1e-9 if prev_state is not None else now
@@ -1193,6 +1204,24 @@ class StretchTrajectoryActionServer:
         target_accs = []
 
         dt = 1.0/self.get_param("loop_rate")
+
+        '''if end_t - start_t < 3.0*dt:
+            #don't do full interpolation if points are very close together
+            pos = active_point.positions if len(active_point.positions) > 0 else None
+            vel = active_point.velocities if len(active_point.velocities) > 0 else None
+            acc = active_point.accelerations if len(active_point.accelerations) > 0 else None
+
+            if vel is None:
+                vel = []
+                for i, joint in enumerate(feedback_msg.joint_names):
+                    if prev_state is not None:
+                        vel.append(active_point.positions[i]-prev_state.positions[i]/(end_t-start_t))
+                    elif end_t > 0:
+                        vel.append(active_point.positions[i]/end_t)
+                    else:
+                        vel.append(0.0)
+            return pos, vel, acc'''
+        
         
         for i, goal_pos in enumerate(active_point.positions):
             joint_name = feedback_msg.joint_names[i]
@@ -1211,21 +1240,48 @@ class StretchTrajectoryActionServer:
             
             current_pos = feedback_msg.actual.positions[i]
             current_vel = feedback_msg.actual.velocities[i]
+
             
+            if prev_state is None:
+                start_vel = 0.0
+            elif prev_state.velocities is not None and len(prev_state.velocities) > 0:
+                start_vel = prev_state.velocities[i]
+            else:
+                self.driver.logger.error("Previous state should have velocities; check your code!")
+                start_vel=0.0
+
+
+            slope1 = None
+            slope2 = None
             if active_point.velocities is not None and len(active_point.velocities) > 0:
                 end_vel = active_point.velocities[i]
             else:
-                end_vel = 0.0
+                if self.get_param("velocity_inference") == "zero" or next_state is None:
+                    end_vel = 0.0
+                elif self.get_param("velocity_inference") == "smooth":
+                    d2 = next_state.positions[i] - active_point.positions[i]
+                    d1 = active_point.positions[i] - prev_state.positions[i] if prev_state is not None else d2
+                    
+                    t0 = prev_state.time_from_start.sec + prev_state.time_from_start.nanosec*1e-9 if prev_state is not None else None
+                    t1 = active_point.time_from_start.sec + active_point.time_from_start.nanosec*1e-9
+                    t2 = next_state.time_from_start.sec + next_state.time_from_start.nanosec*1e-9
 
-            if prev_state is not None and prev_state.velocities is not None and len(prev_state.velocities) > 0:
-                start_vel = prev_state.velocities[i]
-            else:
-                start_vel = current_vel
-                
+                    dt2 = t2-t1
+                    dt1 = t1-t0 if t0 is not None else dt2
+
+                    slope1 = (d1)/(dt1) if dt1 != 0.0 else 0.0
+                    slope2 = (d2)/(dt2) if dt2 != 0.0 else 0.0
+
+                    print(f"d1: {d1} dt1: {dt1}/d2:{d2} dt2:{dt2}")
+                    
+                    end_vel = 0.5*(slope1+slope2)                    
+                else:
+                    self.driver.logger.warning("No end velocity specified and unknown velocity inference method. Setting waypoint target velocity to zero")
+                    end_vel = 0.0
+
+                           
             start_pos = prev_state.positions[i] if prev_state is not None else current_pos
             end_pos = active_point.positions[i]
-
-            
             
             """
             Calculates target velocity and commanded acceleration for the current timestep dt.
@@ -1284,12 +1340,12 @@ class StretchTrajectoryActionServer:
 
         return target_poses, target_vels, target_accs
 
-    def interpolate_poses(self, active_point, prev_state, feedback_msg):
-        pos, vel, acc = self.interpolate(active_point, prev_state, feedback_msg)
+    def interpolate_poses(self, active_point, prev_state, next_state, feedback_msg):
+        pos, vel, acc = self.interpolate(active_point, prev_state, next_state, feedback_msg)
         return pos, vel, acc
 
-    def interpolate_velocities(self, active_point, prev_state, feedback_msg):
-        pos, vel, acc = self.interpolate(active_point, prev_state, feedback_msg)
+    def interpolate_velocities(self, active_point, prev_state, next_state, feedback_msg):
+        pos, vel, acc = self.interpolate(active_point, prev_state, next_state, feedback_msg)
         return None, vel, acc
     
     

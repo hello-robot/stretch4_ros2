@@ -164,7 +164,7 @@ class StretchDriver(Stretch4ROSDriver):
         self.velocity_joints = ["arm", "lift", "wrist_yaw", "wrist_roll", "wrist_pitch"]
             
     def _get_push_interval(self):
-        return 0.01
+        return 0.2
             
     def push_robot_command(self):
         for joint in self.velocity_commands:
