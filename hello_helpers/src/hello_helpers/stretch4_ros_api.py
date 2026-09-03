@@ -176,7 +176,7 @@ class Stretch4ROSDriver(Node, ABC):
             description='Default timeout (sec) for velocity control',
         ))
         
-        self.declare_parameter('control_loop_rate', 500, ParameterDescriptor(
+        self.declare_parameter('control_loop_rate', 100, ParameterDescriptor(
             type=ParameterType.PARAMETER_DOUBLE,
             description='Target rate (hz) for main control loop',
         ))
@@ -509,7 +509,7 @@ class Stretch4ROSDriver(Node, ABC):
         return SetParametersResult(successful=True)
 
     def base_twist_callback(self, twist:Twist):
-        self.logger.info(f"Got request for base twist: x:{twist.linear.x}, y:{twist.linear.y}, theta:{twist.angular.z}") 
+        self.logger.debug(f"Got request for base twist: x:{twist.linear.x}, y:{twist.linear.y}, theta:{twist.angular.z}") 
         
         mode = self.robot_mode()
         if self.robot_mode() != "active":
@@ -523,7 +523,7 @@ class Stretch4ROSDriver(Node, ABC):
         pass
 
     def velocity_cmd_callback(self, target: JointState):
-        self.logger.info(f"Got velocity command request: names: {target.name} velocities: {target.velocity} position: {target.position} (NB: position not used in velocity command!)")
+        self.logger.debug(f"Got velocity command request: names: {target.name} velocities: {target.velocity} position: {target.position} (NB: position not used in velocity command!)")
         current_mode = self.get_parameter('mode').value
         if current_mode != 'active':
             self.logger.warn(f"Cannot send velocity commands while robot is in mode {current_mode}.  Must be in mode 'active'")
@@ -608,7 +608,7 @@ class Stretch4ROSDriver(Node, ABC):
         return succeeded
     
     def position_cmd_callback(self, target: JointState):
-        self.logger.info(f"Got position command request: names: {target.name} velocities: {target.velocity} position: {target.position} (NB: velocity not used in velocity command!)")
+        self.logger.debug(f"Got position command request: names: {target.name} velocities: {target.velocity} position: {target.position} (NB: velocity not used in velocity command!)")
         current_mode = self.get_parameter('mode').value
         if current_mode != 'active':
             self.logger.warn(f"Cannot send position commands while robot is in mode {current_mode}.  Must be in mode 'active'")
@@ -641,7 +641,7 @@ class Stretch4ROSDriver(Node, ABC):
 
 
     def joy_callback(self, joy_msg: Joy):
-        self.logger.info(f"Got joy message. Buttons: {joy_msg.buttons} Axes: {joy_msg.axes} (this message is throttled to appear at most every 2s)", throttle_duration_sec = 2.0)
+        self.logger.debug(f"Got joy message. Buttons: {joy_msg.buttons} Axes: {joy_msg.axes} (this message is throttled to appear at most every 2s)", throttle_duration_sec = 2.0)
         
         current_mode = self.get_parameter('mode').value
         if current_mode != 'teleop':
