@@ -2,8 +2,6 @@
 
 *stretch_core* provides the drivers and navigation-facing sensor processing for the Stretch mobile manipulator.
 
-<<<<<<< Updated upstream
-=======
 ## stretch_driver
 
 `stretch_driver` is the main hardware node. It wraps `stretch4_body`'s `RobotClient` and exposes the robot's joints, sensors, and end-of-arm tool over ROS 2.
@@ -95,7 +93,6 @@ A separate `/joint_limits` topic (`sensor_msgs/JointState`, `position` = lower b
 
 The driver is tool-agnostic: joint names, unit conventions, and position tolerances are resolved at runtime through `stretch4_body`'s `RobotJoints` / `ToolMetadata`, so a new gripper does not need a new command group. See the [custom user tool guide](https://github.com/hello-robot/stretch4_body#custom-user-end-of-arm-tools) in stretch4_body for how a tool declares its joints, units, and tolerance.
 
->>>>>>> Stashed changes
 ## Dual Hesai point cloud merger
 
 The `dual_lidar_pointcloud_merger` node synchronizes the left and right Hesai `PointCloud2` streams, transforms both clouds into a target frame, preserves the original per-point fields such as `ring` and `timestamp`, and publishes one merged cloud.
