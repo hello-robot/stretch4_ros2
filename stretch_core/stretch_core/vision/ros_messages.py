@@ -69,6 +69,31 @@ def depth_image_msg_to_numpy(msg):
 
 
 __COMPRESSED_DEPTH_16UC1_HEADER = array("B", [0] * 12)
+"""image_transport's compressedDepth ConfigHeader, which prefixes the PNG in every compressedDepth
+message: `{compressionFormat format; float depthParam[2];}`. The quantization parameters are only
+used for 32FC1 depth, so a 16-bit map leaves the whole header zeroed."""
+
+COMPRESSED_DEPTH_FORMAT = "16UC1; compressedDepth png"
+"""`CompressedImage.format` for a 16-bit depth map PNG encoded the way image_transport does it."""
+
+
+def compressed_depth_payload(depth_millimeters: np.ndarray, png_compression_level: int = 1) -> array:
+    """The bytes of a compressedDepth message: the 12-byte ConfigHeader followed by a PNG of the map.
+
+    `depth_millimeters` has to be a 16-bit map. PNG is lossless, so the depth values survive exactly,
+    at roughly half the bytes of the raw image. `png_compression_level` trades encode time for size;
+    the default is the fast end, because this runs once per frame at the camera's frame rate.
+    """
+    if depth_millimeters.dtype != np.uint16:
+        raise ValueError(f"compressedDepth carries a 16-bit depth map, got {depth_millimeters.dtype}.")
+
+    is_encoded, encoded_image = cv2.imencode(
+        ".png", depth_millimeters, [cv2.IMWRITE_PNG_COMPRESSION, png_compression_level]
+    )
+    if not is_encoded:
+        raise RuntimeError("Failed to PNG encode a depth map.")
+
+    return __COMPRESSED_DEPTH_16UC1_HEADER + array("B", encoded_image.tobytes())
 
 
 def compress_depth_image(frame: np.ndarray):
@@ -77,13 +102,9 @@ def compress_depth_image(frame: np.ndarray):
     """
     normalized_array = (frame * 1000).astype(np.uint16)
 
-    _, encoded_image = cv2.imencode(".png", normalized_array)
-
     ros_image_compressed = CompressedImage()
     ros_image_compressed.format = "16uc1; compressedDepth"
-    ros_image_compressed.data = __COMPRESSED_DEPTH_16UC1_HEADER + array(
-        "B", encoded_image.tobytes()
-    )
+    ros_image_compressed.data = compressed_depth_payload(normalized_array)
 
     return ros_image_compressed
 

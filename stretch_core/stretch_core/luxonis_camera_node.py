@@ -37,7 +37,12 @@ from stretch4_body.subsystem.cameras.enums.rgb_camera import RGBCameras
 from stretch_python_bridge import compressed_format_with_sequence
 
 from stretch_core.vision.rectify import CameraRectifier
-from stretch_core.vision.ros_messages import DeviceClockOffset, create_timestamp
+from stretch_core.vision.ros_messages import (
+    COMPRESSED_DEPTH_FORMAT,
+    DeviceClockOffset,
+    compressed_depth_payload,
+    create_timestamp,
+)
 from stretch_core.vision.vision_topics import (
     VisionTopics,
     VisionFrames,
@@ -91,6 +96,9 @@ class LuxonisCameraNode(Node):
         # Publishers and camera info caches
         self.publishers_topics = {}
         self.compressed_publishers = {}
+        # Depth is not MJPEG, so it does not share the compressed publishers above. Only the gripper
+        # node has one, and only when it is publishing compressed.
+        self.compressed_depth_publisher = None
         self.rotated_publishers = {}
         self.rect_publishers = {}
         self.info_publishers = {}
@@ -141,6 +149,9 @@ class LuxonisCameraNode(Node):
             # Depth camera (named stereo)
             self.publishers_topics['stereo'] = self.create_publisher(
                 Image, VisionTopics.gripper_image_raw('stereo'), self.sensor_qos)
+            if self.use_compressed:
+                self.compressed_depth_publisher = self.create_publisher(
+                    CompressedImage, VisionTopics.gripper_compressed_depth('stereo'), self.sensor_qos)
             self.info_publishers['stereo'] = self.create_publisher(
                 CameraInfo, VisionTopics.gripper_camera_info('stereo'), self.sensor_qos)
             self.camera_info['stereo'] = self.camera_info['right'] # share right camera info for depth
@@ -332,6 +343,43 @@ class LuxonisCameraNode(Node):
         info_msg.header.frame_id = frame_id
         self.info_publishers[camera_name].publish(info_msg)
 
+    def publish_depth_frame(self, depth, timestamp: float, frame_number: int | None):
+        """Publishes one gripper depth map plus its CameraInfo.
+
+        16-bit depth is not MJPEG encodable, so the compressed topic carries a PNG instead, laid out
+        the way image_transport's compressedDepth transport lays it out. PNG encoding is lossless but
+        costs real CPU per frame, unlike the memcpy the color topics pay, so neither the compressed
+        nor the raw topic is served unless something is subscribed to it.
+        """
+        frame_id = VisionFrames.gripper_camera_frame('stereo')
+        stamp = self.create_stamp(timestamp)
+
+        depth_publisher = self.publishers_topics['stereo']
+        if depth_publisher.get_subscription_count() > 0:
+            img_msg = ros2_numpy.msgify(Image, depth, encoding='16UC1')
+            img_msg.header.stamp = stamp
+            img_msg.header.frame_id = frame_id
+            depth_publisher.publish(img_msg)
+
+        if self.compressed_depth_publisher is not None and self.compressed_depth_publisher.get_subscription_count() > 0:
+            try:
+                compressed_msg = CompressedImage()
+                compressed_msg.header.stamp = stamp
+                compressed_msg.header.frame_id = frame_id
+                # ROS 2 has no header.seq, so the sensor's sequence number rides along in the format string.
+                compressed_msg.format = compressed_format_with_sequence(COMPRESSED_DEPTH_FORMAT, frame_number)
+                compressed_msg.data = compressed_depth_payload(depth)
+                self.compressed_depth_publisher.publish(compressed_msg)
+            except Exception as ex:
+                self.get_logger().error(f"Failed to compress and publish a depth frame: {ex}")
+
+        if 'stereo' not in self.camera_info or self.camera_info['stereo'] is None:
+            raise RuntimeError("Camera calibration file for gripper stereo is missing or could not be loaded!")
+        info_msg = self.camera_info['stereo']
+        info_msg.header.stamp = stamp
+        info_msg.header.frame_id = frame_id
+        self.info_publishers['stereo'].publish(info_msg)
+
     def publish_gripper_frames(self):
         self.get_logger().info(f"Starting Gripper Camera Stream (compressed={self.use_compressed})...")
 
@@ -349,24 +397,12 @@ class LuxonisCameraNode(Node):
             self.publish_camera_frame(synced_frame.left, 'left', VisionFrames.gripper_camera_frame('left'))
             self.publish_camera_frame(synced_frame.right, 'right', VisionFrames.gripper_camera_frame('right'))
 
-            # 16-bit depth is not MJPEG encodable, so it stays on the raw topic.
             if synced_frame.depth is not None:
-                frame_id = VisionFrames.gripper_camera_frame('stereo')
-                stamp = self.create_stamp(synced_frame.right.timestamp if synced_frame.right is not None else synced_frame.timestamp)
-
-                depth_publisher = self.publishers_topics['stereo']
-                if depth_publisher.get_subscription_count() > 0:
-                    img_msg = ros2_numpy.msgify(Image, synced_frame.depth, encoding='16UC1')
-                    img_msg.header.stamp = stamp
-                    img_msg.header.frame_id = frame_id
-                    depth_publisher.publish(img_msg)
-
-                if 'stereo' not in self.camera_info or self.camera_info['stereo'] is None:
-                    raise RuntimeError("Camera calibration file for gripper stereo is missing or could not be loaded!")
-                info_msg = self.camera_info['stereo']
-                info_msg.header.stamp = stamp
-                info_msg.header.frame_id = frame_id
-                self.info_publishers['stereo'].publish(info_msg)
+                self.publish_depth_frame(
+                    synced_frame.depth,
+                    timestamp=synced_frame.right.timestamp if synced_frame.right is not None else synced_frame.timestamp,
+                    frame_number=synced_frame.right.frame_number if synced_frame.right is not None else None,
+                )
 
     def publish_head_frames(self):
         self.get_logger().info(f"Starting Head Cameras Stream (compressed={self.use_compressed})...")
