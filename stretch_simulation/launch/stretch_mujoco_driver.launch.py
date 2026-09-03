@@ -78,7 +78,7 @@ def launch(context):
         executable="joint_state_publisher",
         output="log",
         parameters=[
-            {"source_list": ["/stretch/joint_states"]},
+            {"source_list": ["/joint_states"]},
             {"rate": rate},
             {"robot_description": robot_description_content},
         ],
@@ -101,10 +101,10 @@ def launch(context):
         executable="stretch_mujoco_driver",
         emulate_tty=True,
         output="screen",
-        remappings=[
-            ("cmd_vel", "/stretch/cmd_vel"),
-            ("joint_states", "/stretch/joint_states"),
-        ],
+        # remappings=[
+        #     ("cmd_vel", "/stretch/cmd_vel"),
+        #     ("joint_states", "/stretch/joint_states"),
+        # ],
         parameters=[stretch_driver_params],
         # arguments=["--ros-args", "--log-level", "debug"],
         on_exit=Shutdown(),
@@ -141,8 +141,8 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "mode",
-            default_value="position",
-            choices=["position", "navigation", "trajectory", "gamepad"],
+            default_value="active",
+            choices=["active", "teleop"],
             description="The mode in which the ROS driver commands the robot",
         ),
         DeclareLaunchArgument(
