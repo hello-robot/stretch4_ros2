@@ -144,7 +144,8 @@ def stream_gripper_stereo_points(timeout: float | None = 10.0, blocking: bool = 
 # the camera itself. Frames arrive still encoded (`ImageFrame.is_compressed()`), which is a fraction of
 # the bytes and lets the publisher skip decoding entirely, so these are the fast path for anything that
 # just needs pixels on the host. They also carry the sensor's sequence number in `frame_number`.
-# There is no compressed gripper stereo stream: the depth map is 16-bit and is not MJPEG encodable.
+# The gripper depth map is 16-bit, so MJPEG cannot carry it; its compressed stream is PNG encoded on
+# the compressedDepth topic instead. See stream_gripper_stereo_compressed().
 
 def stream_camera_left_compressed(timeout: float | None = 10.0, blocking: bool = True, stream_manager: StreamManager|None = None) -> Generator[ImageFrame | None, None, None]:
     topic = VisionTopics.compressed("left")
@@ -176,6 +177,18 @@ def stream_gripper_left_compressed(timeout: float | None = 10.0, blocking: bool 
 
 def stream_gripper_right_compressed(timeout: float | None = 10.0, blocking: bool = True, stream_manager: StreamManager|None = None) -> Generator[ImageFrame | None, None, None]:
     topic = VisionTopics.gripper_compressed("right")
+    if stream_manager is not None:
+        stream_manager.add_compressed_image_topic(topic)
+        return stream_manager.create_topic_generator(topic)
+    return compressed_image_stream(topic, timeout=timeout, block=blocking)
+
+def stream_gripper_stereo_compressed(timeout: float | None = 10.0, blocking: bool = True, stream_manager: StreamManager|None = None) -> Generator[ImageFrame | None, None, None]:
+    """The gripper depth map, PNG encoded on the compressedDepth topic.
+
+    Frames arrive still encoded, so `ImageFrame.image` is the payload rather than a depth map. Turn it
+    into one with decode_compressed_depth().
+    """
+    topic = VisionTopics.gripper_compressed_depth("stereo")
     if stream_manager is not None:
         stream_manager.add_compressed_image_topic(topic)
         return stream_manager.create_topic_generator(topic)
