@@ -61,7 +61,8 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "show_debug_images",
             default_value="false",
-            description="Whether to show debug images for detected Aruco markers."
+            description="Publish /aruco/debug_image with detected Aruco markers drawn on the "
+                        "camera images. Only published while something is subscribed."
         ),
         DeclareLaunchArgument(
             "use_rviz",

@@ -15,7 +15,7 @@ import stretch4_body.robot.robot_client as rc
 import tf2_ros
 from control_msgs.msg import JointJog
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
-from geometry_msgs.msg import TransformStamped, Twist
+from geometry_msgs.msg import TransformStamped, Twist, TwistWithCovarianceStamped
 from nav_msgs.msg import Odometry
 from rcl_interfaces.msg import ParameterDescriptor, ParameterType, SetParametersResult
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
@@ -57,7 +57,7 @@ class StretchDriver(Node):
         self.declare_parameter('mode', "navigation")
         mode = self.get_parameter('mode').value
         self.control_modes = ['position', 'velocity', 'navigation', 'teleop']
-        self.priority_modes = ['homing', 'stowing']
+        self.priority_modes = ['homing', 'stowing', 'seating']
         if mode not in self.control_modes:
             self.robot.logger.warn(f'given invalid mode={mode}, using navigation instead')
             mode = 'navigation'
@@ -100,6 +100,7 @@ class StretchDriver(Node):
 
         # Subscribers
         self.create_subscription(Twist, "cmd_vel", self.twist_callback, 1, callback_group=self.main_group)
+        self.create_subscription(TwistWithCovarianceStamped, "cmd_vel_stiff", self.stiff_twist_callback, 1, callback_group=self.main_group)
         self.create_subscription(JointJog, "joint_vel", self.velocity_callback, 1, callback_group=self.main_group)
         self.create_subscription(Joy, "joy", self.joy_callback, 1, callback_group=self.main_group)
 
@@ -127,6 +128,12 @@ class StretchDriver(Node):
             self.stop_the_robot_callback,
             callback_group=self.main_group
         )
+        self.freewheel_the_robot_service = self.create_service(
+            Trigger,
+            'freewheel_the_robot',
+            self.freewheel_the_robot_callback,
+            callback_group=self.main_group
+        )
         self.home_the_robot_service = self.create_service(
             Trigger,
             'home_the_robot',
@@ -138,6 +145,12 @@ class StretchDriver(Node):
             'stow_the_robot',
             self.stow_the_robot_callback,
             callback_group=self.main_group
+        )
+        self.seat_dock_service = self.create_service(
+            Trigger,
+            'seat_into_dock',
+            self.seat_dock_callback,
+            callback_group=self.main_group,
         )
         self.runstop_service = self.create_service(
             SetBool,
@@ -204,8 +217,11 @@ class StretchDriver(Node):
             self.robot.logger.error(errmsg)
             return False, errmsg
         self.change_mode('homing')
-        self.robot.home(do_push=False, do_pull=False)
+        finished, _rid = self.robot.routines.routine_robot_home(
+            do_push=False, wait_on_completion=True, timeout=60, do_pull=False)
         self.change_mode(last_driver_mode)
+        if not finished:
+            return False, 'Homing routine did not complete.'
         return True, 'Homed.'
 
     def stow_the_robot(self):
@@ -217,9 +233,26 @@ class StretchDriver(Node):
             self.robot.logger.error(errmsg)
             return False, errmsg
         self.change_mode('stowing')
-        self.robot.stow(do_push=False, do_pull=False)
+        finished, _rid = self.robot.routines.routine_robot_stow(
+            do_push=False, wait_on_completion=True, timeout=30, do_pull=False)
         self.change_mode(last_driver_mode)
+        if not finished:
+            return False, 'Stowing routine did not complete.'
         return True, 'Stowed.'
+
+    def seat_into_dock(self):
+        with self.driver_mode_lock:
+            can_seat = self.driver_mode in self.control_modes
+            last_driver_mode = copy.copy(self.driver_mode)
+        if not can_seat:
+            errmsg = f'Cannot seat_into_dock while in mode={last_driver_mode}.'
+            self.robot.logger.error(errmsg)
+            return False, errmsg
+        self.change_mode('seating')
+        succeeded, _rid = self.robot.routines.routine_blind_dock(
+            do_push=False, wait_on_completion=True, do_pull=False)
+        self.change_mode(last_driver_mode)
+        return bool(succeeded), 'Success' if succeeded else 'Failure'
 
     def runstop_the_robot(self, runstopped, just_change_mode=False):
         if runstopped:
@@ -258,6 +291,15 @@ class StretchDriver(Node):
         response.message = 'Stopped the robot.'
         return response
 
+    def freewheel_the_robot_callback(self, request, response):
+        with self.driver_mode_lock:
+            self.robot.base.enable_freewheel_mode()
+
+        self.robot.logger.info('Received freewheel_the_robot service call, so commanded wheels to release control.')
+        response.success = True
+        response.message = 'Freewheeled the robot.'
+        return response
+
     def home_the_robot_callback(self, request, response):
         self.robot.logger.debug('Received home_the_robot service call.')
         did_succeed, msg = self.home_the_robot()
@@ -268,6 +310,13 @@ class StretchDriver(Node):
     def stow_the_robot_callback(self, request, response):
         self.robot.logger.debug('Received stow_the_robot service call.')
         did_succeed, msg = self.stow_the_robot()
+        response.success = did_succeed
+        response.message = msg
+        return response
+
+    def seat_dock_callback(self, request, response):
+        self.robot.logger.debug('Received seat_into_dock service call.')
+        did_succeed, msg = self.seat_into_dock()
         response.success = did_succeed
         response.message = msg
         return response
@@ -351,6 +400,22 @@ class StretchDriver(Node):
                                          w_r = twist.angular.z, 
                                          a_m = linear_acc, 
                                          a_r = angular_acc
+                                        )
+
+    def stiff_twist_callback(self, stiff_twist: TwistWithCovarianceStamped):
+        with self.driver_mode_lock:
+            if self.driver_mode not in ['navigation', 'velocity']:
+                self.robot.logger.warn(f'Must be in {['navigation', 'velocity']} modes to service Twist msg. Current mode = {self.driver_mode}.')
+                return
+        linear_acc = self.get_parameter_or("joint_acceleration.omnibase.linear",None).value
+        angular_acc = self.get_parameter_or("joint_acceleration.omnibase.angular",None).value
+        stiffness = 1.0 if stiff_twist.twist.covariance[-1] == 0.0 else stiff_twist.twist.covariance[0]
+        self.robot.omnibase.set_velocity(vx_m = stiff_twist.twist.twist.linear.x,
+                                         vy_m = stiff_twist.twist.twist.linear.y,
+                                         w_r = stiff_twist.twist.twist.angular.z,
+                                         a_m = linear_acc,
+                                         a_r = angular_acc,
+                                         stiffness=stiffness,
                                         )
 
     def update_latched_value(self, pub: Publisher, value: Any):
