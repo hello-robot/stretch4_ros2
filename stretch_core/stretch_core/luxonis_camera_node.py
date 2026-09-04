@@ -66,7 +66,9 @@ class LuxonisCameraNode(Node):
                 "topics. This is the fast path: nothing decodes or re-encodes, and a frame costs a "
                 "fraction of the bandwidth of raw BGR. The raw and rotated topics still work, but "
                 "they are only published while something is subscribed to them, because serving them "
-                "means decoding every frame."
+                "means decoding every frame. The gripper's depth map is the exception: it is published "
+                "on compressedDepth *instead of* image_raw, which does not exist at all while this is "
+                "true."
             )),
         )
         self.declare_parameter(
@@ -146,12 +148,21 @@ class LuxonisCameraNode(Node):
             self.camera_types['right'] = RGBCameras.gripper_right
             self.camera_info['right'] = self.load_camera_info_from_enum(RGBCameras.gripper_right)
 
-            # Depth camera (named stereo)
-            self.publishers_topics['stereo'] = self.create_publisher(
-                Image, VisionTopics.gripper_image_raw('stereo'), self.sensor_qos)
+            # Depth camera (named stereo). Depth goes out on exactly one topic: PNG on compressedDepth
+            # when publishing compressed, raw 16UC1 otherwise. The color topics keep their raw
+            # decode-on-demand fallback, but depth has nothing to gain from one, since
+            # decode_compressed_depth() reconstructs the exact same 16-bit map on the consumer's side.
+            #
+            # Deliberately Best Effort, like every other topic here, even though image_transport
+            # advertises its compressedDepth topics RELIABLE. A subscriber that asks for RELIABLE will
+            # not match this publisher and will receive nothing, so consumers ported from a
+            # depthai-ros depth topic have to ask for Best Effort.
             if self.use_compressed:
                 self.compressed_depth_publisher = self.create_publisher(
                     CompressedImage, VisionTopics.gripper_compressed_depth('stereo'), self.sensor_qos)
+            else:
+                self.publishers_topics['stereo'] = self.create_publisher(
+                    Image, VisionTopics.gripper_image_raw('stereo'), self.sensor_qos)
             self.info_publishers['stereo'] = self.create_publisher(
                 CameraInfo, VisionTopics.gripper_camera_info('stereo'), self.sensor_qos)
             self.camera_info['stereo'] = self.camera_info['right'] # share right camera info for depth
@@ -354,8 +365,8 @@ class LuxonisCameraNode(Node):
         frame_id = VisionFrames.gripper_camera_frame('stereo')
         stamp = self.create_stamp(timestamp)
 
-        depth_publisher = self.publishers_topics['stereo']
-        if depth_publisher.get_subscription_count() > 0:
+        depth_publisher = self.publishers_topics.get('stereo')
+        if depth_publisher is not None and depth_publisher.get_subscription_count() > 0:
             img_msg = ros2_numpy.msgify(Image, depth, encoding='16UC1')
             img_msg.header.stamp = stamp
             img_msg.header.frame_id = frame_id
