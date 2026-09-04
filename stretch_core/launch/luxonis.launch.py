@@ -41,6 +41,16 @@ def generate_launch_description():
         ),
     )
 
+    fps = DeclareLaunchArgument(
+        "fps",
+        default_value="0",
+        description=(
+            "Frame rate to open the left and right head cameras at. 0 keeps the rate each camera is "
+            "configured with in stretch4_body's CAMERA_CONFIGS. The two are a synced stereo pair, so "
+            "they share one rate; the center camera always keeps its own."
+        ),
+    )
+
     use_system_timestamp = DeclareLaunchArgument(
         "use_system_timestamp",
         default_value="true",
@@ -57,6 +67,7 @@ def generate_launch_description():
         use_center,
         use_compressed,
         use_system_timestamp,
+        fps,
     ]
 
     return LaunchDescription(launch_args + [OpaqueFunction(function=launch_setup)])
@@ -68,6 +79,7 @@ def launch_setup(context, *args, **kwargs):
     is_use_center = is_launch_config_true(context, "use_center")
     is_use_compressed = is_launch_config_true(context, "use_compressed")
     is_use_system_timestamp = is_launch_config_true(context, "use_system_timestamp")
+    fps = int(LaunchConfiguration("fps").perform(context))
 
     camera_node = Node(
         package="stretch_core",
@@ -80,6 +92,7 @@ def launch_setup(context, *args, **kwargs):
                 "use_center": is_use_center,
                 "use_compressed": is_use_compressed,
                 "use_system_timestamp": is_use_system_timestamp,
+                "fps": fps,
                 "is_gripper": False,
             }
         ],

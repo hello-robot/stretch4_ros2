@@ -13,7 +13,7 @@ import statistics
 import sys
 import time
 
-from pyhesai_wrapper.ptc_client import (
+from stretch4_pyhesai_wrapper.ptc_client import (
     FILTER_NAMES,
     FILTER_STRONG,
     LEFT_LIDAR_IP,
