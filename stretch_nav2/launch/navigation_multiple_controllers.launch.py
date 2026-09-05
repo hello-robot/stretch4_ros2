@@ -1,0 +1,79 @@
+from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch_ros.actions import Node
+from launch_ros.substitutions import FindPackageShare
+from hello_helpers.multi_yaml import MultiYaml
+from nav2_common.launch import ReplaceString
+
+
+def generate_launch_description():
+    stretch_core_path = FindPackageShare('stretch_core')
+    stretch_navigation_path = FindPackageShare('stretch_nav2')
+
+    stretch_driver_launch = IncludeLaunchDescription(
+        PathJoinSubstitution([stretch_core_path, 'launch', 'stretch_driver.launch.py']),
+        launch_arguments={'broadcast_odom_tf': 'True', 'mode': 'navigation'}.items())
+
+    hlidar_launch = IncludeLaunchDescription(
+            PathJoinSubstitution([stretch_core_path, 'launch', 'dual_hesai.launch.py']),
+            launch_arguments={
+                'filter_type': 'sor_ransac',
+                'tool_preset': LaunchConfiguration('tool_preset'),
+            }.items(),
+    )
+   
+    footprint_launch = IncludeLaunchDescription(
+            PathJoinSubstitution([stretch_core_path, 'launch', 'robot_footprint.launch.py']),
+            launch_arguments={'tool_preset': LaunchConfiguration('tool_preset')}.items(),
+    )
+
+    navigation_launch = IncludeLaunchDescription(
+        PathJoinSubstitution([stretch_navigation_path, 'launch', 'include', 'nav_core.launch.py']),
+        launch_arguments={
+            'map': LaunchConfiguration('map'),
+            'params_file': PathJoinSubstitution([stretch_navigation_path, 'config', 'nav2_params_switch_controller.yaml']),
+            'use_rviz': LaunchConfiguration('use_rviz'),
+            'use_composition': LaunchConfiguration('use_composition'),
+            'rviz_config': PathJoinSubstitution([stretch_navigation_path, 'rviz', 'nav_w_selector_panel.rviz']),
+        }.items(),
+    )
+
+    # switch_controller_config = Node(
+    #     package='stretch_nav2',
+    #     executable='switch_controller_config.py',
+    #     name='switch_controller_config',
+    #     output='screen'
+    # )
+
+    return LaunchDescription([
+        DeclareLaunchArgument(
+            'map',
+            default_value=PathJoinSubstitution([
+                stretch_navigation_path, 'maps', 'dual_ds3.yaml'
+            ]),
+            description='Full path to the map.yaml file to use for navigation',
+        ),
+        DeclareLaunchArgument(
+            'tool_preset',
+            default_value='auto',
+            description='Mounted tool preset for lidar self-filter: auto, sg4, pg4, tablet, or nil',
+        ),
+        DeclareLaunchArgument(
+                    'use_rviz',
+                    default_value='true',
+                    choices=['true', 'false'],
+                    description='Start RViz with navigation; requires a graphical display',
+                ),
+        DeclareLaunchArgument(
+            'use_composition',
+            default_value='True',
+            choices=['True', 'False'],
+            description='Run Nav2 as composed components in a container (False = separate nodes for debugging)',
+        ),
+        stretch_driver_launch,
+        hlidar_launch,
+        footprint_launch,
+        navigation_launch,
+        # switch_controller_config,
+    ])
