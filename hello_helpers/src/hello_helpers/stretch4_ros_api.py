@@ -176,7 +176,7 @@ class Stretch4ROSDriver(Node, ABC):
             description='Default timeout (sec) for velocity control',
         ))
         
-        self.declare_parameter('control_loop_rate', 100, ParameterDescriptor(
+        self.declare_parameter('control_loop_rate', 50, ParameterDescriptor(
             type=ParameterType.PARAMETER_DOUBLE,
             description='Target rate (hz) for main control loop',
         ))
@@ -569,8 +569,8 @@ class Stretch4ROSDriver(Node, ABC):
                 else:
                     self.set_joint_velocity(joint_name, goal, a = a)
                     succeeded = True
+                    
         return succeeded
-        
         
     def check_and_set_pos(self, joint_name, goal, v = None, a = None):
         #self.logger.info(f"Setting joint {joint_name} to position {goal}.")
@@ -638,7 +638,6 @@ class Stretch4ROSDriver(Node, ABC):
         if val is None:
             self.logger.warning(f"Last known state exists but unable to find velocity of command joint {command_joint_name}, returning None")
         return val
-
 
     def joy_callback(self, joy_msg: Joy):
         self.logger.debug(f"Got joy message. Buttons: {joy_msg.buttons} Axes: {joy_msg.axes} (this message is throttled to appear at most every 2s)", throttle_duration_sec = 2.0)
@@ -786,7 +785,7 @@ class Stretch4ROSDriver(Node, ABC):
         joint_state = self.get_joint_state(status, current_time)
         self.last_known_state = joint_state
         self.joint_state_pub.publish(joint_state)
-
+        
         mode = self.get_mode(status, current_time)
         if mode != self.robot_mode():
             # this will raise a RuntimeError if the mode change fails
@@ -945,7 +944,7 @@ class StretchTrajectoryActionServer:
         add_param("kp", 0.1)
         add_param("ki", 0.001)
         add_param("kd", 0.01)
-        add_param("threshold", 0.05)
+        add_param("threshold", 0.1)
         add_param("loop_rate", 50.0)
         # if velocity not specified, how to do interpolation
         # options are 'zero' (stop between waypoints) or 'smooth'
@@ -1024,6 +1023,7 @@ class StretchTrajectoryActionServer:
         return feedback_msg
 
     def follow_trajectory(self, next_point_condition, first_loop_command, every_loop_command, trajectory, goal_handle):
+        self.driver.logger.warning("Starting to follow trajectory")
         point_i = 0
         start_time = self.driver.get_clock().now()
 
@@ -1041,8 +1041,17 @@ class StretchTrajectoryActionServer:
             next_state = trajectory.points[point_i+1] if point_i < len(trajectory.points)-1 else None
             elapsed_time = self.driver.get_clock().now()-start_time
             first = True
-            #self.driver.logger.warning(f"On point {point_i}")
-        
+            self.driver.logger.warning(f"On point {point_i}")
+            
+            time_on_this_point = self.driver.get_clock().now()-last_timepoint
+            if time_on_this_point.to_msg().sec + time_on_this_point.to_msg().nanosec * 1e-9 > self.get_param("timeout"):
+                self.active_joints = None
+                self.driver.get_logger().warn("Goal canceled because getting to the next waypoint timed out.")
+                goal_handle.abort()
+                result.error_code = FollowJointTrajectory.Result.PATH_TOLERANCE_VIOLATED
+                result.error_string = "Waypoint took too long"
+                return result
+            
             while True:
                 interrupt_result = self._check_for_interrupt(goal_handle)
                 if interrupt_result is not None:
@@ -1129,6 +1138,7 @@ class StretchTrajectoryActionServer:
                 if next_point_condition(feedback_msg):
                     #prev_state = copy.deepcopy(feedback_msg.actual)
                     prev_state = copy.deepcopy(feedback_msg.desired)
+                    last_timepoint = self.driver.get_clock().now()
                     break
                 
                 rate.sleep()
@@ -1363,6 +1373,7 @@ class StretchTrajectoryActionServer:
         self.driver.get_logger().info(f'Executing trajectory in {mode} mode (mode cannot be changed during execution)')
 
         try:
+            self.driver.get_logger().info(f'Checkpoint')
             trajectory = goal_handle.request.trajectory
             match mode:
                 case "adaptive_velocity":
@@ -1371,8 +1382,8 @@ class StretchTrajectoryActionServer:
                             j_mode = self.driver.get_parameter(f"joint_mode.{joint_name}").value
                         except Exception:
                             j_mode = None
-                        if j_mode != "velocity":
-                            self.driver.get_logger().error(f"Cannot execute trajectory in pid_normal mode because joint {joint_name} is in {j_mode} mode (must be in 'velocity' mode).")
+                        if j_mode not in self.driver.joint_velocity_modes:
+                            self.driver.get_logger().error(f"Cannot execute trajectory in pid_normal mode because joint {joint_name} is in {j_mode} mode (must be in 'velocity mode).")
                             result = FollowJointTrajectory.Result()
                             result.error_code = FollowJointTrajectory.Result.INVALID_JOINTS
                             result.error_string = f"Joint {joint_name} is not in velocity mode"
@@ -1382,16 +1393,47 @@ class StretchTrajectoryActionServer:
                         first_loop_command = self.interpolate_velocities
                         every_loop_command = self.interpolate_velocities
                 case "time_priority":
+                    for joint_name in goal_handle.request.trajectory.joint_names:
+                        try:
+                            j_mode = self.driver.get_parameter(f"joint_mode.{joint_name}").value
+                        except Exception:
+                            j_mode = None
+                        if j_mode != "position":
+                            self.driver.get_logger().error(f"Cannot execute trajectory in time priority mode because joint {joint_name} is in {j_mode} mode (must be in 'position' mode).")
+                            result = FollowJointTrajectory.Result()
+                            result.error_code = FollowJointTrajectory.Result.INVALID_JOINTS
+                            result.error_string = f"Joint {joint_name} is not in position mode"
+                            goal_handle.abort()
+                            return result
                     next_point_condition = self.at_time
                     first_loop_command = self.active_point_goal
                     every_loop_command = lambda *args, **kwargs: [None, None, None]
                 case "target_priority":
+                    for joint_name in goal_handle.request.trajectory.joint_names:
+                        try:
+                            j_mode = self.driver.get_parameter(f"joint_mode.{joint_name}").value
+                        except Exception:
+                            j_mode = None
+                        if j_mode != "position":
+                            self.driver.get_logger().error(f"Cannot execute trajectory in time priority mode because joint {joint_name} is in {j_mode} mode (must be in 'position' mode).")
+                            result = FollowJointTrajectory.Result()
+                            result.error_code = FollowJointTrajectory.Result.INVALID_JOINTS
+                            result.error_string = f"Joint {joint_name} is not in position mode"
+                            goal_handle.abort()
+                            return result
                     next_point_condition = self.at_target
                     first_loop_command = self.active_point_goal
                     every_loop_command = lambda *args, **kwargs: [None, None, None]
 
 
             result = self.follow_trajectory(next_point_condition, first_loop_command, every_loop_command, trajectory, goal_handle)
+        except Exception as e:
+            self.driver.get_logger().error(f"Cannot execute trajectory in pid_normal m\
+ode because of error {e}.")
+            result = FollowJointTrajectory.Result()
+            result.error_code = FollowJointTrajectory.Result.GOAL_TOLERANCE_VIOLATED
+            result.error_string = f"Error {e} occurred."
+            goal_handle.abort()
         finally:            
             #cleanup:
             self.stop_vel_joints(trajectory.joint_names)

@@ -5,6 +5,7 @@ import copy
 import time
 from math import copysign
 import pprint
+import sys
 
 import stretch4_body.robot.robot_client as rc
 import rclpy
@@ -223,7 +224,7 @@ class StretchDriver(Stretch4ROSDriver):
                                    
     def get_sensitivity(self, robot_status, status_time) -> String:
         return self.get_parameter("sensitivity").value
-
+    
     def get_runstop(self, robot_status, status_time) -> Bool:
         is_runstopped = bool(robot_status['power_periph']['runstop_event'])
         if self.robot_mode()!="runstopped" and is_runstopped or self.robot_mode()=="runstopped" and not is_runstopped:
@@ -411,7 +412,6 @@ class StretchDriver(Stretch4ROSDriver):
             case _:
                 self.logger.warn(f"Unable to set position for unknown joint {joint}.")
         
-
     def publish_child_info(self):
         #real robot driver doesn't have additional publishers
         pass
