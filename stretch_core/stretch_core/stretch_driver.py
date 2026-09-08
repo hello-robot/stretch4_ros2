@@ -119,6 +119,17 @@ class StretchDriver(Node):
         self.declare_parameter("tool_info.name", tool_name or "unknown")
         self.declare_parameter("tool_info.is_actuated", tool_is_actuated)
         self.declare_parameter("tool_info.tool_joints", tool_joints)
+        # Ranges in URDF units, so a client can size jog increments and sliders from the tool.
+        if tool_metadata is not None and tool_is_actuated:
+            urdf_low, urdf_high = tool_metadata.urdf_range
+            aperture_low, aperture_high = tool_metadata.aperture_range
+            self.declare_parameter("tool_info.urdf_range", [float(urdf_low), float(urdf_high)])
+            self.declare_parameter(
+                "tool_info.aperture_range", [float(aperture_low), float(aperture_high)]
+            )
+            self.declare_parameter(
+                "tool_info.position_tolerance", float(tool_metadata.position_tolerance)
+            )
 
         # Velocity Control
         self.set_vel_functions = {}
@@ -157,7 +168,7 @@ class StretchDriver(Node):
                     self.set_vel_functions['gripper_joint'] = set_vel_fn
                     self.joint_metadata_cache['gripper_joint'] = RobotJoints.gripper
 
-                    vel = abs(tool_metadata.actuator_to_urdf(vel))
+                    vel = tool_metadata.position_independent_velocity_limit("urdf")
                     self.declare_parameter("joint_velocity.gripper", vel)
 
                 self.declare_parameter(f"joint_acceleration.{joint}",self.robot.robot_params[joint]['motion']['default']['accel'])
@@ -376,6 +387,21 @@ class StretchDriver(Node):
         response.message = 'is_runstopped: {0}'.format(request.data)
         return response
 
+    def _gripper_position_urdf(self, joint_metadata) -> float:
+        """
+        The gripper's current position in the tool's `urdf` unit type, for evaluating a
+        position-dependent conversion.
+
+        Taken from the actuator reading; SG4's gripper_conversion['finger_rad'] is a chord-model
+        half-angle, not its urdf unit type. Falls back to mid-range when status is unavailable.
+        """
+        try:
+            status = self.robot.status.get('end_of_arm', {}).get(joint_metadata.value, {})
+            return joint_metadata.actuator_to_urdf(status['pos'])
+        except (AttributeError, KeyError, TypeError):
+            low, high = joint_metadata.urdf_range
+            return (low + high) / 2.0
+
     def velocity_callback(self, jointjog_msg: JointJog):
         """
         Velocity control for the ranged joints on Stretch. Velocity control of the mobile base is handled by /cmd_vel.
@@ -402,11 +428,16 @@ class StretchDriver(Node):
             duration = jointjog_msg.duration
 
             if joint_metadata is RobotJoints.gripper:
-                # move_by() below takes this tool's own command units (Pct for SG4,
-                # aperture meters for PG4), not true raw actuator units.
-                joint_velocity = joint_metadata.urdf_to_command(joint_velocity)
+                # move_by() takes a displacement in this tool's command units (Pct for SG4,
+                # aperture meters for PG4), so scale the rate by duration as the wrist joints do,
+                # then convert with convert_delta(), which is exact across PG4's linkage.
+                delta_urdf = joint_velocity * duration
+                at_urdf = self._gripper_position_urdf(joint_metadata)
+                joint_velocity = joint_metadata.convert_delta(
+                    delta_urdf, "urdf", "command", at_urdf
+                )
 
-            if joint_metadata in (RobotJoints.wrist_pitch, RobotJoints.wrist_roll, RobotJoints.wrist_yaw):
+            elif joint_metadata in (RobotJoints.wrist_pitch, RobotJoints.wrist_roll, RobotJoints.wrist_yaw):
                 # account for move_by (lack of velocity control)
                 joint_velocity *= duration
 
