@@ -176,7 +176,7 @@ class Stretch4ROSDriver(Node, ABC):
             description='Default timeout (sec) for velocity control',
         ))
         
-        self.declare_parameter('control_loop_rate', 50, ParameterDescriptor(
+        self.declare_parameter('control_loop_rate', 100, ParameterDescriptor(
             type=ParameterType.PARAMETER_DOUBLE,
             description='Target rate (hz) for main control loop',
         ))
