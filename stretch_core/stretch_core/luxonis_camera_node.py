@@ -75,6 +75,17 @@ class LuxonisCameraNode(Node):
             )),
         )
 
+        self.declare_parameter(
+            'fps',
+            0,
+            ParameterDescriptor(description=(
+                "Frame rate to open the left and right head cameras at, overriding the rate they "
+                "are configured with in stretch4_body's CAMERA_CONFIGS. 0 keeps that rate. The two "
+                "are synced on-device into one stereo pair, so they share a rate; the center camera "
+                "is not in that sync group and always keeps its own."
+            )),
+        )
+
         # Get parameters
         self.use_left = self.get_parameter('use_left').value
         self.use_right = self.get_parameter('use_right').value
@@ -83,6 +94,7 @@ class LuxonisCameraNode(Node):
         self.camera_namespace = self.get_parameter('camera_namespace').value
         self.use_compressed = self.get_parameter('use_compressed').value
         self.use_system_timestamp = self.get_parameter('use_system_timestamp').value
+        self.fps = self.get_parameter('fps').value
 
         # The device clock is shared by every camera on the device, so one offset estimator
         # serves them all and sees more samples than a per-camera one would.
@@ -392,12 +404,24 @@ class LuxonisCameraNode(Node):
 
         enabled = [name for name, is_enabled in (('left', self.use_left), ('right', self.use_right), ('center', self.use_center)) if is_enabled]
 
+        configs = {}
+        if self.fps > 0:
+            self.get_logger().info(f"Opening the left and right head cameras at {self.fps} fps.")
+            configs = {
+                camera_type: camera_type.config_with(fps=self.fps)
+                for camera_type in (RGBCameras.head_left, RGBCameras.head_right)
+            }
+
         if self.use_left and self.use_right and self.use_center:
-            generator = stream_left_right_center(is_rotate=False, is_run_pipeline=False)
+            generator = stream_left_right_center(is_rotate=False, is_run_pipeline=False, configs=configs)
         elif self.use_left and self.use_right:
-            generator = stream_left_right(is_rotate=False, is_run_pipeline=False)
+            generator = stream_left_right(is_rotate=False, is_run_pipeline=False, configs=configs)
         elif len(enabled) == 1:
-            generator = single_streams[enabled[0]](is_rotate=False, is_run_pipeline=False)
+            generator = single_streams[enabled[0]](
+                is_rotate=False,
+                is_run_pipeline=False,
+                config=configs.get(self.camera_types[enabled[0]].base),
+            )
         else:
             self.get_logger().warn(f"Unsupported head camera combination: {enabled or 'none selected'}!")
             return
