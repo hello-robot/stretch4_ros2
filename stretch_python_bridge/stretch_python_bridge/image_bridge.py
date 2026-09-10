@@ -5,6 +5,7 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import CompressedImage, Image
 import ros2_numpy # Requires ros2_numpy package
+import cv2
 import numpy as np
 from dataclasses import dataclass
 from typing import Generator
@@ -57,6 +58,31 @@ def parse_compressed_format(format_string: str) -> tuple[str, int | None]:
             compression_format_parts.append(part)
 
     return "; ".join(compression_format_parts), sequence_number
+
+
+COMPRESSED_DEPTH_CONFIG_HEADER_SIZE = 12
+"""Size of the ConfigHeader that image_transport's compressedDepth transport puts before the PNG.
+See stretch_core.vision.ros_messages.compressed_depth_payload(), which writes it."""
+
+
+def is_compressed_depth(compression_format: str) -> bool:
+    """True for a frame off a compressedDepth topic, whose payload is a PNG behind a ConfigHeader."""
+    return "compressedDepth" in compression_format
+
+
+def decode_compressed_depth(data) -> np.ndarray:
+    """The 16-bit depth map inside a compressedDepth payload.
+
+    Takes `ImageFrame.image` from a compressedDepth topic (or the raw `CompressedImage.data`) and
+    returns the depth map in the units it was published in, normally millimeters.
+    """
+    buffer = data if isinstance(data, np.ndarray) else np.frombuffer(data, dtype=np.uint8)
+
+    depth = cv2.imdecode(buffer[COMPRESSED_DEPTH_CONFIG_HEADER_SIZE:], cv2.IMREAD_UNCHANGED)
+    if depth is None:
+        raise RuntimeError("Failed to decode a compressedDepth frame.")
+
+    return depth
 
 
 def compressed_image_message_to_frame(msg) -> ImageFrame:

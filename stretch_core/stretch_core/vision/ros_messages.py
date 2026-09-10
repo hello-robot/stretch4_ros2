@@ -69,6 +69,46 @@ def depth_image_msg_to_numpy(msg):
 
 
 __COMPRESSED_DEPTH_16UC1_HEADER = array("B", [0] * 12)
+"""image_transport's compressedDepth ConfigHeader, which prefixes the PNG in every compressedDepth
+message: `{compressionFormat format; float depthParam[2];}`. The quantization parameters are only
+used for 32FC1 depth, so a 16-bit map leaves the whole header zeroed."""
+
+COMPRESSED_DEPTH_FORMAT = "16UC1; compressedDepth png"
+"""`CompressedImage.format` for a 16-bit depth map PNG encoded the way image_transport does it."""
+
+COMPRESSED_DEPTH_PNG_LEVEL = 3
+"""The PNG level compressed_depth_image_transport's publisher declares for `png_level`, and so what
+every image_transport compressedDepth topic serves. Not the 9 in codec.hpp's signature, which its
+publisher never passes. On real gripper frames level 3 costs ~6 ms; 9 costs ~105 ms, three times the
+budget of a 30 fps stream, for another 10 KiB off a 38 KiB frame."""
+
+
+def compressed_depth_payload(depth_millimeters: np.ndarray, png_compression_level: int = COMPRESSED_DEPTH_PNG_LEVEL) -> array:
+    """The bytes of a compressedDepth message: the 12-byte ConfigHeader followed by a PNG of the map.
+
+    `depth_millimeters` has to be a 16-bit map. PNG is lossless, so the depth values survive exactly.
+
+    Byte for byte this is what compressed_depth_image_transport's own encodeCompressedDepthImage()
+    produces - the encoder behind every image_transport compressedDepth topic, depthai-ros included -
+    at its own default level, verified against the installed plugin. Its decoder reads our payload
+    with zero mismatched pixels and decode_compressed_depth() reads its output exactly.
+
+    The single exception is the header, which the plugin leaves partly uninitialized: it sets only
+    the format enum, so its depthParam floats are stack junk that differs from one message to the
+    next (three encodes of one image gave `218 85 0 0 4 144 50 7`, `252 96 0 0 4 192 65 163` and
+    `139 100 0 0 4 224 247 176`). Ours are zeroed, the deterministic form of the same thing: that
+    quantization applies only to 32FC1 depth, so nothing reads those fields here.
+    """
+    if depth_millimeters.dtype != np.uint16:
+        raise ValueError(f"compressedDepth carries a 16-bit depth map, got {depth_millimeters.dtype}.")
+
+    is_encoded, encoded_image = cv2.imencode(
+        ".png", depth_millimeters, [cv2.IMWRITE_PNG_COMPRESSION, png_compression_level]
+    )
+    if not is_encoded:
+        raise RuntimeError("Failed to PNG encode a depth map.")
+
+    return __COMPRESSED_DEPTH_16UC1_HEADER + array("B", encoded_image.tobytes())
 
 
 def compress_depth_image(frame: np.ndarray):
@@ -77,13 +117,11 @@ def compress_depth_image(frame: np.ndarray):
     """
     normalized_array = (frame * 1000).astype(np.uint16)
 
-    _, encoded_image = cv2.imencode(".png", normalized_array)
-
     ros_image_compressed = CompressedImage()
     ros_image_compressed.format = "16uc1; compressedDepth"
-    ros_image_compressed.data = __COMPRESSED_DEPTH_16UC1_HEADER + array(
-        "B", encoded_image.tobytes()
-    )
+    # Level 1 is what this path has always encoded at (OpenCV's own default). Its consumer is the web
+    # interface, not something comparing bytes against an image_transport topic.
+    ros_image_compressed.data = compressed_depth_payload(normalized_array, png_compression_level=1)
 
     return ros_image_compressed
 
