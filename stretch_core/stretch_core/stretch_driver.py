@@ -30,6 +30,7 @@ from std_srvs.srv import SetBool, Trigger
 from stretch4_body.core.gamepad_control_mappings import ControlMapping
 from stretch4_body.core.gamepad_teleop import GamePadTeleop
 from stretch4_body.utils.stretch_pose_models import RobotJoints
+from stretch4_body.utils.tool_metadata import ToolConfigurationError, get_tool_metadata
 from tf_transformations import quaternion_from_euler
 
 from .joint_trajectory_server import JointTrajectoryAction
@@ -93,8 +94,8 @@ class StretchDriver(Node):
         self.battery_pub = self.create_publisher(BatteryState, 'battery', 1)
         self.diagnostics_pub = self.create_publisher(DiagnosticArray, '/diagnostics', 1) # Diagnostics are centralized, so we publish to a single global /diagnostics topic
         self.lease_holder_pub = self.create_publisher(DiagnosticStatus, 'server_lease_holder', 1)
-        self.joint_state_diagnostics_pub = self.create_publisher(DiagnosticArray, 'joint_states_diagnostics', 1) 
-    
+        self.joint_state_diagnostics_pub = self.create_publisher(DiagnosticArray, 'joint_states_diagnostics', 1)
+
         # Saved Message States (for latched topics)
         self.last_published_value = {}
 
@@ -104,22 +105,81 @@ class StretchDriver(Node):
         self.create_subscription(JointJog, "joint_vel", self.velocity_callback, 1, callback_group=self.main_group)
         self.create_subscription(Joy, "joy", self.joy_callback, 1, callback_group=self.main_group)
 
+        # Tool Info Params
+        tool_name = self.robot.params.get('tool')
+        try:
+            tool_metadata = get_tool_metadata(tool_name)
+            tool_is_actuated = bool(tool_metadata.actuated_joints)
+            tool_joints = tool_metadata.tool_joints
+        except ToolConfigurationError:
+            # No tool configured, or a passive tool (e.g. a tablet) with no ToolMetadata.
+            tool_metadata = None
+            tool_is_actuated = False
+            tool_joints = []
+        self.declare_parameter("tool_info.name", tool_name or "unknown")
+        self.declare_parameter("tool_info.is_actuated", tool_is_actuated)
+        self.declare_parameter("tool_info.tool_joints", tool_joints)
+        # Ranges in URDF units, so a client can size jog increments and sliders from the tool.
+        if tool_metadata is not None and tool_is_actuated:
+            urdf_low, urdf_high = tool_metadata.urdf_range
+            aperture_low, aperture_high = tool_metadata.aperture_range
+            self.declare_parameter("tool_info.urdf_range", [float(urdf_low), float(urdf_high)])
+            self.declare_parameter(
+                "tool_info.aperture_range", [float(aperture_low), float(aperture_high)]
+            )
+            self.declare_parameter(
+                "tool_info.position_tolerance", float(tool_metadata.position_tolerance)
+            )
+
         # Velocity Control
         self.set_vel_functions = {}
+        self.joint_metadata_cache: dict[str, RobotJoints | None] = {}
 
         if hasattr(self.robot, 'lift'):
             self.set_vel_functions['lift_joint'] = lambda v, a:  self.robot.lift.set_velocity(v, a_m=a)
+            self.joint_metadata_cache['lift_joint'] = RobotJoints.lift
             self.declare_parameter("joint_acceleration.lift",self.robot.robot_params['lift']['motion']['default']['accel_m'])
+            self.declare_parameter("joint_velocity.lift",self.robot.robot_params['lift']['motion']['default']['vel_m'])
         if hasattr(self.robot, 'arm'):
             self.set_vel_functions['arm_joint'] = lambda v, a:  self.robot.arm.set_velocity(v, a_m=a)
+            self.joint_metadata_cache['arm_joint'] = RobotJoints.arm
             self.declare_parameter("joint_acceleration.arm",self.robot.robot_params['arm']['motion']['default']['accel_m'])
+            self.declare_parameter("joint_velocity.arm",self.robot.robot_params['arm']['motion']['default']['vel_m'])
         if hasattr(self.robot, 'end_of_arm') and hasattr(self.robot.end_of_arm, 'joints'):
-            for joint in self.robot.end_of_arm.joints: 
-                self.set_vel_functions[f'{joint}_joint']= lambda d, a, j=joint: self.robot.end_of_arm.quick_stop(j) if d == 0.0 else self.robot.end_of_arm.move_by(j, d, a_r = a)
+            end_of_arm = self.robot.end_of_arm
+            for joint in end_of_arm.joints:
+                joint_client = getattr(end_of_arm, joint, None)
+                if joint_client is None:
+                    continue
+                joint_metadata = RobotJoints.get_joint_by_name(joint)
+                is_gripper = joint_metadata is RobotJoints.gripper
+
+                set_vel_fn = lambda d, a, j=joint, c=joint_client: end_of_arm.quick_stop(j) if d == 0.0 else c.move_by(d, a_r=a)
+                self.set_vel_functions[f'{joint}_joint'] = set_vel_fn
+                self.joint_metadata_cache[f'{joint}_joint'] = joint_metadata
+
+                if is_gripper and not tool_is_actuated:
+                    continue
+
+                vel = self.robot.robot_params[joint]['motion']['default']['vel']
+
+                if is_gripper:
+                    # add a generic gripper joint for utility
+                    self.set_vel_functions['gripper_joint'] = set_vel_fn
+                    self.joint_metadata_cache['gripper_joint'] = RobotJoints.gripper
+
+                    vel = tool_metadata.position_independent_velocity_limit("urdf")
+                    self.declare_parameter("joint_velocity.gripper", vel)
+
                 self.declare_parameter(f"joint_acceleration.{joint}",self.robot.robot_params[joint]['motion']['default']['accel'])
+                self.declare_parameter(f"joint_velocity.{joint}", vel)
+
+
 
         self.declare_parameter("joint_acceleration.omnibase.linear", self.robot.robot_params['omnibase']['motion']['default']['accel_xy_m'])
         self.declare_parameter("joint_acceleration.omnibase.angular", self.robot.robot_params['omnibase']['motion']['default']['accel_w_r'])
+        self.declare_parameter("joint_velocity.omnibase.linear", self.robot.robot_params['omnibase']['motion']['default']['vel_xy_m'])
+        self.declare_parameter("joint_velocity.omnibase.angular", self.robot.robot_params['omnibase']['motion']['default']['vel_w_r'])
 
         # Services
         self.stop_the_robot_service = self.create_service(
@@ -327,6 +387,21 @@ class StretchDriver(Node):
         response.message = 'is_runstopped: {0}'.format(request.data)
         return response
 
+    def _gripper_position_urdf(self, joint_metadata) -> float:
+        """
+        The gripper's current position in the tool's `urdf` unit type, for evaluating a
+        position-dependent conversion.
+
+        Taken from the actuator reading; SG4's gripper_conversion['finger_rad'] is a chord-model
+        half-angle, not its urdf unit type. Falls back to mid-range when status is unavailable.
+        """
+        try:
+            status = self.robot.status.get('end_of_arm', {}).get(joint_metadata.value, {})
+            return joint_metadata.actuator_to_urdf(status['pos'])
+        except (AttributeError, KeyError, TypeError):
+            low, high = joint_metadata.urdf_range
+            return (low + high) / 2.0
+
     def velocity_callback(self, jointjog_msg: JointJog):
         """
         Velocity control for the ranged joints on Stretch. Velocity control of the mobile base is handled by /cmd_vel.
@@ -340,25 +415,29 @@ class StretchDriver(Node):
 
         # Queue velocity commands
         for i, joint in enumerate(jointjog_msg.joint_names):
-            
+
             if joint not in self.set_vel_functions.keys():
                 self.robot.logger.warn(f"Received velocity command for unexpected joint: {joint}")
                 continue
 
-            acceleration_param = self.get_parameter_or(f"joint_acceleration.{joint.split("_joint")[0]}",None).value
+            joint_metadata = self.joint_metadata_cache.get(joint)
+            acceleration_key = joint_metadata.value if joint_metadata else joint.split('_joint')[0]
+            acceleration_param = self.get_parameter_or(f"joint_acceleration.{acceleration_key}",None).value
 
             joint_velocity = jointjog_msg.velocities[i]
             duration = jointjog_msg.duration
 
-            if "gripper" in joint:
-                joint_clean = joint.split('_joint')[0]
-                joint_enum = RobotJoints.get_joint_by_name(joint_clean)
-                if joint_enum:
-                    # move_by() below takes this tool's own command units (Pct for SG4,
-                    # aperture meters for PG4), not true raw actuator units.
-                    joint_velocity = joint_enum.urdf_to_command(joint_velocity)
+            if joint_metadata is RobotJoints.gripper:
+                # move_by() takes a displacement in this tool's command units (Pct for SG4,
+                # aperture meters for PG4), so scale the rate by duration as the wrist joints do,
+                # then convert with convert_delta(), which is exact across PG4's linkage.
+                delta_urdf = joint_velocity * duration
+                at_urdf = self._gripper_position_urdf(joint_metadata)
+                joint_velocity = joint_metadata.convert_delta(
+                    delta_urdf, "urdf", "command", at_urdf
+                )
 
-            if "wrist" in joint:
+            elif joint_metadata in (RobotJoints.wrist_pitch, RobotJoints.wrist_roll, RobotJoints.wrist_yaw):
                 # account for move_by (lack of velocity control)
                 joint_velocity *= duration
 
@@ -380,7 +459,7 @@ class StretchDriver(Node):
         state = jc.unpack_joy_to_gamepad_state(joy_msg)
 
         self.gamepad_teleop.controller_state = state
-            
+
 
         ControlMapping.JOINT_SPACE.do_motion(self.robot, self.gamepad_teleop)
 
@@ -400,10 +479,10 @@ class StretchDriver(Node):
                 return
         linear_acc = self.get_parameter_or("joint_acceleration.omnibase.linear",None).value
         angular_acc = self.get_parameter_or("joint_acceleration.omnibase.angular",None).value
-        self.robot.omnibase.set_velocity(vx_m = twist.linear.x, 
-                                         vy_m = twist.linear.y, 
-                                         w_r = twist.angular.z, 
-                                         a_m = linear_acc, 
+        self.robot.omnibase.set_velocity(vx_m = twist.linear.x,
+                                         vy_m = twist.linear.y,
+                                         w_r = twist.angular.z,
+                                         a_m = linear_acc,
                                          a_r = angular_acc
                                         )
 
@@ -545,7 +624,10 @@ class StretchDriver(Node):
                     joint_state.velocity.append(vel/4.0)
                     joint_state.effort.append(eff)
             elif cg.name == "gripper_joint" or cg.name == f"{RobotJoints.gripper.value}_joint":
-                for link in RobotJoints.gripper.tool_joints:
+                tool_joint_names = list(RobotJoints.gripper.tool_joints)
+                if "gripper_joint" not in tool_joint_names:
+                    tool_joint_names.append("gripper_joint")
+                for link in tool_joint_names:
                     joint_state.name.append(link)
                     joint_state.position.append(pos)
                     joint_state.velocity.append(vel)
@@ -573,7 +655,7 @@ class StretchDriver(Node):
                 status_dict = robot_status["end_of_arm"][joint_status_key]
                 is_homed = bool(status_dict.get('pos_calibrated', False))
                 is_homing = bool(status_dict.get('is_homing', False))
-            else: 
+            else:
                 status_dict = robot_status[joint_status_key]
                 is_homed = bool(status_dict['motor'].get('pos_calibrated', False))
                 is_homing = bool(status_dict['motor'].get('is_homing', False))
