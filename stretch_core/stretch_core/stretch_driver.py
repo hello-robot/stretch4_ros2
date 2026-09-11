@@ -3,11 +3,12 @@ from threading import Lock
 import importlib
 import copy
 import time
-from math import copysign
+from math import copysign, radians, degrees
 import pprint
 import sys
 
 import stretch4_body.robot.robot_client as rc
+from stretch4_body.subsystem.end_of_arm.gripper_conversion import GripperConversion
 import rclpy
 from rclpy.duration import Duration
 from rclpy.executors import MultiThreadedExecutor
@@ -86,8 +87,8 @@ class StretchDriver(Stretch4ROSDriver):
         # Velocity Control
         self.set_vel_functions = {}
 
-        self.vel_increment = self.robot.robot_params["wrist_roll"]["motion"]["max"]["vel"]*0.1 #tenth of second of movement at max vel
-
+        self._gripper_conversion = GripperConversion(self.robot.robot_params["stretch_gripper"])
+        
         accel_params = []
         if hasattr(self.robot, 'lift'):
             self.set_vel_functions['lift'] = lambda v, a:  self.robot.lift.set_velocity(v, a_m=a)
@@ -99,13 +100,12 @@ class StretchDriver(Stretch4ROSDriver):
             accel_params.append(Parameter("joint_acceleration.arm",Parameter.Type.DOUBLE, self.robot.robot_params['arm']['motion']['default']['accel_m']))
             accel_params.append(Parameter("joint_limit.arm.acceleration",Parameter.Type.DOUBLE, self.robot.robot_params['arm']['motion']['max']['accel_m']))
         if hasattr(self.robot, 'end_of_arm') and hasattr(self.robot.end_of_arm, 'joints'):
-            for joint in self.robot.end_of_arm.joints: 
-
-                # velocity control of gripper is unsafe; for other joints velocity control is ok
-                if "gripper" in f'{joint}':
-                    self.set_vel_functions[f'{joint}']= lambda d, a, j=joint: self.robot.end_of_arm.quick_stop(j) if d == 0.0 else self.robot.end_of_arm.move_by(j, d, a_r = a)
-                else:
-                    self.set_vel_functions[f'{joint}']= lambda v, a, j=joint: self.robot.end_of_arm.quick_stop(j) if v == 0.0 else self.robot.end_of_arm.move_by(j, copysign(self.vel_increment,v), v_r=v, a_r = a)
+            for joint in self.robot.end_of_arm.joints:
+                eoa_deadband = self.get_parameter("eoa_velocity_deadband").value
+                vel_increment = self.robot.robot_params[joint]["motion"]["max"]["vel"]*0.05
+                if joint == "stretch_gripper":
+                    vel_increment = degrees(vel_increment)
+                self.set_vel_functions[f'{joint}']= lambda v, a, j=joint, eps=eoa_deadband: self.robot.end_of_arm.quick_stop(j) if abs(v) < eps else self.robot.end_of_arm.move_by(j, copysign(vel_increment,v), v_r=v, a_r = a)
                 accel_params.append(Parameter(f"joint_acceleration.{joint}",Parameter.Type.DOUBLE,self.robot.robot_params[joint]['motion']['default']['accel']))
                 accel_params.append(Parameter(f"joint_limit.{joint}.acceleration",Parameter.Type.DOUBLE,self.robot.robot_params[joint]['motion']['max']['accel']))
                 
@@ -162,7 +162,7 @@ class StretchDriver(Stretch4ROSDriver):
                 joint_name = "stretch_gripper"
             self.command_joints.append(joint_name)
             self.get_logger().debug(f"Discovered {class_name}")
-        self.velocity_joints = ["arm", "lift", "wrist_yaw", "wrist_roll", "wrist_pitch"]
+        self.velocity_joints = ["arm", "lift", "wrist_yaw", "wrist_roll", "wrist_pitch", "stretch_gripper"]
             
     def _get_push_interval(self):
         return 0.2
@@ -328,7 +328,12 @@ class StretchDriver(Stretch4ROSDriver):
 
                 
     def declare_node_params(self):
-        pass
+        # Below this magnitude, a wrist velocity-mode command is treated as an explicit stop
+        # rather than forwarded to move_by(). Necessary because a tiny nonzero float velocity
+        # silently truncates to an integer register value of 0 in the Feetech SDK's
+        # set_goal_vel and writing 0 to that register means "no speed limit" rather than "stop"
+        self.declare_parameter("eoa_velocity_deadband", 0.005)  # rad/s -- ~6.5x the truncation threshold
+        
 
     
     def check_child_param(self, parameter: Parameter) -> tuple[bool,String]:
@@ -340,12 +345,10 @@ class StretchDriver(Stretch4ROSDriver):
         match parameter.name:
             case "joint_mode.stretch_gripper":
                 found = True
-                if parameter.value == "velocity":
-                    reason = f"Velocity mode results in unsafe behavior from the gripper and is not allowed."
             case "joint_mode.parallel_gripper":
                 found = True
                 if parameter.value == "velocity":
-                    reason = f"Velocity mode results in unsafe behavior from the gripper and is not allowed."
+                    reason = f"Velocity mode may result in unsafe behavior and needs testing."
             case "sensitivity":
                 found = True
                 if parameter.value not in self.robot.get_guarded_modes():
@@ -407,8 +410,17 @@ class StretchDriver(Stretch4ROSDriver):
                 self.robot.lift.move_to(target,v_m = v, a_m = a)
             case "arm":
                 self.robot.arm.move_to(target,v_m = v, a_m = a)
-            case "wrist_pitch"|"wrist_roll"|"wrist_yaw"|"stretch_gripper"|"parallel_gripper":
+            case "wrist_pitch"|"wrist_roll"|"wrist_yaw":
                 self.robot.end_of_arm.move_to(joint, target, v, a)
+            case "stretch_gripper":
+                self.logger.info(f"Moving gripper")
+                servo_angle_deg = self._gripper_conversion.finger_to_servo(target)
+                self.logger.info(f"Got servo angle degrees {servo_angle_deg}")
+                range_deg_closed = self.robot.robot_params["stretch_gripper"]["range_deg"][0]
+                self.logger.info(f"Got range for closed {range_deg_closed}")
+                pct = -100 * radians(servo_angle_deg) / radians(range_deg_closed)
+                self.logger.info(f"Got pct {pct} (v = {v} a={a})")
+                self.robot.end_of_arm.move_to(joint, pct, v, a)
             case _:
                 self.logger.warn(f"Unable to set position for unknown joint {joint}.")
         
