@@ -94,7 +94,7 @@ class EndEffectoryVelocitySafetyFilterNode(Node):
             )
 
         name_pos = dict(zip(msg.name, msg.position))
-        
+
         lift = name_pos.get('lift_joint', name_pos.get('joint_lift', 0.5))
 
         if 'arm_l4_joint' in name_pos:
@@ -176,12 +176,6 @@ class EndEffectoryVelocitySafetyFilterNode(Node):
         scaled_msg.angular.y = msg.angular.y * gain
         scaled_msg.angular.z = msg.angular.z * gain
 
-        # if gain < 1.0:
-        #     self.get_logger().warn(
-        #         f"[{tag}] EE speed {ee_speed:.3f} m/s exceeds max {self.get_parameter('max_ee_speed').value:.3f} m/s "
-        #         f"(arm={self.latest_q.arm:.2f}m). Scaling by {gain:.3f}"
-        #     )
-
         publisher.publish(scaled_msg)
 
     def cmd_vel_callback(self, msg: Twist):
@@ -234,12 +228,6 @@ class EndEffectoryVelocitySafetyFilterNode(Node):
         scaled_msg.joint_names = msg.joint_names
         scaled_msg.velocities = [v * gain for v in msg.velocities]
         scaled_msg.duration = msg.duration
-
-        # if gain < 1.0:
-        #     self.get_logger().warn(
-        #         f"[joint_vel] EE speed {ee_speed:.3f} m/s exceeds max {self.get_parameter('max_ee_speed').value:.3f} m/s "
-        #         f"(arm={self.latest_q.arm:.2f}m). Scaling by {gain:.3f}"
-        #     )
 
         self.pub_joint_vel.publish(scaled_msg)
 
