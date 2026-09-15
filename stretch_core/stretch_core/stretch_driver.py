@@ -172,8 +172,10 @@ class StretchDriver(Stretch4ROSDriver):
             try:
                 mode = self.get_parameter(f"joint_mode.{joint}").value
             except ParameterNotDeclaredException:
-                self.logger.error(f"Joint name {joint} not found in mode parameters while pushing command to robot.  Make sure you're calling check_and_set_joint_vel not set_joint_velocity.")
-                mode = "<< joint unknown >>"
+                # Runs every control loop, so throttle with the shared mode-warning state.
+                if self._mode_log_due((joint, "<push>")):
+                    self.logger.error(f"Joint name {joint} not found in mode parameters while pushing command to robot.  Make sure you're calling check_and_set_joint_vel not set_joint_velocity.")
+                continue
 
             if mode == "velocity" and self.velocity_commands[joint] is not None:
                 last_sent = self.velocity_commands[joint]["last_sent"]
@@ -227,9 +229,9 @@ class StretchDriver(Stretch4ROSDriver):
     
     def get_runstop(self, robot_status, status_time) -> Bool:
         is_runstopped = bool(robot_status['power_periph']['runstop_event'])
-        if self.robot_mode()!="runstopped" and is_runstopped or self.robot_mode()=="runstopped" and not is_runstopped:
+        if self.robot_mode()!=self.runstopped_mode and is_runstopped or self.robot_mode()==self.runstopped_mode and not is_runstopped:
             self.runstop_the_robot(runstopped=is_runstopped,just_change_mode=True)
-        return self.robot_mode()=="runstopped"
+        return self.robot_mode()==self.runstopped_mode
                                       
     def get_joint_state(self, robot_status, status_time) -> JointState:
         joint_state = JointState()

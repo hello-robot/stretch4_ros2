@@ -609,7 +609,7 @@ class StretchMujocoDriver(Stretch4ROSDriver):
             self.logger.error(errmsg)
             return False, errmsg
 
-        self.change_mode("homing")
+        self.change_mode(self.homing_mode)
         self.sim.home()
         self.change_mode(last_robot_mode)
         return True, "Homed."
@@ -624,13 +624,13 @@ class StretchMujocoDriver(Stretch4ROSDriver):
             errmsg = f"Cannot stow while in mode={last_robot_mode}."
             self.logger.error(errmsg)
             return False, errmsg
-        self.change_mode("stowing")
+        self.change_mode(self.stowing_mode)
         self.sim.stow()
         self.change_mode(last_robot_mode)
         return True, "Stowed."
 
     def is_runstopped(self):
-        return self.robot_mode() == "runstopped"
+        return self.robot_mode() == self.runstopped_mode
     
     def runstop_the_robot(self, runstopped, just_change_mode=False):
         if runstopped:
@@ -640,7 +640,7 @@ class StretchMujocoDriver(Stretch4ROSDriver):
 
             if already_runstopped:
                 return
-            self.change_mode("runstopped")
+            self.change_mode(self.runstopped_mode)
         else:
             already_not_runstopped = not self.is_runstopped()
             if already_not_runstopped:

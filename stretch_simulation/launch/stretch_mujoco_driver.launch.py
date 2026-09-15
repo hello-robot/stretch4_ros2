@@ -110,7 +110,17 @@ def launch(context):
         on_exit=Shutdown(),
     )
 
-    return joint_state_publisher, robot_state_publisher, stretch_sim, *get_rviz_node( str(stretch_simulation_path / "rviz" / "stretch_sim.rviz"), rviz_params={"use_sim_time": True})
+    # Forwarding shim for the deprecated joint_vel (control_msgs/JointJog) topic.
+    joint_jog_converter = Node(
+        package="stretch_core",
+        executable="joint_jog_converter",
+        name="joint_jog_converter",
+        emulate_tty=True,
+        output="screen",
+        condition=IfCondition(LaunchConfiguration("deprecated_interfaces")),
+    )
+
+    return joint_state_publisher, robot_state_publisher, stretch_sim, joint_jog_converter, *get_rviz_node( str(stretch_simulation_path / "rviz" / "stretch_sim.rviz"), rviz_params={"use_sim_time": True})
 
 
 def generate_launch_description():
@@ -147,6 +157,12 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "action_server_rate", default_value='30.0', description="Action server update rate",
+        ),
+        DeclareLaunchArgument(
+            "deprecated_interfaces",
+            default_value="false",
+            choices=["true", "false"],
+            description="Launch joint_jog_converter to republish deprecated joint_vel (JointJog) commands as joint_velocity_cmd (JointState) commands.",
         ),
         DeclareLaunchArgument(
             "use_rviz", default_value="true", choices=["true", "false"]
