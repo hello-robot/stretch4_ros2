@@ -19,10 +19,14 @@ install(
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
+  find_package(ament_cmake_pytest REQUIRED)
   set(ament_cmake_copyright_FOUND TRUE)
   set(ament_cmake_cpplint_FOUND TRUE)
   set(ament_cmake_pep257_FOUND TRUE)
   ament_lint_auto_find_test_dependencies()
+
+  ament_add_pytest_test(test_velocity_limiter test/test_velocity_limiter.py)
+  ament_add_pytest_test(test_task_space_controller test/test_task_space_controller.py)
 endif()
 
 ament_package()
