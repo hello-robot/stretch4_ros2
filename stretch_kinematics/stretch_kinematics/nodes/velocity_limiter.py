@@ -1,11 +1,21 @@
 #!/usr/bin/env python3
 
+"""
+End-Effector Velocity Safety Filter Node for Stretch 4.
+
+Subscribes to raw velocity command topics (cmd_vel_raw, cmd_vel_nav_raw, joint_vel_raw),
+computes the resultant 3D spatial velocity at target frame using forward kinematics,
+and scales down commands that exceed max_ee_speed before publishing to output topics.
+"""
+
+from typing import Any
+
+from control_msgs.msg import JointJog
+from geometry_msgs.msg import Twist
 import numpy as np
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
-from geometry_msgs.msg import Twist
-from control_msgs.msg import JointJog
 from sensor_msgs.msg import JointState
 
 from stretch4_kinematics.kinematic_models.tool_frame_kinematics import ToolFrameKinematics
@@ -13,24 +23,22 @@ from stretch4_kinematics.state import StretchJointPositions, StretchJointVelocit
 
 
 class EndEffectoryVelocitySafetyFilterNode(Node):
-    """
-    ROS 2 Safety Filter Node that intercepts velocity commands (/teleop/cmd_vel, /teleop/cmd_vel_nav, /teleop/joint_vel),
-    uses StretchKinematics.forward_velocity() to calculate resultant end-effector (EE) speed,
-    and scales down velocity vectors that exceed max_ee_speed before publishing to driver/nav topics.
-    """
-    def __init__(self):
+    """Filter velocity commands to enforce maximum end-effector speed limits."""
+
+    def __init__(self) -> None:
+        """Initialize the EndEffectoryVelocitySafetyFilterNode and declare parameters."""
         super().__init__('ee_velocity_safety_filter')
 
         # Declare ROS Parameters
         self.declare_parameter('max_ee_speed', 0.20)  # Max absolute EE speed in m/s
         self.declare_parameter('target_frame', 'tool_attachment_site_link')
-        self.declare_parameter('input_cmd_vel_topic', '/teleop/cmd_vel')
-        self.declare_parameter('output_cmd_vel_topic', '/cmd_vel')
-        self.declare_parameter('input_cmd_vel_nav_topic', '/teleop/cmd_vel_nav')
-        self.declare_parameter('output_cmd_vel_nav_topic', '/cmd_vel_nav')
-        self.declare_parameter('input_joint_vel_topic', '/teleop/joint_vel')
-        self.declare_parameter('output_joint_vel_topic', '/joint_vel')
-        self.declare_parameter('joint_states_topic', '/joint_states')
+        self.declare_parameter('input_cmd_vel_topic', 'cmd_vel_raw')
+        self.declare_parameter('output_cmd_vel_topic', 'cmd_vel')
+        self.declare_parameter('input_cmd_vel_nav_topic', 'cmd_vel_nav_raw')
+        self.declare_parameter('output_cmd_vel_nav_topic', 'cmd_vel_nav')
+        self.declare_parameter('input_joint_vel_topic', 'joint_vel_raw')
+        self.declare_parameter('output_joint_vel_topic', 'joint_vel')
+        self.declare_parameter('joint_states_topic', 'joint_states')
 
         self.max_ee_speed = float(self.get_parameter('max_ee_speed').value)
         self.target_frame = str(self.get_parameter('target_frame').value)
@@ -80,13 +88,22 @@ class EndEffectoryVelocitySafetyFilterNode(Node):
         self.pub_joint_vel = self.create_publisher(JointJog, output_joint_vel_topic, 10)
 
         self.get_logger().info(
-            f"EeVelocitySafetyFilterNode initialized. "
-            f"max_ee_speed={self.max_ee_speed:.3f} m/s, target_frame='{self.target_frame}', "
-            f"joint_states_topic='{joint_states_topic}'"
+            f'EeVelocitySafetyFilterNode initialized. '
+            f"max_ee_speed={self.max_ee_speed:.3f} m/s, target_frame='{self.target_frame}'. "
+            f"Filtering cmd_vel: '{input_cmd_vel_topic}' -> '{output_cmd_vel_topic}', "
+            f"cmd_vel_nav: '{input_cmd_vel_nav_topic}' -> '{output_cmd_vel_nav_topic}', "
+            f"joint_vel: '{input_joint_vel_topic}' -> '{output_joint_vel_topic}'."
         )
 
-    def joint_states_callback(self, msg: JointState):
-        """Updates internal joint position state from /joint_states."""
+    def joint_states_callback(self, msg: JointState) -> None:
+        """
+        Update internal joint position state from joint_states topic feedback.
+
+        Args
+        ----
+            msg: Joint state message containing joint names and positions.
+
+        """
         if not self.has_received_joint_states:
             self.has_received_joint_states = True
             self.get_logger().info(
@@ -98,13 +115,15 @@ class EndEffectoryVelocitySafetyFilterNode(Node):
         lift = name_pos.get('lift_joint', name_pos.get('joint_lift', 0.5))
 
         if 'arm_l4_joint' in name_pos:
-            arm = name_pos['arm_l4_joint'] * 5.0
+            arm = name_pos['arm_l4_joint'] * 4.0
         elif 'arm_joint' in name_pos:
             arm = name_pos['arm_joint']
         elif 'joint_arm' in name_pos:
             arm = name_pos['joint_arm']
         else:
-            arm = sum(name_pos.get(f'joint_arm_l{i}', name_pos.get(f'arm_l{i}', 0.0)) for i in range(4))
+            arm = sum(
+                name_pos.get(f'joint_arm_l{i}', name_pos.get(f'arm_l{i}', 0.0)) for i in range(4)
+            )
 
         wrist_yaw = name_pos.get('wrist_yaw_joint', name_pos.get('joint_wrist_yaw', 0.0))
         wrist_pitch = name_pos.get('wrist_pitch_joint', name_pos.get('joint_wrist_pitch', 0.0))
@@ -121,10 +140,23 @@ class EndEffectoryVelocitySafetyFilterNode(Node):
             wrist_roll=wrist_roll
         )
 
-    def compute_ee_speed_and_gain(self, q_dot_state: StretchJointVelocities) -> tuple[float, float]:
+    def compute_ee_speed_and_gain(
+        self,
+        q_dot_state: StretchJointVelocities
+    ) -> tuple[float, float]:
         """
-        Computes the resultant 3D linear EE speed (m/s) using StretchKinematics.forward_velocity(),
-        and returns (ee_speed, scale_gain).
+        Compute resultant 3D linear EE speed (m/s) using forward_velocity and return gain.
+
+        Args
+        ----
+            q_dot_state: Joint velocity state vector.
+
+        Returns
+        -------
+            A tuple containing:
+                - ee_speed: Resultant linear 3D velocity magnitude in m/s.
+                - gain: Scaling gain in range (0.0, 1.0] applied to prevent exceeding max_ee_speed.
+
         """
         target_frame = str(self.get_parameter('target_frame').value)
         max_ee_speed = float(self.get_parameter('max_ee_speed').value)
@@ -132,18 +164,22 @@ class EndEffectoryVelocitySafetyFilterNode(Node):
 
         if not self.has_received_joint_states:
             self.get_logger().warn(
-                f"No JointState message received yet on '{joint_states_topic}'. "
-                f"Computing forward_velocity with default state (lift={self.latest_q.lift}, arm={self.latest_q.arm}).",
+                f"No JointState received yet on '{joint_states_topic}'. "
+                f'Computing forward_velocity with default state '
+                f'lift={self.latest_q.lift}, arm={self.latest_q.arm}.',
                 throttle_duration_sec=3.0
             )
 
         try:
-            # Uses forward_velocity on StretchKinematics without importing Pinocchio directly in node
-            v_spatial = self.kinematics.forward_velocity(self.latest_q, q_dot_state, target_frame)
+            v_spatial = self.kinematics.forward_velocity(
+                self.latest_q, q_dot_state, target_frame
+            )
             v_linear = v_spatial[:3]
             ee_speed = float(np.linalg.norm(v_linear))
         except Exception as e:
-            self.get_logger().error(f"Error computing forward_velocity for frame '{target_frame}': {e}")
+            self.get_logger().error(
+                f"Error computing forward_velocity for frame '{target_frame}': {e}"
+            )
             return 0.0, 1.0
 
         if ee_speed > max_ee_speed and ee_speed > 1e-6:
@@ -153,8 +189,17 @@ class EndEffectoryVelocitySafetyFilterNode(Node):
 
         return ee_speed, gain
 
-    def _process_twist_cmd(self, msg: Twist, publisher, tag: str):
-        """Helper to scale Twist velocity command and publish to the target publisher."""
+    def _process_twist_cmd(self, msg: Twist, publisher: Any, tag: str) -> None:
+        """
+        Scale Twist velocity command to satisfy max EE speed limit and publish output.
+
+        Args
+        ----
+            msg: Input Twist velocity command.
+            publisher: ROS 2 Publisher instance to publish scaled Twist message.
+            tag: Diagnostic topic identifier tag.
+
+        """
         q_dot = StretchJointVelocities(
             base_x=msg.linear.x,
             base_y=msg.linear.y,
@@ -178,34 +223,64 @@ class EndEffectoryVelocitySafetyFilterNode(Node):
 
         publisher.publish(scaled_msg)
 
-    def cmd_vel_callback(self, msg: Twist):
-        """Callback for /teleop/cmd_vel. Scales and publishes to /cmd_vel."""
+    def cmd_vel_callback(self, msg: Twist) -> None:
+        """
+        Process input cmd_vel commands. Scales and publishes to output cmd_vel.
+
+        Args
+        ----
+            msg: Input base Twist velocity command.
+
+        """
         self._process_twist_cmd(msg, self.pub_cmd_vel, 'cmd_vel')
 
-    def cmd_vel_nav_callback(self, msg: Twist):
-        """Callback for /teleop/cmd_vel_nav. Scales and publishes to /cmd_vel_nav."""
+    def cmd_vel_nav_callback(self, msg: Twist) -> None:
+        """
+        Process input cmd_vel_nav commands. Scales and publishes to output cmd_vel_nav.
+
+        Args
+        ----
+            msg: Input navigation base Twist velocity command.
+
+        """
         self._process_twist_cmd(msg, self.pub_cmd_vel_nav, 'cmd_vel_nav')
 
-    def joint_vel_callback(self, msg: JointJog):
-        """Callback for /teleop/joint_vel. Scales and publishes to /joint_vel."""
+    def joint_vel_callback(self, msg: JointJog) -> None:
+        """
+        Process input joint_vel commands. Scales and publishes to output joint_vel.
+
+        Args
+        ----
+            msg: JointJog message containing joint names and target velocities.
+
+        """
         name_vel = dict(zip(msg.joint_names, msg.velocities))
 
         lift = name_vel.get('lift_joint', name_vel.get('joint_lift', 0.0))
 
         if 'arm_l4_joint' in name_vel:
-            arm = name_vel['arm_l4_joint'] * 5.0
+            arm = name_vel['arm_l4_joint'] * 4.0
         elif 'arm_joint' in name_vel:
             arm = name_vel['arm_joint']
         elif 'joint_arm' in name_vel:
             arm = name_vel['joint_arm']
         elif any(f'joint_arm_l{i}' in name_vel or f'arm_l{i}' in name_vel for i in range(4)):
-            arm = sum(name_vel.get(f'joint_arm_l{i}', name_vel.get(f'arm_l{i}', 0.0)) for i in range(4))
+            arm = sum(
+                name_vel.get(f'joint_arm_l{i}', name_vel.get(f'arm_l{i}', 0.0)) for i in range(4)
+            )
         else:
             arm = name_vel.get('arm', 0.0)
 
-        wrist_yaw = name_vel.get('wrist_yaw_joint', name_vel.get('joint_wrist_yaw', name_vel.get('wrist_yaw', 0.0)))
-        wrist_pitch = name_vel.get('wrist_pitch_joint', name_vel.get('joint_wrist_pitch', name_vel.get('wrist_pitch', 0.0)))
-        wrist_roll = name_vel.get('wrist_roll_joint', name_vel.get('joint_wrist_roll', name_vel.get('wrist_roll', 0.0)))
+        wrist_yaw = name_vel.get(
+            'wrist_yaw_joint', name_vel.get('joint_wrist_yaw', name_vel.get('wrist_yaw', 0.0))
+        )
+        wrist_pitch = name_vel.get(
+            'wrist_pitch_joint',
+            name_vel.get('joint_wrist_pitch', name_vel.get('wrist_pitch', 0.0))
+        )
+        wrist_roll = name_vel.get(
+            'wrist_roll_joint', name_vel.get('joint_wrist_roll', name_vel.get('wrist_roll', 0.0))
+        )
 
         base_x = name_vel.get('translate_mobile_base', name_vel.get('base_x', 0.0))
         base_theta = name_vel.get('rotate_mobile_base', name_vel.get('base_theta', 0.0))
@@ -232,7 +307,15 @@ class EndEffectoryVelocitySafetyFilterNode(Node):
         self.pub_joint_vel.publish(scaled_msg)
 
 
-def main(args=None):
+def main(args: list[str] | None = None) -> None:
+    """
+    Execute main entry point for running the EndEffectoryVelocitySafetyFilterNode.
+
+    Args
+    ----
+        args: Arguments passed from the command line interface.
+
+    """
     rclpy.init(args=args)
     node = EndEffectoryVelocitySafetyFilterNode()
     try:

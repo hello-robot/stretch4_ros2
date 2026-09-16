@@ -3,41 +3,51 @@
 """
 Task Space Controller node for Stretch 4.
 
-Subscribes to desired task-space end-effector velocity commands (geometry_msgs/Twist on /ee_cmd_vel),
-joint states, and odometry, solves differential IK using stretch4_kinematics,
-and publishes joint velocity commands (control_msgs/JointJog) and base twist commands (geometry_msgs/Twist).
+Subscribes to desired task-space end-effector velocity commands (geometry_msgs/Twist on
+ee_cmd_vel), joint states, and odometry, solves differential IK using stretch4_kinematics,
+and publishes joint velocity commands (control_msgs/JointJog) and base twist commands.
 """
 
 import time
-import numpy as np
 
+from control_msgs.msg import JointJog
+from geometry_msgs.msg import Twist
+from nav_msgs.msg import Odometry
+import numpy as np
 import rclpy
 from rclpy.node import Node
-from geometry_msgs.msg import Twist
 from sensor_msgs.msg import JointState
-from nav_msgs.msg import Odometry
-from control_msgs.msg import JointJog
 
-from stretch4_kinematics.state.joint_positions import StretchJointPositions
 from stretch4_kinematics.kinematic_models.tool_frame_kinematics import ToolFrameKinematics
+from stretch4_kinematics.state.joint_positions import StretchJointPositions
 
 
 class TaskSpaceController(Node):
-    """
-    ROS 2 node that converts 6D task-space end-effector velocity commands into joint velocities.
-    """
+    """Convert 6D task-space end-effector velocity commands into joint velocities."""
 
     def __init__(self) -> None:
+        """Initialize the TaskSpaceController node and declare configurable parameters."""
         super().__init__('task_space_controller')
 
         # Parameters
         self.declare_parameter('target_frame', 'tool_attachment_site_link')
         self.declare_parameter('control_rate', 15.0)  # Control loop frequency in Hz
         self.declare_parameter('watchdog_timeout', 0.4)  # Safety timeout in seconds
+        self.declare_parameter('ee_cmd_vel_topic', 'ee_cmd_vel')
+        self.declare_parameter('cmd_vel_topic', 'cmd_vel')
+        self.declare_parameter('joint_vel_topic', 'joint_vel')
+        self.declare_parameter('joint_states_topic', 'joint_states')
+        self.declare_parameter('odom_topic', 'wheel_odom')
 
-        self.target_frame = self.get_parameter('target_frame').value
+        self.target_frame = str(self.get_parameter('target_frame').value)
         self.control_rate = float(self.get_parameter('control_rate').value)
         self.watchdog_timeout = float(self.get_parameter('watchdog_timeout').value)
+
+        ee_cmd_vel_topic = str(self.get_parameter('ee_cmd_vel_topic').value)
+        cmd_vel_topic = str(self.get_parameter('cmd_vel_topic').value)
+        joint_vel_topic = str(self.get_parameter('joint_vel_topic').value)
+        joint_states_topic = str(self.get_parameter('joint_states_topic').value)
+        odom_topic = str(self.get_parameter('odom_topic').value)
 
         # Kinematic model and state
         self.kinematic_model = ToolFrameKinematics()
@@ -46,18 +56,18 @@ class TaskSpaceController(Node):
         self.last_cmd_time = 0.0
 
         # Publishers
-        self.pub_joint_vel = self.create_publisher(JointJog, 'joint_vel', 10)
-        self.pub_base_twist = self.create_publisher(Twist, 'cmd_vel', 10)
+        self.pub_joint_vel = self.create_publisher(JointJog, joint_vel_topic, 10)
+        self.pub_base_twist = self.create_publisher(Twist, cmd_vel_topic, 10)
 
         # Subscribers
         self.sub_ee_cmd_vel = self.create_subscription(
-            Twist, 'ee_cmd_vel', self.ee_cmd_vel_callback, 10
+            Twist, ee_cmd_vel_topic, self.ee_cmd_vel_callback, 10
         )
         self.sub_joint_state = self.create_subscription(
-            JointState, 'joint_states', self.joint_states_callback, 10
+            JointState, joint_states_topic, self.joint_states_callback, 10
         )
         self.sub_odom = self.create_subscription(
-            Odometry, 'wheel_odom', self.odom_callback, 10
+            Odometry, odom_topic, self.odom_callback, 10
         )
 
         # Timer loop for smooth differential IK evaluation
@@ -66,11 +76,20 @@ class TaskSpaceController(Node):
 
         self.get_logger().info(
             f"Task Space Controller node initialized. Target frame: '{self.target_frame}', "
-            f"Rate: {self.control_rate} Hz, Watchdog: {self.watchdog_timeout} s."
+            f'Rate: {self.control_rate} Hz, Watchdog: {self.watchdog_timeout} s. '
+            f"Subscribing: ee_cmd_vel='{ee_cmd_vel_topic}', joint_states='{joint_states_topic}'. "
+            f"Publishing: cmd_vel='{cmd_vel_topic}', joint_vel='{joint_vel_topic}'."
         )
 
     def ee_cmd_vel_callback(self, msg: Twist) -> None:
-        """Receive desired 6D task-space velocity command."""
+        """
+        Receive desired 6D task-space velocity command.
+
+        Args
+        ----
+            msg: Desired end-effector twist velocity message.
+
+        """
         self.latest_v_desired = np.array([
             msg.linear.x,
             msg.linear.y,
@@ -82,7 +101,14 @@ class TaskSpaceController(Node):
         self.last_cmd_time = time.time()
 
     def odom_callback(self, msg: Odometry) -> None:
-        """Update mobile base heading and position from wheel odometry."""
+        """
+        Update mobile base heading and position from wheel odometry.
+
+        Args
+        ----
+            msg: Wheel odometry message containing orientation and position.
+
+        """
         q = msg.pose.pose.orientation
         siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
         cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
@@ -91,13 +117,20 @@ class TaskSpaceController(Node):
         self.stretch_joint_position.base_y = msg.pose.pose.position.y
 
     def joint_states_callback(self, joint_state: JointState) -> None:
-        """Update joint positions from joint state feedback."""
+        """
+        Update joint positions from joint state feedback.
+
+        Args
+        ----
+            joint_state: Joint state message containing joint names and positions.
+
+        """
         joint_dict = dict(zip(joint_state.name, joint_state.position))
 
         self.stretch_joint_position.lift = joint_dict.get('lift_joint', 0.5)
 
         if 'arm_l4_joint' in joint_dict:
-            self.stretch_joint_position.arm = joint_dict['arm_l4_joint'] * 5.0
+            self.stretch_joint_position.arm = joint_dict['arm_l4_joint'] * 4.0
         elif 'arm_joint' in joint_dict:
             self.stretch_joint_position.arm = joint_dict['arm_joint']
         else:
@@ -155,6 +188,14 @@ class TaskSpaceController(Node):
 
 
 def main(args: list[str] | None = None) -> None:
+    """
+    Execute main entry point for running the TaskSpaceController node.
+
+    Args
+    ----
+        args: Arguments passed from the command line interface.
+
+    """
     rclpy.init(args=args)
     node = TaskSpaceController()
     try:

@@ -1,4 +1,4 @@
-from setuptools import setup, find_packages
+from setuptools import find_packages, setup
 
 package_name = 'stretch_kinematics'
 
@@ -10,12 +10,15 @@ setup(
         ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
     ],
-    install_requires=['setuptools'],
+    install_requires=[
+        'setuptools',
+        'hello-robot-stretch4-kinematics',
+    ],
     url='https://github.com/hello-robot/stretch4_ros2',
     license='Apache License 2.0',
     author='Hello Robot Inc.',
     author_email='support@hello-robot.com',
-    description='Kinematics, task-space velocity control, and velocity limiting nodes for Stretch 4',
+    description='Kinematics and velocity control nodes for Stretch 4',
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [

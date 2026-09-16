@@ -1,3 +1,1 @@
-"""
-stretch_kinematics package.
-"""
+"""stretch_kinematics package."""

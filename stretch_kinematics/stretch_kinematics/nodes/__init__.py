@@ -1,3 +1,1 @@
-"""
-Node implementations for stretch_kinematics.
-"""
+"""Node implementations for stretch_kinematics."""
