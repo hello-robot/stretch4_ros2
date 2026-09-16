@@ -85,8 +85,6 @@ class Stretch4ROSDriver(Node, ABC):
         "position": (DriverMode.ACTIVE, JointMode.POSITION),
         "navigation": (DriverMode.ACTIVE, JointMode.POSITION),
         "velocity": (DriverMode.ACTIVE, JointMode.VELOCITY),
-        "trajectory": (DriverMode.ACTIVE, JointMode.POSITION),
-        "gamepad": (DriverMode.TELEOP, None),
     }
     
     def __init__(self,name):
@@ -389,10 +387,8 @@ class Stretch4ROSDriver(Node, ABC):
 
         if joint_mode == JointMode.VELOCITY:
             joints = self.velocity_joints or []
-        elif joint_mode is not None:
-            joints = self.command_joints or []
         else:
-            joints = []
+            joints = self.command_joints or []
 
         self.logger.warn(
             f"mode '{legacy_mode}' is DEPRECATED and is no longer a robot mode. "

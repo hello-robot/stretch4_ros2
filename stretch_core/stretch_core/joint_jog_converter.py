@@ -1,33 +1,28 @@
 #! /usr/bin/env python3
 """Compatibility shim for the deprecated joint_vel topic.
 
-Before the sim/real API alignment, ranged-joint velocity control was published as
-control_msgs/JointJog on joint_vel and handled by StretchDriver.velocity_callback.
-That topic is gone; the driver now takes sensor_msgs/JointState on
-joint_velocity_cmd (Stretch4ROSDriver.velocity_cmd_callback).
+Before the sim/real API alignment (PR #42), ranged-joint velocity control was published as
+control_msgs/JointJog on joint_vel and handled by StretchDriver.velocity_callback. That
+topic is gone; the driver now takes sensor_msgs/JointState on joint_velocity_cmd with the
+Stretch4ROSDriver.velocity_cmd_callback.
 
-Three differences between the old and new contracts are handled here:
+Four differences between the old and new paradigms are handled here:
 
   * Joint names. joint_vel used a '_joint' suffix (lift_joint, arm_joint); the
     driver's command_joints do not (lift, arm, stretch_gripper).
   * Control mode. Velocity used to be a global driver mode. It is now per joint,
-    so this node sets joint_mode.<joint> to 'velocity' before forwarding, or the
-    driver rejects every command.
-  * JointJog.duration. Documented as the timeout after which the robot stops.
-    The driver's velocity_timeout parameter is declared but not enforced, and
-    push_robot_command re-sends the last velocity indefinitely, so this node runs
-    its own watchdog and publishes a zero velocity when the duration expires.
+    so this node sets joint_mode.<joint> to 'velocity' before forwarding joint_vel
+    commands, otherwise the driver would reject every command.
+  * JointJog.duration. Previously, joint velocities were sent with a time period,
+    after which the robot stops. The new driver is designed to command velocities
+    indefinitely, so this node runs its own watchdog and publishes a zero velocity
+    when the duration expires to mimic the old expected behavior.
+  * End-of-arm joint velocity commands. The deprecated drived handled velocity commands with
+    EndOfArm.move_by commands. It estimated displacement by multiplying commanded velocity
+    by JointJog.duration (wrists) or 300 (gripper). This node reproduces the expected velocity
+    command behavior by sending joint_position_cmds: move_to(pos + duration*v) for wrists and
+    move_to(pos_pct + 300*v) for the gripper.
 
-The gripper is a fourth difference, and the reason this node publishes positions as
-well as velocities. The deprecated callback multiplied gripper commands by 300 and
-handed them to EndOfArm.move_by, whose argument is radians for the wrists but an
-aperture percentage for StretchGripper -- so the value on the wire was a bounded
-per-message displacement, not a velocity. No scaling reproduces that on a velocity
-topic, because move_by moved a fixed amount and stopped. Legacy gripper commands are
-therefore converted to an absolute target and published on joint_position_cmd, which
-lands the driver on the same move_to(pos_pct + 300*v) the old code performed.
-
-JointJog.displacements[] is ignored, matching the deprecated velocity_callback.
 """
 
 import math
@@ -45,7 +40,7 @@ try:
     # Only needed to reproduce legacy gripper commands. Absent on machines that run
     # the simulator without stretch4_body; the rest of the shim works without it.
     from stretch4_body.subsystem.end_of_arm.gripper_conversion import GripperConversion
-except Exception:  # pragma: no cover - depends on the host install
+except Exception:
     GripperConversion = None
 
 # joint_vel names that do not reduce to a command joint by stripping '_joint'.
@@ -68,6 +63,11 @@ DEFAULT_GRIPPER_STATE_TO_COMMAND = 2.0
 
 # joint_states names for the gripper, in preference order (see GripperCommandGroup).
 GRIPPER_STATE_NAMES = ('gripper_finger_left_joint', 'gripper_finger_right_joint')
+
+# Command joints the deprecated callback drove with EndOfArm.move_by in radians, after
+# scaling the wire value by JointJog.duration. Like the gripper, these are displacements
+# rather than velocities, so they are forwarded as absolute positions.
+WRIST_JOINTS = ("wrist_yaw", "wrist_pitch", "wrist_roll")
 
 
 class JointJogConverter(Node):
@@ -123,6 +123,10 @@ class JointJogConverter(Node):
         # Latest gripper position from joint_states, in joint_states units.
         self._gripper_state = None
         self._gripper_state_lock = threading.Lock()
+
+        # command joint -> latest position from joint_states, in radians.
+        self._wrist_states = {}
+        self._wrist_state_lock = threading.Lock()
 
         self._setup_gripper_conversion()
 
@@ -212,6 +216,15 @@ class JointJogConverter(Node):
         return self._gripper_conversion.servo_to_finger(servo_deg)
 
     def joint_states_callback(self, msg: JointState):
+        for joint in WRIST_JOINTS:
+            try:
+                index = msg.name.index(f"{joint}_joint")
+            except ValueError:
+                continue
+            if index < len(msg.position):
+                with self._wrist_state_lock:
+                    self._wrist_states[joint] = msg.position[index]
+
         for name in GRIPPER_STATE_NAMES:
             try:
                 index = msg.name.index(name)
@@ -221,6 +234,43 @@ class JointJogConverter(Node):
                 with self._gripper_state_lock:
                     self._gripper_state = msg.position[index]
             return
+
+    def forward_wrist(self, joint, velocity, duration, original_name):
+        """Reproduce move_by(joint, v * duration) as an absolute position command.
+
+        `velocity` is the raw JointJog value and `duration` the message's (clamped)
+        duration in seconds; their product is the displacement in radians. Publishes a
+        target rather than a velocity and arms no watchdog, because move_by moved a
+        bounded amount and stopped. A zero command holds the current position, standing
+        in for the quick_stop the deprecated callback issued. Joint limits are left to
+        the driver, which enforces joint_limit.<joint>.upper/lower on this topic.
+        """
+        if not self.request_joint_mode(joint, "position", original_name):
+            with self._pending_lock:
+                self._pending[joint] = (
+                    lambda j=joint, v=velocity, d=duration, o=original_name:
+                    self.forward_wrist(j, v, d, o)
+                )
+            return
+
+        with self._wrist_state_lock:
+            current = self._wrist_states.get(joint)
+
+        if current is None:
+            self.log_throttled(
+                f"wrist_no_state_{joint}",
+                f"{self.input_topic}: dropping the command for '{original_name}' "
+                f"because no {joint}_joint position has been seen on joint_states yet. "
+                "The old callback moved by a delta, so an absolute target needs one.",
+                level="error",
+            )
+            return
+
+        command = JointState()
+        command.header.stamp = self.get_clock().now().to_msg()
+        command.name = [joint]
+        command.position = [float(current + velocity * duration)]
+        self.pos_pub.publish(command)
 
     def forward_gripper(self, velocity, original_name):
         """Reproduce move_by(stretch_gripper, 300 * v) as an absolute position command.
@@ -494,6 +544,11 @@ class JointJogConverter(Node):
             if joint == "stretch_gripper":
                 # Not a velocity on the wire; reproduced as a bounded position move.
                 self.forward_gripper(velocity, name)
+                continue
+
+            if joint in WRIST_JOINTS:
+                # Also a displacement rather than a velocity; see forward_wrist.
+                self.forward_wrist(joint, velocity, duration, name)
                 continue
 
             if not self.request_joint_mode(joint, "velocity", original_name=name):
