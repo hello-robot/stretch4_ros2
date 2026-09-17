@@ -78,17 +78,18 @@ DEFAULT_SIM_TOOL = "eoa_wrist_dw4_tool_sg4"
 
 
 class StretchMujocoDriver(Stretch4ROSDriver):
-    command_joints = ["lift",
-                      "arm",
-                      "wrist_yaw",
-                      "wrist_pitch",
-                      "wrist_roll",
-                      "stretch_gripper",
-                      #"parallel_gripper",
-                      #"gripper_right_finger",
-                      #"gripper_left_finger",
+    command_joints = ["lift_joint",
+                      "arm_joint",
+                      "wrist_yaw_joint",
+                      "wrist_pitch_joint",
+                      "wrist_roll_joint",
+                      "gripper_joint",
+                      #"parallel_gripper_joint",
+                      #"gripper_right_finger_joint",
+                      #"gripper_left_finger_joint",
                       ]
-    velocity_joints = ["arm", "lift", "wrist_yaw", "wrist_roll", "wrist_pitch","stretch_gripper"]
+    velocity_joints = ["arm_joint", "lift_joint", "wrist_yaw_joint",
+                       "wrist_roll_joint", "wrist_pitch_joint", "gripper_joint"]
     
     def __init__(self):
         super().__init__('stretch_mujoco_driver')
@@ -174,25 +175,25 @@ class StretchMujocoDriver(Stretch4ROSDriver):
         limits = self.sim.pull_joint_limits()
 
         # hacky workaround for mismatched representations in sim vs real
-        if "stretch_gripper" in self.command_joints and Actuators["gripper"] not in limits:
+        if "gripper_joint" in self.command_joints and Actuators["gripper"] not in limits:
             if Actuators["gripper_right_finger"] in limits and Actuators["gripper_left_finger"] in limits:
                  (rll, rul) = limits[Actuators["gripper_right_finger"]]
                  (lll, lul) = limits[Actuators["gripper_left_finger"]]
                  limits[Actuators["gripper"]] = (np.float64(rll+lll), np.float64(rul+lul))
             
         for joint in self.command_joints:
-            if "stretch_gripper" in joint: #stretch gripper has its fingers modeled separately in sim
+            if joint == "gripper_joint": #stretch gripper has its fingers modeled separately in sim
                 if Actuators["gripper_right_finger"] in limits and Actuators["gripper_left_finger"] in limits:
                     (rll, rul) = limits[Actuators["gripper_right_finger"]]
                     (lll, lul) = limits[Actuators["gripper_left_finger"]]
                     (ll,ul) = (np.float64(rll+lll), np.float64(rul+lul))
                 else:
                     (ll,ul)=(None,None)
-            elif "parallel_gripper" in joint: #parallel gripper not actually implemented in sim:
+            elif joint == "parallel_gripper_joint": #parallel gripper not actually implemented in sim:
                 self.logger.warning("Parallel gripper not available in simulation")
                 (ll,ul)=(None,None)
             else:
-                (ll,ul) = limits[Actuators[joint]]
+                (ll,ul) = limits[Actuators[self.backend_joint_name(joint)]]
             if ll is not None and ul is not None:
                 results = self.set_parameters([Parameter(f"joint_limit.{joint}.upper", Parameter.Type.DOUBLE, ul),
                                  Parameter(f"joint_limit.{joint}.lower", Parameter.Type.DOUBLE, ll)])
@@ -361,12 +362,12 @@ class StretchMujocoDriver(Stretch4ROSDriver):
 
         # Define targets dictionary mapping joints to velocities
         targets = {
-            "lift": get_val('left_stick_y', 'lift'),
-            "arm": get_val('left_stick_x', 'arm'),
-            "wrist_yaw": get_val('right_stick_x', 'wrist_yaw'),
-            "wrist_pitch": get_val('right_stick_y', 'wrist_pitch'),
-            "wrist_roll": get_button_vel('wrist_roll', 'right_shoulder_button_pressed', 'left_shoulder_button_pressed'),
-            "stretch_gripper": get_button_vel('stretch_gripper', 'top_button_pressed', 'bottom_button_pressed')
+            "lift_joint": get_val('left_stick_y', 'lift_joint'),
+            "arm_joint": get_val('left_stick_x', 'arm_joint'),
+            "wrist_yaw_joint": get_val('right_stick_x', 'wrist_yaw_joint'),
+            "wrist_pitch_joint": get_val('right_stick_y', 'wrist_pitch_joint'),
+            "wrist_roll_joint": get_button_vel('wrist_roll_joint', 'right_shoulder_button_pressed', 'left_shoulder_button_pressed'),
+            "gripper_joint": get_button_vel('gripper_joint', 'top_button_pressed', 'bottom_button_pressed')
         }
 
         goal = JointState()
@@ -388,6 +389,7 @@ class StretchMujocoDriver(Stretch4ROSDriver):
 
     def set_joint_position(self, joint, target):  
         self.logger.info(f"Driver setting joint {joint} to position {target}. current position is {self.cmd_joint_position(joint)}.") 
+        joint = self.backend_joint_name(joint)
         subsys = None
          
         if hasattr(self.sim, joint):
@@ -409,6 +411,7 @@ class StretchMujocoDriver(Stretch4ROSDriver):
     def set_joint_velocity(self, joint, target):
         self.logger.info(f"Driver setting joint {joint} to velocity {target}")
         
+        joint = self.backend_joint_name(joint)
         subsys = None
         
         if hasattr(self.sim, joint):
@@ -793,16 +796,17 @@ class StretchMujocoDriver(Stretch4ROSDriver):
     def command_joint_pose_from_joint_state(self, command_joint, joint_state, default=None):
 
         match command_joint:
-            case "arm":
+            case "arm_joint":
                 poses = []
-                subjoints = [f"{command_joint}_l{i}_joint" for i in [1,2,3,4]]
+                # /joint_states splits the telescoping arm into its four links.
+                subjoints = [f"arm_l{i}_joint" for i in [1,2,3,4]]
                 for j in subjoints:
                     try:
                         poses.append(joint_state.position[joint_state.name.index(j)])
                     except ValueError:
                         pass
                 return sum(poses) if poses else default
-            case "stretch_gripper":
+            case "gripper_joint":
                 try:
                     left = joint_state.position[joint_state.name.index("gripper_finger_left_joint")]
                     right = joint_state.position[joint_state.name.index("gripper_finger_right_joint")]
@@ -810,9 +814,8 @@ class StretchMujocoDriver(Stretch4ROSDriver):
                 except ValueError:
                     return default
             case _:
-                joint_name = command_joint+"_joint"
                 try:
-                    return joint_state.position[joint_state.name.index(joint_name)]
+                    return joint_state.position[joint_state.name.index(command_joint)]
                 except (ValueError, IndexError):
                     return default
             
@@ -820,16 +823,17 @@ class StretchMujocoDriver(Stretch4ROSDriver):
                 
     def command_joint_vel_from_joint_state(self, command_joint, joint_state, default=None):
         match command_joint:
-            case "arm":
+            case "arm_joint":
                 vels = []
-                subjoints = [f"{command_joint}_l{i}_joint" for i in [1,2,3,4]]
+                # /joint_states splits the telescoping arm into its four links.
+                subjoints = [f"arm_l{i}_joint" for i in [1,2,3,4]]
                 for j in subjoints:
                     try:
                         vels.append(joint_state.velocity[joint_state.name.index(j)])
                     except (ValueError, IndexError):
                         pass
                 return sum(vels) if vels else default
-            case "stretch_gripper":
+            case "gripper_joint":
                 try:
                     left = joint_state.velocity[joint_state.name.index("gripper_finger_left_joint")]
                     right = joint_state.velocity[joint_state.name.index("gripper_finger_right_joint")]
@@ -837,9 +841,8 @@ class StretchMujocoDriver(Stretch4ROSDriver):
                 except (ValueError, IndexError):
                     return default
             case _:
-                joint_name = command_joint+"_joint"
                 try:
-                    return joint_state.velocity[joint_state.name.index(joint_name)]
+                    return joint_state.velocity[joint_state.name.index(command_joint)]
                 except (ValueError, IndexError):
                     return default
 
@@ -1036,7 +1039,7 @@ class StretchMujocoDriver(Stretch4ROSDriver):
         is_homing = str(current_mode == 'homing')
 
         for joint in self.command_joints:
-            joint_key = f"{joint}_joint" if not joint.startswith("stretch_") else "stretch_gripper_joint"
+            joint_key = joint
             
             # Check limits dynamically
             try:

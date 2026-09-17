@@ -86,6 +86,19 @@ class Stretch4ROSDriver(Node, ABC):
         "navigation": (DriverMode.ACTIVE, JointMode.POSITION),
         "velocity": (DriverMode.ACTIVE, JointMode.VELOCITY),
     }
+
+    # Extra spellings accepted for a command joint on command messages and trajectory
+    # goals. Parameters are never aliased -- a parameter name cannot be.
+    JOINT_NAME_ALIASES = {
+        "stretch_gripper_joint": "gripper_joint",
+        "gripper_aperture": "gripper_joint",
+    }
+
+    # Command joints whose stretch_body / stretch_mujoco name is not the command joint
+    # with '_joint' removed.
+    BACKEND_JOINT_NAMES = {
+        "gripper_joint": "stretch_gripper",
+    }
     
     def __init__(self,name):
         super().__init__(name)
@@ -367,6 +380,30 @@ class Stretch4ROSDriver(Node, ABC):
     # that run per command message or per control loop, so they need a rate limit.
     MODE_WARNING_PERIOD_S = 5.0
 
+    def resolve_joint_name(self, name):
+        """Return the command joint `name` addresses, accepting JOINT_NAME_ALIASES.
+
+        A name matching no command joint is returned unchanged, leaving the complaint
+        to the caller, which knows what interface it arrived on.
+        """
+        if self.command_joints and name in self.command_joints:
+            return name
+        joint = self.JOINT_NAME_ALIASES.get(name)
+        if joint is not None and self.command_joints and joint in self.command_joints:
+            return joint
+        return name
+
+    def backend_joint_name(self, name):
+        """Translate a command joint ('lift_joint') into its actuator name ('lift').
+
+        Called by concrete drivers where they dispatch into stretch_body or
+        stretch_mujoco.
+        """
+        backend = self.BACKEND_JOINT_NAMES.get(name)
+        if backend is not None:
+            return backend
+        return name[: -len("_joint")] if name.endswith("_joint") else name
+
     def replace_deprecated_mode(self, legacy_mode):
         """Set the control mode and joint_mode according to the legacy robot mode."""
         replacement, joint_mode = self.DEPRECATED_CONTROL_MODES[legacy_mode]
@@ -617,7 +654,7 @@ class Stretch4ROSDriver(Node, ABC):
             return
             
         for i in range(len(target.name)):
-            self.check_and_set_vel(target.name[i],target.velocity[i])
+            self.check_and_set_vel(self.resolve_joint_name(target.name[i]),target.velocity[i])
 
     @abstractmethod
     def set_joint_velocity(self, joint, target, v = None, a = None):
@@ -713,7 +750,7 @@ class Stretch4ROSDriver(Node, ABC):
             return
             
         for i in range(len(target.name)):
-            self.check_and_set_pos(target.name[i],target.position[i])
+            self.check_and_set_pos(self.resolve_joint_name(target.name[i]),target.position[i])
 
     @abstractmethod
     def set_joint_position(self, joint, target, v, a):
@@ -805,12 +842,12 @@ class Stretch4ROSDriver(Node, ABC):
         
         # Define targets dictionary mapping joints to velocities
         targets = {
-            "lift": get_val('left_stick_y', 'lift'),
-            "arm": get_val('left_stick_x', 'arm'),
-            "wrist_yaw": get_val('right_stick_x', 'wrist_yaw'),
-            "wrist_pitch": get_val('right_stick_y', 'wrist_pitch'),
-            "wrist_roll": get_button_vel('wrist_roll', 'right_shoulder_button_pressed', 'left_shoulder_button_pressed'),
-            "stretch_gripper": get_button_vel('stretch_gripper', 'top_button_pressed', 'bottom_button_pressed')
+            "lift_joint": get_val('left_stick_y', 'lift_joint'),
+            "arm_joint": get_val('left_stick_x', 'arm_joint'),
+            "wrist_yaw_joint": get_val('right_stick_x', 'wrist_yaw_joint'),
+            "wrist_pitch_joint": get_val('right_stick_y', 'wrist_pitch_joint'),
+            "wrist_roll_joint": get_button_vel('wrist_roll_joint', 'right_shoulder_button_pressed', 'left_shoulder_button_pressed'),
+            "gripper_joint": get_button_vel('gripper_joint', 'top_button_pressed', 'bottom_button_pressed')
         }
 
         goal = JointState()
@@ -1504,6 +1541,16 @@ class StretchTrajectoryActionServer:
         try:
             self.driver.get_logger().info(f'Checkpoint')
             trajectory = goal_handle.request.trajectory
+            resolved = [
+                self.driver.resolve_joint_name(n) for n in trajectory.joint_names
+            ]
+            if resolved != list(trajectory.joint_names):
+                self.driver.get_logger().info(
+                    f"follow_joint_trajectory: resolved joint_names "
+                    f"{list(trajectory.joint_names)} to {resolved}.",
+                    throttle_duration_sec=30.0,
+                )
+                trajectory.joint_names = resolved
             match mode:
                 case "adaptive_velocity":
                     result = self._check_joints_in_mode(

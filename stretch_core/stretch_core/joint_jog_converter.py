@@ -8,8 +8,8 @@ Stretch4ROSDriver.velocity_cmd_callback.
 
 Four differences between the old and new paradigms are handled here:
 
-  * Joint names. joint_vel used a '_joint' suffix (lift_joint, arm_joint); the
-    driver's command_joints do not (lift, arm, stretch_gripper).
+  * Joint names. joint_vel shares the driver's joint names apart from the gripper,
+    which it calls 'stretch_gripper_joint' rather than 'gripper_joint'.
   * Control mode. Velocity used to be a global driver mode. It is now per joint,
     so this node sets joint_mode.<joint> before forwarding a command: 'velocity' for
     the ranged joints, and 'position' for the wrists and gripper, whose legacy
@@ -55,11 +55,10 @@ try:
 except Exception:
     GripperConversion = None
 
-# joint_vel names that do not reduce to a command joint by stripping '_joint'.
 JOINT_NAME_ALIASES = {
-    "gripper_joint": "stretch_gripper",
-    "gripper": "stretch_gripper",
-    "gripper_aperture": "stretch_gripper",
+    "stretch_gripper_joint": "gripper_joint",
+    "gripper": "gripper_joint",
+    "gripper_aperture": "gripper_joint",
 }
 
 # The deprecated velocity_callback multiplied gripper commands by this before handing
@@ -76,10 +75,9 @@ DEFAULT_GRIPPER_STATE_TO_COMMAND = 2.0
 # joint_states names for the gripper, in preference order (see GripperCommandGroup).
 GRIPPER_STATE_NAMES = ('gripper_finger_left_joint', 'gripper_finger_right_joint')
 
-# Command joints the deprecated callback drove with EndOfArm.move_by in radians, after
-# scaling the wire value by JointJog.duration. Like the gripper, these are displacements
-# rather than velocities, so they are forwarded as absolute positions.
-WRIST_JOINTS = ("wrist_yaw", "wrist_pitch", "wrist_roll")
+# joint_vel carries a displacement rather than a velocity for these, so they are
+# forwarded as absolute positions. See forward_wrist.
+WRIST_JOINTS = ("wrist_yaw_joint", "wrist_pitch_joint", "wrist_roll_joint")
 
 
 class JointJogConverter(Node):
@@ -231,7 +229,7 @@ class JointJogConverter(Node):
     def joint_states_callback(self, msg: JointState):
         for joint in WRIST_JOINTS:
             try:
-                index = msg.name.index(f"{joint}_joint")
+                index = msg.name.index(joint)
             except ValueError:
                 continue
             if index < len(msg.position):
@@ -273,7 +271,7 @@ class JointJogConverter(Node):
             self.log_throttled(
                 f"wrist_no_state_{joint}",
                 f"{self.input_topic}: dropping the command for '{original_name}' "
-                f"because no {joint}_joint position has been seen on joint_states yet. "
+                f"because no {joint} position has been seen on joint_states yet. "
                 "The old callback moved by a delta, so an absolute target needs one.",
                 level="error",
             )
@@ -304,9 +302,9 @@ class JointJogConverter(Node):
         with self._gripper_state_lock:
             state = self._gripper_state
 
-        if not self.request_joint_mode("stretch_gripper", "position", original_name):
+        if not self.request_joint_mode("gripper_joint", "position", original_name):
             with self._pending_lock:
-                self._pending["stretch_gripper"] = (
+                self._pending["gripper_joint"] = (
                     lambda v=velocity, o=original_name: self.forward_gripper(v, o)
                 )
             return
@@ -329,7 +327,7 @@ class JointJogConverter(Node):
 
         command = JointState()
         command.header.stamp = self.get_clock().now().to_msg()
-        command.name = ["stretch_gripper"]
+        command.name = ["gripper_joint"]
         command.position = [float(self._pct_to_command_rad(target_pct))]
         self.pos_pub.publish(command)
 
@@ -541,11 +539,7 @@ class JointJogConverter(Node):
     # --- forwarding -----------------------------------------------------------
 
     def resolve_joint_name(self, name):
-        if name in JOINT_NAME_ALIASES:
-            return JOINT_NAME_ALIASES[name]
-        if name.endswith("_joint"):
-            return name[: -len("_joint")]
-        return name
+        return JOINT_NAME_ALIASES.get(name, name)
 
     def joint_jog_callback(self, msg: JointJog):
         self.warn_deprecated(
@@ -583,7 +577,7 @@ class JointJogConverter(Node):
             joint = self.resolve_joint_name(name)
             velocity = float(msg.velocities[i])
 
-            if joint == "stretch_gripper":
+            if joint == "gripper_joint":
                 # Not a velocity on the wire; reproduced as a bounded position move.
                 self.forward_gripper(velocity, name)
                 continue
