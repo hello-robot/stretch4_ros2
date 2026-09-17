@@ -91,23 +91,25 @@ class StretchDriver(Stretch4ROSDriver):
         
         accel_params = []
         if hasattr(self.robot, 'lift'):
-            self.set_vel_functions['lift'] = lambda v, a:  self.robot.lift.set_velocity(v, a_m=a)
-            #snelf.set_vel_functions['lift'] = lambda v, a: self.robot.lift.move_by(v*0.3, v_m = v, a_m = a)
-            accel_params.append(Parameter("joint_acceleration.lift",Parameter.Type.DOUBLE,self.robot.robot_params['lift']['motion']['default']['accel_m']))
-            accel_params.append(Parameter("joint_limit.lift.acceleration",Parameter.Type.DOUBLE,self.robot.robot_params['lift']['motion']['max']['accel_m']))
+            self.set_vel_functions['lift_joint'] = lambda v, a:  self.robot.lift.set_velocity(v, a_m=a)
+            #snelf.set_vel_functions['lift_joint'] = lambda v, a: self.robot.lift.move_by(v*0.3, v_m = v, a_m = a)
+            accel_params.append(Parameter("joint_acceleration.lift_joint",Parameter.Type.DOUBLE,self.robot.robot_params['lift']['motion']['default']['accel_m']))
+            accel_params.append(Parameter("joint_limit.lift_joint.acceleration",Parameter.Type.DOUBLE,self.robot.robot_params['lift']['motion']['max']['accel_m']))
         if hasattr(self.robot, 'arm'):
-            self.set_vel_functions['arm'] = lambda v, a:  self.robot.arm.set_velocity(v, a_m=a)
-            accel_params.append(Parameter("joint_acceleration.arm",Parameter.Type.DOUBLE, self.robot.robot_params['arm']['motion']['default']['accel_m']))
-            accel_params.append(Parameter("joint_limit.arm.acceleration",Parameter.Type.DOUBLE, self.robot.robot_params['arm']['motion']['max']['accel_m']))
+            self.set_vel_functions['arm_joint'] = lambda v, a:  self.robot.arm.set_velocity(v, a_m=a)
+            accel_params.append(Parameter("joint_acceleration.arm_joint",Parameter.Type.DOUBLE, self.robot.robot_params['arm']['motion']['default']['accel_m']))
+            accel_params.append(Parameter("joint_limit.arm_joint.acceleration",Parameter.Type.DOUBLE, self.robot.robot_params['arm']['motion']['max']['accel_m']))
         if hasattr(self.robot, 'end_of_arm') and hasattr(self.robot.end_of_arm, 'joints'):
             for joint in self.robot.end_of_arm.joints:
+                # `joint` is a backend name here; ros_joint is how ROS addresses it.
+                ros_joint = "gripper_joint" if joint == "stretch_gripper" else f"{joint}_joint"
                 eoa_deadband = self.get_parameter("eoa_velocity_deadband").value
                 vel_increment = self.robot.robot_params[joint]["motion"]["max"]["vel"]*0.05
                 if joint == "stretch_gripper":
                     vel_increment = degrees(vel_increment)
-                self.set_vel_functions[f'{joint}']= lambda v, a, j=joint, eps=eoa_deadband: self.robot.end_of_arm.quick_stop(j) if abs(v) < eps else self.robot.end_of_arm.move_by(j, copysign(vel_increment,v), v_r=v, a_r = a)
-                accel_params.append(Parameter(f"joint_acceleration.{joint}",Parameter.Type.DOUBLE,self.robot.robot_params[joint]['motion']['default']['accel']))
-                accel_params.append(Parameter(f"joint_limit.{joint}.acceleration",Parameter.Type.DOUBLE,self.robot.robot_params[joint]['motion']['max']['accel']))
+                self.set_vel_functions[ros_joint]= lambda v, a, j=joint, eps=eoa_deadband: self.robot.end_of_arm.quick_stop(j) if abs(v) < eps else self.robot.end_of_arm.move_by(j, copysign(vel_increment,v), v_r=v, a_r = a)
+                accel_params.append(Parameter(f"joint_acceleration.{ros_joint}",Parameter.Type.DOUBLE,self.robot.robot_params[joint]['motion']['default']['accel']))
+                accel_params.append(Parameter(f"joint_limit.{ros_joint}.acceleration",Parameter.Type.DOUBLE,self.robot.robot_params[joint]['motion']['max']['accel']))
                 
 
         accel_params.append(Parameter("joint_acceleration.omnibase.linear", Parameter.Type.DOUBLE,self.robot.robot_params['omnibase']['motion']['default']['accel_xy_m']))
@@ -157,12 +159,10 @@ class StretchDriver(Stretch4ROSDriver):
             class_obj = getattr(module, class_name)
             cg = class_obj()
             self.joint_command_groups.append(cg)
-            joint_name = cg.name.split("_joint")[0]
-            if joint_name == "gripper":
-                joint_name = "stretch_gripper"
-            self.command_joints.append(joint_name)
+            self.command_joints.append(cg.name)
             self.get_logger().debug(f"Discovered {class_name}")
-        self.velocity_joints = ["arm", "lift", "wrist_yaw", "wrist_roll", "wrist_pitch", "stretch_gripper"]
+        self.velocity_joints = ["arm_joint", "lift_joint", "wrist_yaw_joint",
+                                "wrist_roll_joint", "wrist_pitch_joint", "gripper_joint"]
             
     def _get_push_interval(self):
         return 0.2
@@ -172,8 +172,11 @@ class StretchDriver(Stretch4ROSDriver):
             try:
                 mode = self.get_parameter(f"joint_mode.{joint}").value
             except ParameterNotDeclaredException:
-                self.logger.error(f"Joint name {joint} not found in mode parameters while pushing command to robot.  Make sure you're calling check_and_set_joint_vel not set_joint_velocity.")
-                mode = "<< joint unknown >>"
+                self.logger.error(
+                    f"Joint name {joint} not found in mode parameters while pushing command to robot.  Make sure you're calling check_and_set_joint_vel not set_joint_velocity.",
+                    throttle_duration_sec=5.0,
+                )
+                continue
 
             if mode == "velocity" and self.velocity_commands[joint] is not None:
                 last_sent = self.velocity_commands[joint]["last_sent"]
@@ -227,9 +230,9 @@ class StretchDriver(Stretch4ROSDriver):
     
     def get_runstop(self, robot_status, status_time) -> Bool:
         is_runstopped = bool(robot_status['power_periph']['runstop_event'])
-        if self.robot_mode()!="runstopped" and is_runstopped or self.robot_mode()=="runstopped" and not is_runstopped:
+        if self.robot_mode()!=self.runstopped_mode and is_runstopped or self.robot_mode()==self.runstopped_mode and not is_runstopped:
             self.runstop_the_robot(runstopped=is_runstopped,just_change_mode=True)
-        return self.robot_mode()=="runstopped"
+        return self.robot_mode()==self.runstopped_mode
                                       
     def get_joint_state(self, robot_status, status_time) -> JointState:
         joint_state = JointState()
@@ -277,16 +280,17 @@ class StretchDriver(Stretch4ROSDriver):
     #arm and uses different names than the joint names used to send commands
     def command_joint_pose_from_joint_state(self, command_joint, joint_state, default=None):
         match command_joint:
-            case "arm":
+            case "arm_joint":
                 poses = []
-                subjoints = [f"{command_joint}_l{i}_joint" for i in [1,2,3,4]]
+                # /joint_states splits the telescoping arm into its four links.
+                subjoints = [f"arm_l{i}_joint" for i in [1,2,3,4]]
                 for j in subjoints:
                     try:
                         poses.append(joint_state.position[joint_state.name.index(j)])
                     except ValueError:
                         pass
                 return sum(poses) if poses else default
-            case "stretch_gripper":
+            case "gripper_joint":
                 try:
                     left = joint_state.position[joint_state.name.index("gripper_finger_left_joint")]
                     right = joint_state.position[joint_state.name.index("gripper_finger_right_joint")]
@@ -294,25 +298,25 @@ class StretchDriver(Stretch4ROSDriver):
                 except ValueError:
                     return default
             case _:
-                joint_name = command_joint+"_joint"
                 try:
-                    return joint_state.position[joint_state.name.index(joint_name)]
+                    return joint_state.position[joint_state.name.index(command_joint)]
                 except (ValueError, IndexError):
                     return default
 
                 
     def command_joint_vel_from_joint_state(self, command_joint, joint_state, default=None):
         match command_joint:
-            case "arm":
+            case "arm_joint":
                 vels = []
-                subjoints = [f"{command_joint}_l{i}_joint" for i in [1,2,3,4]]
+                # /joint_states splits the telescoping arm into its four links.
+                subjoints = [f"arm_l{i}_joint" for i in [1,2,3,4]]
                 for j in subjoints:
                     try:
                         vels.append(joint_state.velocity[joint_state.name.index(j)])
                     except (ValueError, IndexError):
                         pass
                 return sum(vels) if vels else default
-            case "stretch_gripper":
+            case "gripper_joint":
                 try:
                     left = joint_state.velocity[joint_state.name.index("gripper_finger_left_joint")]
                     right = joint_state.velocity[joint_state.name.index("gripper_finger_right_joint")]
@@ -320,9 +324,8 @@ class StretchDriver(Stretch4ROSDriver):
                 except (ValueError, IndexError):
                     return default
             case _:
-                joint_name = command_joint+"_joint"
                 try:
-                    return joint_state.velocity[joint_state.name.index(joint_name)]
+                    return joint_state.velocity[joint_state.name.index(command_joint)]
                 except (ValueError, IndexError):
                     return default
 
@@ -406,13 +409,13 @@ class StretchDriver(Stretch4ROSDriver):
         self.command_publishers[joint].publish(command)
             
         match joint:
-            case "lift":
+            case "lift_joint":
                 self.robot.lift.move_to(target,v_m = v, a_m = a)
-            case "arm":
+            case "arm_joint":
                 self.robot.arm.move_to(target,v_m = v, a_m = a)
-            case "wrist_pitch"|"wrist_roll"|"wrist_yaw":
-                self.robot.end_of_arm.move_to(joint, target, v, a)
-            case "stretch_gripper":
+            case "wrist_pitch_joint"|"wrist_roll_joint"|"wrist_yaw_joint":
+                self.robot.end_of_arm.move_to(self.backend_joint_name(joint), target, v, a)
+            case "gripper_joint":
                 self.logger.info(f"Moving gripper")
                 servo_angle_deg = self._gripper_conversion.finger_to_servo(target)
                 self.logger.info(f"Got servo angle degrees {servo_angle_deg}")
@@ -420,7 +423,7 @@ class StretchDriver(Stretch4ROSDriver):
                 self.logger.info(f"Got range for closed {range_deg_closed}")
                 pct = -100 * radians(servo_angle_deg) / radians(range_deg_closed)
                 self.logger.info(f"Got pct {pct} (v = {v} a={a})")
-                self.robot.end_of_arm.move_to(joint, pct, v, a)
+                self.robot.end_of_arm.move_to(self.backend_joint_name(joint), pct, v, a)
             case _:
                 self.logger.warn(f"Unable to set position for unknown joint {joint}.")
         

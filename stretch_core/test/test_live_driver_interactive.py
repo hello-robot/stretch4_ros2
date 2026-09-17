@@ -78,12 +78,12 @@ class StretchLiveDriverTester(Node):
 
         # Setup standard home positions for Stretch 4 joints to avoid self-collisions
         self.HOME_POSITIONS = {
-            "lift": 0.4,
-            "arm": 0.2,
-            "wrist_yaw": 0.0,
-            "wrist_pitch": 0.5,
-            "wrist_roll": 0.0,
-            "stretch_gripper": 0.5
+            "lift_joint": 0.4,
+            "arm_joint": 0.2,
+            "wrist_yaw_joint": 0.0,
+            "wrist_pitch_joint": 0.5,
+            "wrist_roll_joint": 0.0,
+            "gripper_joint": 0.5
         }
 
         # Setup subscribers with relative and absolute fallbacks to handle namespaces gracefully
@@ -221,7 +221,7 @@ class StretchLiveDriverTester(Node):
         if state is None:
             return None, None
         
-        if joint_name == "arm":
+        if joint_name == "arm_joint":
             poses = []
             vels = []
             for link in ['arm_l1_joint', 'arm_l2_joint', 'arm_l3_joint', 'arm_l4_joint']:
@@ -233,7 +233,7 @@ class StretchLiveDriverTester(Node):
             if poses:
                 return sum(poses), (sum(vels) if len(vels) == len(poses) else 0.0)
             return None, None
-        elif joint_name == "stretch_gripper":
+        elif joint_name == "gripper_joint":
             left_pos, left_vel = None, None
             right_pos, right_vel = None, None
             if "gripper_finger_left_joint" in state.name:
@@ -252,10 +252,6 @@ class StretchLiveDriverTester(Node):
                 return total_pos, total_vel
             return None, None
         else:
-            actual_name = f"{joint_name}_joint"
-            if actual_name in state.name:
-                idx = state.name.index(actual_name)
-                return state.position[idx], (state.velocity[idx] if len(state.velocity) > idx else 0.0)
             if joint_name in state.name:
                 idx = state.name.index(joint_name)
                 return state.position[idx], (state.velocity[idx] if len(state.velocity) > idx else 0.0)
@@ -378,7 +374,7 @@ class StretchLiveDriverTester(Node):
         time.sleep(1.0)
 
         # Get current lift position
-        start_lift_pos, _ = self.get_joint_pose_and_vel("lift")
+        start_lift_pos, _ = self.get_joint_pose_and_vel("lift_joint")
         if start_lift_pos is None:
             # Fallback default
             start_lift_pos = 0.5
@@ -388,7 +384,7 @@ class StretchLiveDriverTester(Node):
         target_pos = min(0.9, start_lift_pos + 0.15)
         print(f"{YELLOW}Attempting to command lift to {target_pos}m (should be completely ignored by driver)...{RESET}")
         js = JointState()
-        js.name = ["lift"]
+        js.name = ["lift_joint"]
         js.position = [target_pos]
         for _ in range(self.pub_count):
             self.publish_position_cmd(js)
@@ -399,7 +395,7 @@ class StretchLiveDriverTester(Node):
         time.sleep(1.5)
         
         # Verify lift did not move
-        end_lift_pos, _ = self.get_joint_pose_and_vel("lift")
+        end_lift_pos, _ = self.get_joint_pose_and_vel("lift_joint")
         if end_lift_pos is not None:
             print(f"  Lift position before runstop command: {start_lift_pos:.4f}m | After: {end_lift_pos:.4f}m")
             assert abs(end_lift_pos - start_lift_pos) < 0.01, f"{RED}SAFETY FAILURE: Robot moved {abs(end_lift_pos - start_lift_pos):.4f}m while safety runstop was active!{RESET}"
@@ -536,7 +532,7 @@ class StretchLiveDriverTester(Node):
                 print(f"{YELLOW}Skipped position commands test.{RESET}")
                 return True
 
-        joints_to_test = ["lift", "arm", "wrist_yaw", "wrist_pitch", "wrist_roll", "stretch_gripper"]
+        joints_to_test = ["lift_joint", "arm_joint", "wrist_yaw_joint", "wrist_pitch_joint", "wrist_roll_joint", "gripper_joint"]
         
         # Check that we have joint states before continuing
         if self.latest_joint_state is None:
@@ -560,14 +556,14 @@ class StretchLiveDriverTester(Node):
                 continue
             
             # Decide on a safe, small relative movement offset based on current position
-            if joint == "lift":
+            if joint == "lift_joint":
                 # Move slightly up or down depending on height
                 target = current_pos + 0.05 if current_pos < 0.6 else current_pos - 0.05
                 desc = "moves lift joint vertically by 5cm"
-            elif joint == "arm":
+            elif joint == "arm_joint":
                 target = current_pos + 0.05 if current_pos < 0.15 else current_pos - 0.05
                 desc = "extends/retracts arm slightly"
-            elif joint == "stretch_gripper":
+            elif joint == "gripper_joint":
                 # Gripper opening translation
                 target = 0.2 if current_pos < 0.15 else 0.0
                 desc = "opens/closes gripper finger joints"
@@ -633,7 +629,7 @@ class StretchLiveDriverTester(Node):
 
         # Dynamically discover which joints support velocity mode by attempting to set them to 'velocity'.
         # We query all 6 commandable joints.
-        all_joints = ["lift", "arm", "wrist_yaw", "wrist_pitch", "wrist_roll", "stretch_gripper"]
+        all_joints = ["lift_joint", "arm_joint", "wrist_yaw_joint", "wrist_pitch_joint", "wrist_roll_joint", "gripper_joint"]
         velocity_joints = []
         rejected_velocity_joints = []
 
@@ -684,17 +680,17 @@ class StretchLiveDriverTester(Node):
                 continue
 
             # Set safe command velocity and direction based on current joint limit margins
-            if joint == "lift":
+            if joint == "lift_joint":
                 vel_command = -0.04 if current_pos > 0.5 else 0.04
                 desc = "moves lift joint continuously"
-            elif joint == "arm":
+            elif joint == "arm_joint":
                 vel_command = -0.04 if current_pos > 0.15 else 0.04
                 desc = "extends/retracts arm continuously"
-            elif joint in ["wrist_yaw", "wrist_pitch", "wrist_roll"]:
+            elif joint in ["wrist_yaw_joint", "wrist_pitch_joint", "wrist_roll_joint"]:
                 # Move wrist joints slowly biased toward center to stay in [-0.5, 0.5] range
                 vel_command = -0.06 if current_pos > 0.0 else 0.06
                 desc = f"rotates {joint} joint continuously"
-            elif joint == "stretch_gripper":
+            elif joint == "gripper_joint":
                 # Gripper translation speed
                 vel_command = -0.05 if current_pos > 0.2 else 0.05
                 desc = "opens/closes gripper finger joints continuously"
@@ -929,7 +925,7 @@ class StretchLiveDriverTester(Node):
                 # Since the gripper typically rejects velocity mode (and wrists did in older driver configurations), we dynamically probe and use
                 # only the joints that allow velocity mode.
                 print(f"{YELLOW}Probing velocity mode capability for pid_normal joints...{RESET}")
-                probe_joints = ["lift", "arm", "wrist_yaw", "wrist_pitch", "wrist_roll", "stretch_gripper"]
+                probe_joints = ["lift_joint", "arm_joint", "wrist_yaw_joint", "wrist_pitch_joint", "wrist_roll_joint", "gripper_joint"]
                 
                 p_prob = ParameterMsg()
                 p_prob.value.type = ParameterType.PARAMETER_STRING
@@ -956,7 +952,7 @@ class StretchLiveDriverTester(Node):
             else:
                 # For target_priority and time_priority, we can command any joints.
                 # We command lift, arm, wrist_yaw, wrist_pitch, wrist_roll simultaneously!
-                active_joints = ["lift", "arm", "wrist_yaw", "wrist_pitch", "wrist_roll"]
+                active_joints = ["lift_joint", "arm_joint", "wrist_yaw_joint", "wrist_pitch_joint", "wrist_roll_joint"]
 
             # Set trajectory_server.mode parameter on driver node
             print(f"{YELLOW}Setting trajectory_server.mode to '{mode_name}'...{RESET}")
@@ -1095,11 +1091,11 @@ class StretchLiveDriverTester(Node):
         points = []
         
         # We define the circle parameters based on home positions
-        lift_center = self.HOME_POSITIONS["lift"]
-        arm_center = self.HOME_POSITIONS["arm"]
-        pitch_center = self.HOME_POSITIONS["wrist_pitch"]
-        yaw_center = self.HOME_POSITIONS["wrist_yaw"]
-        roll_center = self.HOME_POSITIONS["wrist_roll"]
+        lift_center = self.HOME_POSITIONS["lift_joint"]
+        arm_center = self.HOME_POSITIONS["arm_joint"]
+        pitch_center = self.HOME_POSITIONS["wrist_pitch_joint"]
+        yaw_center = self.HOME_POSITIONS["wrist_yaw_joint"]
+        roll_center = self.HOME_POSITIONS["wrist_roll_joint"]
         
         # Radii of circles
         r_lift = 0.04
@@ -1127,17 +1123,17 @@ class StretchLiveDriverTester(Node):
             # Map each active joint to its target position
             positions = []
             for j_name in active_joints:
-                if j_name == "lift":
+                if j_name == "lift_joint":
                     positions.append(float(p_lift))
-                elif j_name == "arm":
+                elif j_name == "arm_joint":
                     positions.append(float(p_arm))
-                elif j_name == "wrist_yaw":
+                elif j_name == "wrist_yaw_joint":
                     positions.append(float(p_yaw))
-                elif j_name == "wrist_pitch":
+                elif j_name == "wrist_pitch_joint":
                     positions.append(float(p_pitch))
-                elif j_name == "wrist_roll":
+                elif j_name == "wrist_roll_joint":
                     positions.append(float(p_roll))
-                elif j_name == "stretch_gripper":
+                elif j_name == "gripper_joint":
                     positions.append(0.5) # constant open gripper
                 else:
                     positions.append(0.0)
