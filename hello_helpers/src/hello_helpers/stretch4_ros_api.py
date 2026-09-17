@@ -384,8 +384,7 @@ class Stretch4ROSDriver(Node, ABC):
                 if joints
                 else ""
             )
-            + f". Valid modes are {self.control_modes}; joint control is now selected "
-            "per joint with joint_mode.<joint>."
+            + f". Valid driver control modes are {self.control_modes} and joint modes are {self.joint_modes}"
         )
 
         params = [Parameter("mode", Parameter.Type.STRING, str(replacement))]
@@ -1080,7 +1079,7 @@ class StretchTrajectoryActionServer:
             if j_mode != required_mode:
                 self.driver.get_logger().error(
                     f"Cannot execute trajectory because joint {joint_name} is in "
-                    f"'{j_mode}' mode (must be in '{required_mode}' mode). It can be set with"
+                    f"'{j_mode}' mode (must be in '{required_mode}' mode). It can be set with "
                     f"the parameter joint_mode.{joint_name}"
                 )
                 result = FollowJointTrajectory.Result()

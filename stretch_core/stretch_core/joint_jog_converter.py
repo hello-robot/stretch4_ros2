@@ -11,8 +11,14 @@ Four differences between the old and new paradigms are handled here:
   * Joint names. joint_vel used a '_joint' suffix (lift_joint, arm_joint); the
     driver's command_joints do not (lift, arm, stretch_gripper).
   * Control mode. Velocity used to be a global driver mode. It is now per joint,
-    so this node sets joint_mode.<joint> to 'velocity' before forwarding joint_vel
-    commands, otherwise the driver would reject every command.
+    so this node sets joint_mode.<joint> before forwarding a command: 'velocity' for
+    the ranged joints, and 'position' for the wrists and gripper, whose legacy
+    behavior is reproduced with position commands (see below). The driver also
+    changes these modes on its own -- selecting the deprecated 'velocity' robot mode
+    puts every velocity joint, wrists and gripper included, into velocity mode, which
+    is exactly what the clients this shim exists for do -- so joint_mode.<joint> is
+    tracked on /parameter_events instead of being assumed to still hold whatever this
+    node last set it to.
   * JointJog.duration. Previously, joint velocities were sent with a time period,
     after which the robot stops. The new driver is designed to command velocities
     indefinitely, so this node runs its own watchdog and publishes a zero velocity
@@ -30,10 +36,16 @@ import threading
 
 import rclpy
 from control_msgs.msg import JointJog
-from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
+from rcl_interfaces.msg import (
+    Parameter,
+    ParameterEvent,
+    ParameterType,
+    ParameterValue,
+)
 from rcl_interfaces.srv import SetParameters
 from rclpy.duration import Duration
 from rclpy.node import Node
+from rclpy.qos import qos_profile_parameter_events
 from sensor_msgs.msg import JointState
 
 try:
@@ -102,29 +114,22 @@ class JointJogConverter(Node):
         # Deprecation warnings: loud on first use, throttled afterwards.
         self._warned = {}
 
-        # joint -> rclpy.time.Time at which a zero velocity should be published.
+        # rclpy.time.Time at which a zero velocity should be published.
         self._deadlines = {}
         self._deadline_lock = threading.Lock()
 
-        # joint -> last mode we know the driver accepted. The driver defaults every
-        # joint to 'position' (see joint_mode.<joint> in stretch4_ros_api.py).
-        self._joint_modes = {}
-        self._mode_lock = threading.Lock()
 
-        # joint -> callable replaying the command received while a mode change was
-        # in flight. A newer command supersedes an older one.
+        # Handle joint mode switching
+        self._joint_modes = {}
+        self._mode_requests = {}
+        self._mode_lock = threading.Lock()
         self._pending = {}
         self._pending_lock = threading.Lock()
-
-        # joint -> time the driver last refused it, so a joint the driver does not
-        # know about is not re-requested once per incoming jog message.
         self._rejected = {}
 
-        # Latest gripper position from joint_states, in joint_states units.
+        # Track EOA joint states.
         self._gripper_state = None
         self._gripper_state_lock = threading.Lock()
-
-        # command joint -> latest position from joint_states, in radians.
         self._wrist_states = {}
         self._wrist_state_lock = threading.Lock()
 
@@ -134,6 +139,8 @@ class JointJogConverter(Node):
         # stretch_mujoco_driver, so the node name is found rather than assumed.
         self._driver_node = None
         self._driver_namespace = None
+        # Fully qualified driver name, to match ParameterEvent.node.
+        self._driver_fqn = None
         self._param_client = None
         self._discovery_lock = threading.Lock()
 
@@ -147,6 +154,12 @@ class JointJogConverter(Node):
             self.get_parameter("joint_states_topic").value,
             self.joint_states_callback,
             10,
+        )
+        self.create_subscription(
+            ParameterEvent,
+            "/parameter_events",
+            self.parameter_event_callback,
+            qos_profile_parameter_events,
         )
 
         self.discover_driver_node()
@@ -381,6 +394,7 @@ class JointJogConverter(Node):
             return
         prefix = namespace if namespace != "/" else ""
         service = f"{prefix}/{name}/set_parameters"
+        fqn = f"{prefix}/{name}"
         self.get_logger().info(
             f"Discovered driver node '{name}' in namespace '{namespace}'; "
             f"using '{service}' to set joint control modes."
@@ -389,33 +403,31 @@ class JointJogConverter(Node):
             self.destroy_client(self._param_client)
         self._driver_node = name
         self._driver_namespace = namespace
+        self._driver_fqn = fqn
         self._param_client = self.create_client(SetParameters, service)
-        # A restarted driver has forgotten whatever modes we set previously.
+        # A restarted driver has forgotten whatever modes we set previously, and any
+        # request that was in flight died with it.
         with self._mode_lock:
             self._joint_modes.clear()
+            self._mode_requests.clear()
             self._rejected.clear()
 
     # --- joint mode -----------------------------------------------------------
 
     def request_joint_mode(self, joint, mode, original_name=None):
-        """Ask the driver for joint_mode.<joint> = mode.
-
-        Returns True once the driver has confirmed the mode. While a request is in
-        flight the caller stashes a replay callable in self._pending, which
-        _mode_response invokes, so a one-shot joint_vel message still reaches the
-        robot instead of being swallowed by the mode change.
+        """Ask the driver for joint_mode.<joint> = mode. Returns True once the driver is known to be in that mode/
         """
         with self._mode_lock:
-            if self._joint_modes.get(joint, "position") == mode:
-                return True
-            if self._joint_modes.get(joint) == "pending":
+            if self._mode_requests.get(joint) is not None:
                 return False
+            if self._joint_modes.get(joint) == mode:
+                return True
             refused = self._rejected.get(joint)
             if refused is not None and (self.get_clock().now() - refused) < Duration(
                 seconds=self.warn_period
             ):
                 return False
-            self._joint_modes[joint] = "pending"
+            self._mode_requests[joint] = mode
 
         with self._discovery_lock:
             client = self._param_client
@@ -427,7 +439,7 @@ class JointJogConverter(Node):
                 throttle_duration_sec=5.0,
             )
             with self._mode_lock:
-                self._joint_modes.pop(joint, None)
+                self._mode_requests.pop(joint, None)
             return False
 
         if not client.service_is_ready():
@@ -436,7 +448,7 @@ class JointJogConverter(Node):
                 throttle_duration_sec=5.0,
             )
             with self._mode_lock:
-                self._joint_modes.pop(joint, None)
+                self._mode_requests.pop(joint, None)
             return False
 
         request = SetParameters.Request()
@@ -462,12 +474,13 @@ class JointJogConverter(Node):
         except Exception as e:
             self.get_logger().error(f"Failed to set joint_mode.{joint}: {e}")
             with self._mode_lock:
-                self._joint_modes.pop(joint, None)
+                self._mode_requests.pop(joint, None)
             return
 
         if result and result.results and result.results[0].successful:
             self.get_logger().info(f"joint_mode.{joint} is now '{mode}'.")
             with self._mode_lock:
+                self._mode_requests.pop(joint, None)
                 self._joint_modes[joint] = mode
                 self._rejected.pop(joint, None)
             self.release_pending(joint)
@@ -484,10 +497,39 @@ class JointJogConverter(Node):
             level="error",
         )
         with self._mode_lock:
+            self._mode_requests.pop(joint, None)
             self._joint_modes.pop(joint, None)
             self._rejected[joint] = self.get_clock().now()
         with self._pending_lock:
             self._pending.pop(joint, None)
+
+    def parameter_event_callback(self, msg: ParameterEvent):
+        """Check for joint modes changed via parameters."""
+        with self._discovery_lock:
+            driver_fqn = self._driver_fqn
+        if driver_fqn is None or msg.node != driver_fqn:
+            return
+
+        for parameter in list(msg.changed_parameters) + list(msg.new_parameters):
+            if not parameter.name.startswith("joint_mode."):
+                continue
+            if parameter.value.type != ParameterType.PARAMETER_STRING:
+                continue
+
+            joint = parameter.name[len("joint_mode."):]
+            mode = parameter.value.string_value
+            if mode == "settling":
+                continue
+
+            with self._mode_lock:
+                if self._joint_modes.get(joint) == mode:
+                    continue
+    
+                self._joint_modes[joint] = mode
+    
+            self.get_logger().info(
+                f"Changed joint_mode.{joint} to '{mode}'."
+            )
 
     def release_pending(self, joint):
         """Replay the command held for a joint while its mode change was in flight."""
@@ -556,9 +598,8 @@ class JointJogConverter(Node):
                 # confirms the mode.
                 with self._pending_lock:
                     self._pending[joint] = (
-                        lambda j=joint, v=velocity, d=duration: self.publish_velocities(
-                            [j], [v], d
-                        )
+                        lambda j=joint, v=velocity, d=duration, o=name:
+                        self.forward_velocity(j, v, d, o)
                     )
                 continue
 
@@ -566,6 +607,22 @@ class JointJogConverter(Node):
             velocities.append(velocity)
 
         self.publish_velocities(joints, velocities, duration)
+
+    def forward_velocity(self, joint, velocity, duration, original_name):
+        """Forward one ranged-joint velocity, re-checking joint_mode first.
+
+        Only reached when a command was held for a mode change; the common path
+        batches every joint of a JointJog into a single publish.
+        """
+        if not self.request_joint_mode(joint, "velocity", original_name):
+            with self._pending_lock:
+                self._pending[joint] = (
+                    lambda j=joint, v=velocity, d=duration, o=original_name:
+                    self.forward_velocity(j, v, d, o)
+                )
+            return
+
+        self.publish_velocities([joint], [velocity], duration)
 
     def publish_velocities(self, joints, velocities, duration):
         """Publish a joint_velocity_cmd and arm the JointJog.duration watchdog."""
@@ -592,6 +649,17 @@ class JointJogConverter(Node):
             expired = [j for j, deadline in self._deadlines.items() if now >= deadline]
             for joint in expired:
                 del self._deadlines[joint]
+
+        if not expired:
+            return
+
+        # A joint the driver has since moved out of velocity mode is already stopped:
+        # change_joint_mode zeroes its velocity on the way out. Commanding it anyway
+        # would only earn a "cannot send velocity command" warning per expiry.
+        with self._mode_lock:
+            expired = [
+                j for j in expired if self._joint_modes.get(j) == "velocity"
+            ]
 
         if not expired:
             return

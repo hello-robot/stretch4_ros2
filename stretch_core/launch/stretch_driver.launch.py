@@ -35,18 +35,18 @@ def resolve_mode(context):
     elif requested in DEPRECATED_DRIVER_MODES:
         replacement = DEPRECATED_DRIVER_MODES[requested]
         logger.warning(
-            f"DEPRECATION WARNING: {requested} mode is DEPRECATED.  Valid modes are {CONTROL_MODES}. "
+            f"DEPRECATION WARNING: {requested} mode is DEPRECATED.  Valid driver control modes are {CONTROL_MODES}. "
             f"Launching with mode:={replacement}."
         )
         return replacement
-    else: 
+    else:
         # This should not be reachable
-        logger.error(f"Unexpected mode {requested}, defaulting to {DEFAULT_MODE}")
+        logger.error(f"Unexpected driver control mode {requested}, defaulting to {DEFAULT_MODE}")
         return DEFAULT_MODE
 
 
 def compile_robot_description(context, *args, **kwargs):
-    """This OpaqueFunction compiles the robot's default URDF 
+    """This OpaqueFunction compiles the robot's default URDF
     and spawns the robot_state_publisher with the correct namespace.
     """
 
