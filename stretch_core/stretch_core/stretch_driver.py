@@ -172,9 +172,10 @@ class StretchDriver(Stretch4ROSDriver):
             try:
                 mode = self.get_parameter(f"joint_mode.{joint}").value
             except ParameterNotDeclaredException:
-                # Runs every control loop, so throttle with the shared mode-warning state.
-                if self._mode_log_due((joint, "<push>")):
-                    self.logger.error(f"Joint name {joint} not found in mode parameters while pushing command to robot.  Make sure you're calling check_and_set_joint_vel not set_joint_velocity.")
+                self.logger.error(
+                    f"Joint name {joint} not found in mode parameters while pushing command to robot.  Make sure you're calling check_and_set_joint_vel not set_joint_velocity.",
+                    throttle_duration_sec=5.0,
+                )
                 continue
 
             if mode == "velocity" and self.velocity_commands[joint] is not None:

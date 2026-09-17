@@ -100,9 +100,6 @@ class Stretch4ROSDriver(Node, ABC):
         self._declare_common_params()
         self.declare_node_params()
 
-        # (joint, required mode) -> when that complaint was last logged.
-        self._mode_warn_times = {}
-
         # Runstop management
         self.prev_runstop_state = None
         self.prerunstop_mode = None
@@ -369,17 +366,6 @@ class Stretch4ROSDriver(Node, ABC):
     # How often a repeated per-joint mode complaint may be logged. These sit on paths
     # that run per command message or per control loop, so they need a rate limit.
     MODE_WARNING_PERIOD_S = 5.0
-
-    def _mode_log_due(self, key):
-        """True when `key` has not been logged within MODE_WARNING_PERIOD_S."""
-        now = self.get_clock().now()
-        last = self._mode_warn_times.get(key)
-        if last is not None and (now - last) < Duration(
-            seconds=self.MODE_WARNING_PERIOD_S
-        ):
-            return False
-        self._mode_warn_times[key] = now
-        return True
 
     def replace_deprecated_mode(self, legacy_mode):
         """Set the control mode and joint_mode according to the legacy robot mode."""
