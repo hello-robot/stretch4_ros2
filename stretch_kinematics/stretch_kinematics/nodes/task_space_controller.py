@@ -54,6 +54,10 @@ class TaskSpaceController(Node):
         self.stretch_joint_position = StretchJointPositions()
         self.latest_v_desired = np.zeros(6)
         self.last_cmd_time = 0.0
+        # True while we own the velocity topics. cmd_vel / joint_vel are shared
+        # with teleop and the collision monitor, so we must not stream idle
+        # zeros onto them (that reads as "stop the base" and overrides Drive).
+        self.is_commanding = False
 
         # Publishers
         self.pub_joint_vel = self.create_publisher(JointJog, joint_vel_topic, 10)
@@ -85,6 +89,12 @@ class TaskSpaceController(Node):
         """
         Receive desired 6D task-space velocity command.
 
+        An all-zero twist means "release": clients send one zero on button-up.
+        Treating it as a live command would keep us publishing zeros onto the
+        shared cmd_vel / joint_vel topics for the whole watchdog window, which
+        overrides other velocity sources such as Drive. Expire it at once so
+        control_loop emits its single stop and then goes quiet.
+
         Args
         ----
             msg: Desired end-effector twist velocity message.
@@ -98,6 +108,9 @@ class TaskSpaceController(Node):
             msg.angular.y,
             msg.angular.z,
         ], dtype=float)
+        if not np.any(self.latest_v_desired):
+            self.last_cmd_time = 0.0
+            return
         self.last_cmd_time = time.time()
 
     def odom_callback(self, msg: Odometry) -> None:
@@ -140,25 +153,39 @@ class TaskSpaceController(Node):
         self.stretch_joint_position.wrist_pitch = joint_dict.get('wrist_pitch_joint', 0.0)
         self.stretch_joint_position.wrist_roll = joint_dict.get('wrist_roll_joint', 0.0)
 
+    def command_is_live(self, now: float) -> bool:
+        """Return True if an ee_cmd_vel arrived within the watchdog window."""
+        return (now - self.last_cmd_time) <= self.watchdog_timeout
+
     def control_loop(self) -> None:
-        """Evaluate differential IK and publish velocity commands."""
+        """
+        Evaluate differential IK and publish velocity commands.
+
+        Publishes only while a live ee_cmd_vel is present. When the command
+        goes stale, publish a single zero to stop the robot, then stay quiet so
+        other velocity sources (teleop, collision monitor) keep the topics.
+        """
         now = time.time()
+
+        if self.command_is_live(now):
+            self.is_commanding = True
+            self._publish_velocities(self.latest_v_desired)
+            return
+
+        if self.is_commanding:
+            self.is_commanding = False
+            self._publish_velocities(np.zeros(6))
+
+    def _publish_velocities(self, v_task: np.ndarray) -> None:
+        """Solve differential IK for v_task and publish joint + base velocities."""
         dt_step = 1.0 / self.control_rate
 
-        # Enforce watchdog timeout
-        if (now - self.last_cmd_time) > self.watchdog_timeout:
-            v_task = np.zeros(6)
-        else:
-            v_task = self.latest_v_desired
-
-        # Compute differential IK
         q_dot = self.kinematic_model.differential_ik(
             q=self.stretch_joint_position,
             target_frame=self.target_frame,
             v_desired=v_task
         )
 
-        # Prepare JointJog message
         joint_jog = JointJog()
         joint_jog.joint_names = [
             'lift_joint',
@@ -176,13 +203,11 @@ class TaskSpaceController(Node):
         ]
         joint_jog.duration = dt_step
 
-        # Prepare base Twist message
         base_twist = Twist()
         base_twist.linear.x = q_dot.base_x
         base_twist.linear.y = q_dot.base_y
         base_twist.angular.z = q_dot.base_theta
 
-        # Publish commands
         self.pub_joint_vel.publish(joint_jog)
         self.pub_base_twist.publish(base_twist)
 
