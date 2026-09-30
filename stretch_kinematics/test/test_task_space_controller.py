@@ -102,6 +102,62 @@ class TestTaskSpaceController(unittest.TestCase):
             self.node.stretch_joint_position.base_theta, np.pi / 2.0, places=4
         )
 
+    def test_ee_cmd_vel_callback_unified_joint_jog(self) -> None:
+        """
+        Verify that setting publish_base_and_arm_separately to False publishes a
+        unified 8-DOF JointJog message on pub_joint_vel without calling pub_base_twist.
+        """
+        self.node.publish_base_and_arm_separately = False
+
+        msg = Twist()
+        msg.linear.x = 0.1
+        msg.linear.y = 0.05
+        msg.linear.z = -0.02
+        msg.angular.z = 0.2
+
+        with patch.object(self.node.pub_base_twist, 'publish') as base_pub, \
+                patch.object(self.node.pub_joint_vel, 'publish') as joint_pub:
+            self.node.ee_cmd_vel_callback(msg)
+
+        # Base twist publisher should NOT be called in unified mode
+        self.assertEqual(base_pub.call_count, 0)
+        self.assertEqual(joint_pub.call_count, 1)
+
+        published_joint = joint_pub.call_args[0][0]
+        expected_joint_names = [
+            'base_x',
+            'base_y',
+            'base_theta',
+            'lift_joint',
+            'arm_joint',
+            'wrist_yaw_joint',
+            'wrist_pitch_joint',
+            'wrist_roll_joint',
+        ]
+        self.assertEqual(published_joint.joint_names, expected_joint_names)
+        self.assertEqual(len(published_joint.velocities), 8)
+        self.assertGreater(sum(abs(v) for v in published_joint.velocities), 0.0)
+
+    def test_ee_cmd_vel_callback_unified_zero_twist(self) -> None:
+        """
+        Verify that incoming zero twist with publish_base_and_arm_separately=False
+        publishes an 8-DOF all-zero JointJog message without touching pub_base_twist.
+        """
+        self.node.publish_base_and_arm_separately = False
+
+        msg = Twist()
+
+        with patch.object(self.node.pub_base_twist, 'publish') as base_pub, \
+                patch.object(self.node.pub_joint_vel, 'publish') as joint_pub:
+            self.node.ee_cmd_vel_callback(msg)
+
+        self.assertEqual(base_pub.call_count, 0)
+        self.assertEqual(joint_pub.call_count, 1)
+
+        published_joint = joint_pub.call_args[0][0]
+        self.assertEqual(len(published_joint.velocities), 8)
+        np.testing.assert_allclose(published_joint.velocities, np.zeros(8), atol=1e-9)
+
 
 if __name__ == '__main__':
     unittest.main()

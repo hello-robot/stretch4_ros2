@@ -29,10 +29,10 @@ class TaskSpaceController(Node):
         """
         super().__init__('task_space_controller')
 
-        # Parameters
         self.declare_parameter('target_frame', 'tool_attachment_site_link')
         self.declare_parameter('control_rate', 15.0)  # Control loop frequency in Hz
         self.declare_parameter('watchdog_timeout', 0.4)  # Safety timeout in seconds
+        self.declare_parameter('publish_base_and_arm_separately', True)
         self.declare_parameter('ee_cmd_vel_topic', 'ee_cmd_vel')
         self.declare_parameter('cmd_vel_topic', 'cmd_vel')
         self.declare_parameter('joint_vel_topic', 'joint_vel')
@@ -42,6 +42,9 @@ class TaskSpaceController(Node):
         self.target_frame = str(self.get_parameter('target_frame').value)
         self.control_rate = float(self.get_parameter('control_rate').value)
         self.watchdog_timeout = float(self.get_parameter('watchdog_timeout').value)
+        self.publish_base_and_arm_separately = bool(
+            self.get_parameter('publish_base_and_arm_separately').value
+        )
 
         ee_cmd_vel_topic = str(self.get_parameter('ee_cmd_vel_topic').value)
         cmd_vel_topic = str(self.get_parameter('cmd_vel_topic').value)
@@ -103,24 +106,40 @@ class TaskSpaceController(Node):
         # nullspace velocities even for zero task-space velocity commands; zeroing directly
         # prevents unwanted drift and brings the robot to a complete stop.
         if not np.any(v_task):
-            joint_jog = JointJog()
-            joint_jog.joint_names = [
-                'lift_joint',
-                'arm_joint',
-                'wrist_yaw_joint',
-                'wrist_pitch_joint',
-                'wrist_roll_joint',
-            ]
-            joint_jog.velocities = [0.0, 0.0, 0.0, 0.0, 0.0]
-            joint_jog.duration = dt_step
+            if self.publish_base_and_arm_separately:
+                joint_jog = JointJog()
+                joint_jog.joint_names = [
+                    'lift_joint',
+                    'arm_joint',
+                    'wrist_yaw_joint',
+                    'wrist_pitch_joint',
+                    'wrist_roll_joint',
+                ]
+                joint_jog.velocities = [0.0, 0.0, 0.0, 0.0, 0.0]
+                joint_jog.duration = dt_step
 
-            base_twist = Twist()
-            base_twist.linear.x = 0.0
-            base_twist.linear.y = 0.0
-            base_twist.angular.z = 0.0
+                base_twist = Twist()
+                base_twist.linear.x = 0.0
+                base_twist.linear.y = 0.0
+                base_twist.angular.z = 0.0
 
-            self.pub_joint_vel.publish(joint_jog)
-            self.pub_base_twist.publish(base_twist)
+                self.pub_joint_vel.publish(joint_jog)
+                self.pub_base_twist.publish(base_twist)
+            else:
+                joint_jog = JointJog()
+                joint_jog.joint_names = [
+                    'base_x',
+                    'base_y',
+                    'base_theta',
+                    'lift_joint',
+                    'arm_joint',
+                    'wrist_yaw_joint',
+                    'wrist_pitch_joint',
+                    'wrist_roll_joint',
+                ]
+                joint_jog.velocities = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+                joint_jog.duration = dt_step
+                self.pub_joint_vel.publish(joint_jog)
             return
 
         q_dot = self.kinematic_model.differential_ik(
@@ -129,30 +148,55 @@ class TaskSpaceController(Node):
             v_desired=v_task
         )
 
-        joint_jog = JointJog()
-        joint_jog.joint_names = [
-            'lift_joint',
-            'arm_joint',
-            'wrist_yaw_joint',
-            'wrist_pitch_joint',
-            'wrist_roll_joint',
-        ]
-        joint_jog.velocities = [
-            q_dot.lift,
-            q_dot.arm,
-            q_dot.wrist_yaw,
-            q_dot.wrist_pitch,
-            q_dot.wrist_roll,
-        ]
-        joint_jog.duration = dt_step
+        if self.publish_base_and_arm_separately:
+            joint_jog = JointJog()
+            joint_jog.joint_names = [
+                'lift_joint',
+                'arm_joint',
+                'wrist_yaw_joint',
+                'wrist_pitch_joint',
+                'wrist_roll_joint',
+            ]
+            joint_jog.velocities = [
+                q_dot.lift,
+                q_dot.arm,
+                q_dot.wrist_yaw,
+                q_dot.wrist_pitch,
+                q_dot.wrist_roll,
+            ]
+            joint_jog.duration = dt_step
 
-        base_twist = Twist()
-        base_twist.linear.x = q_dot.base_x
-        base_twist.linear.y = q_dot.base_y
-        base_twist.angular.z = q_dot.base_theta
+            base_twist = Twist()
+            base_twist.linear.x = q_dot.base_x
+            base_twist.linear.y = q_dot.base_y
+            base_twist.angular.z = q_dot.base_theta
 
-        self.pub_joint_vel.publish(joint_jog)
-        self.pub_base_twist.publish(base_twist)
+            self.pub_joint_vel.publish(joint_jog)
+            self.pub_base_twist.publish(base_twist)
+        else:
+            joint_jog = JointJog()
+            joint_jog.joint_names = [
+                'base_x',
+                'base_y',
+                'base_theta',
+                'lift_joint',
+                'arm_joint',
+                'wrist_yaw_joint',
+                'wrist_pitch_joint',
+                'wrist_roll_joint',
+            ]
+            joint_jog.velocities = [
+                q_dot.base_x,
+                q_dot.base_y,
+                q_dot.base_theta,
+                q_dot.lift,
+                q_dot.arm,
+                q_dot.wrist_yaw,
+                q_dot.wrist_pitch,
+                q_dot.wrist_roll,
+            ]
+            joint_jog.duration = dt_step
+            self.pub_joint_vel.publish(joint_jog)
 
     def odom_callback(self, msg: Odometry) -> None:
         """

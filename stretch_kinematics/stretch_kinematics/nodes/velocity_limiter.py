@@ -283,11 +283,12 @@ class EndEffectoryVelocitySafetyFilterNode(Node):
         )
 
         base_x = name_vel.get('translate_mobile_base', name_vel.get('base_x', 0.0))
+        base_y = name_vel.get('base_y', 0.0)
         base_theta = name_vel.get('rotate_mobile_base', name_vel.get('base_theta', 0.0))
 
         q_dot = StretchJointVelocities(
             base_x=base_x,
-            base_y=0.0,
+            base_y=base_y,
             base_theta=base_theta,
             lift=lift,
             arm=arm,
@@ -298,13 +299,36 @@ class EndEffectoryVelocitySafetyFilterNode(Node):
 
         ee_speed, gain = self.compute_ee_speed_and_gain(q_dot)
 
-        scaled_msg = JointJog()
-        scaled_msg.header = msg.header
-        scaled_msg.joint_names = msg.joint_names
-        scaled_msg.velocities = [v * gain for v in msg.velocities]
-        scaled_msg.duration = msg.duration
+        # If base velocities were provided in the JointJog message, split them out
+        # and publish a scaled Twist message to pub_cmd_vel.
+        has_base_cmd = any(
+            name in name_vel
+            for name in ('base_x', 'base_y', 'base_theta', 'translate_mobile_base', 'rotate_mobile_base')
+        )
+        if has_base_cmd:
+            scaled_twist = Twist()
+            scaled_twist.linear.x = base_x * gain
+            scaled_twist.linear.y = base_y * gain
+            scaled_twist.angular.z = base_theta * gain
+            self.pub_cmd_vel.publish(scaled_twist)
 
-        self.pub_joint_vel.publish(scaled_msg)
+        # Filter out virtual base names so only real robot joints reach stretch_driver
+        base_names = {
+            'base_x', 'base_y', 'base_theta',
+            'translate_mobile_base', 'rotate_mobile_base'
+        }
+        filtered_indices = [
+            i for i, name in enumerate(msg.joint_names)
+            if name not in base_names
+        ]
+
+        if filtered_indices:
+            scaled_msg = JointJog()
+            scaled_msg.header = msg.header
+            scaled_msg.joint_names = [msg.joint_names[i] for i in filtered_indices]
+            scaled_msg.velocities = [msg.velocities[i] * gain for i in filtered_indices]
+            scaled_msg.duration = msg.duration
+            self.pub_joint_vel.publish(scaled_msg)
 
 
 def main(args: list[str] | None = None) -> None:
