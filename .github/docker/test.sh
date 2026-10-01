@@ -88,8 +88,12 @@ fi
 run_test "Workspace install/setup.bash exists" \
     "$DOCKER_CMD run --rm $IMAGE_NAME test -f $WS/install/setup.bash"
 
-for pkg in hello_helpers stretch_core stretch_deep_perception stretch_description stretch_kinematics \
-           stretch_nav2 stretch_python_bridge stretch_simulation stretch_tag_perception; do
+# Every package in this repo should be installed, except those colcon skips via COLCON_IGNORE
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+for pkg_xml in "$REPO_DIR"/*/package.xml; do
+    pkg_dir=$(dirname "$pkg_xml")
+    [ -f "$pkg_dir/COLCON_IGNORE" ] && continue
+    pkg=$(sed -n 's|.*<name>\(.*\)</name>.*|\1|p' "$pkg_xml" | head -n 1)
     run_test "Package $pkg is installed" \
         "run_in_ws 'ros2 pkg prefix $pkg' > /dev/null"
 done
