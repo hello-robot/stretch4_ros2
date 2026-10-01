@@ -15,7 +15,7 @@
   <depend>sensor_msgs</depend>
   <depend>nav_msgs</depend>
   <depend>control_msgs</depend>
-  <exec_depend>hello-robot-stretch4-kinematics</exec_depend>
+  <!-- Also requires the hello-robot-stretch4-kinematics pip package, which has no rosdep key -->
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
