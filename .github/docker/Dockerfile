@@ -45,8 +45,11 @@ RUN mkdir -p /etc/apt/keyrings && \
     rm -rf /var/lib/apt/lists/*
 
 # Mock systemctl, which doesn't work inside Docker (used to install the Zenoh router service)
-RUN printf '#!/bin/sh\nexit 0\n' > /usr/bin/systemctl && \
-    chmod +x /usr/bin/systemctl
+# Lives in /usr/local/sbin, which is first in both PATH and sudo's secure_path, so that
+# rosdep installing the real systemd package (to /usr/bin) doesn't replace the mock
+RUN printf '#!/bin/sh\nexit 0\n' > /usr/local/sbin/systemctl && \
+    chmod +x /usr/local/sbin/systemctl && \
+    grep -q 'secure_path=.*/usr/local/sbin' /etc/sudoers
 
 # Set up /etc/hello-robot, as stretch_initial_setup.sh would
 RUN mkdir -p /etc/hello-robot && \
