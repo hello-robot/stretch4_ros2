@@ -44,6 +44,11 @@ RUN mkdir -p /etc/apt/keyrings && \
     apt-get update && apt-get install -y nodejs && \
     rm -rf /var/lib/apt/lists/*
 
+# Pre-install Playwright's system dependencies, which stretch4_web_teleop's npm postinstall
+# (npx playwright install-deps) would otherwise install during the workspace step
+RUN npx -y playwright@1 install-deps && \
+    rm -rf /var/lib/apt/lists/*
+
 # Mock systemctl, which doesn't work inside Docker (used to install the Zenoh router service)
 # Lives in /usr/local/sbin, which is first in both PATH and sudo's secure_path, so that
 # rosdep installing the real systemd package (to /usr/bin) doesn't replace the mock
@@ -67,6 +72,10 @@ WORKDIR /home/hello-robot
 RUN mkdir -p /home/hello-robot/stretch_user/log && \
     mkdir -p /home/hello-robot/.local/bin
 
+# Pre-download Playwright's browsers into ~/.cache/ms-playwright, so the npm postinstall
+# (npx playwright install) finds them already present when its Playwright version matches
+RUN npx -y playwright@1 install
+
 # Clone stretch4_install, which must be in the home directory as expected by the scripts
 RUN git clone --depth 1 --branch ${STRETCH4_INSTALL_REF} ${STRETCH4_INSTALL_REPO} /home/hello-robot/stretch4_install
 
@@ -86,6 +95,8 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 # Run the script under test. On failure, print the end of its redirected logs since they hold the details
 RUN cd /home/hello-robot/stretch4_install && \
     ./stretch_update_ros_workspace.sh || \
-    { for f in /home/hello-robot/stretch_user/log/*_redirected.txt; do echo "==== $f"; tail -n 200 "$f"; done; exit 1; }
+    { for f in /home/hello-robot/stretch_user/log/*_redirected.txt /home/hello-robot/.npm/_logs/*.log; do \
+          [ -f "$f" ] && { echo "==== $f"; tail -n 200 "$f"; }; \
+      done; exit 1; }
 
 CMD ["/bin/bash"]
