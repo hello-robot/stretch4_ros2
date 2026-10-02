@@ -1,4 +1,3 @@
-#! /usr/bin/env python3
 
 
 import copy
@@ -30,6 +29,7 @@ from std_msgs.msg import Bool, String
 from std_srvs.srv import SetBool, Trigger
 from stretch4_body.core.gamepad_control_mappings import ControlMapping
 from stretch4_body.core.gamepad_teleop import GamePadTeleop
+from stretch4_body.utils.stretch_pose_models import RobotJoints
 from tf_transformations import quaternion_from_euler
 
 from .joint_trajectory_server import JointTrajectoryAction
@@ -334,8 +334,8 @@ class StretchDriver(Node):
         before the robot stops moving. It cannot exceed velocity_timeout parameter.
         """
         with self.driver_mode_lock:
-            if self.driver_mode != 'velocity':
-                self.robot.logger.warn(f'Must be in velocity mode to service JointJog msg. Current mode = {self.driver_mode}.')
+            if self.driver_mode not in ['velocity', 'navigation']:
+                self.robot.logger.warn(f'Must be in velocity or navigation mode to service JointJog msg. Current mode = {self.driver_mode}.')
                 return
 
         # Queue velocity commands
@@ -350,8 +350,13 @@ class StretchDriver(Node):
             joint_velocity = jointjog_msg.velocities[i]
             duration = jointjog_msg.duration
 
-            if "gripper" in joint: 
-                joint_velocity *= 300
+            if "gripper" in joint:
+                joint_clean = joint.split('_joint')[0]
+                joint_enum = RobotJoints.get_joint_by_name(joint_clean)
+                if joint_enum:
+                    # move_by() below takes this tool's own command units (Pct for SG4,
+                    # aperture meters for PG4), not true raw actuator units.
+                    joint_velocity = joint_enum.urdf_to_command(joint_velocity)
 
             if "wrist" in joint:
                 # account for move_by (lack of velocity control)
@@ -528,6 +533,8 @@ class StretchDriver(Node):
         is_runstopped_msg = DiagnosticStatus(name="is_runstopped")
         in_collision_msg = DiagnosticStatus(name="in_collision")
 
+        end_of_arm_joint_names = [j.value for j in RobotJoints.get_end_of_arm_joints() if j.value]
+
         for cg in self.joint_trajectory_action.command_groups:
             pos, vel, eff = cg.joint_state(robot_status)
 
@@ -537,17 +544,10 @@ class StretchDriver(Node):
                     joint_state.position.append(pos/4.0)
                     joint_state.velocity.append(vel/4.0)
                     joint_state.effort.append(eff)
-            elif cg.name == "gripper_joint":
-                for link in ['gripper_finger_left_joint', 'gripper_finger_right_joint']:
+            elif cg.name == "gripper_joint" or cg.name == f"{RobotJoints.gripper.value}_joint":
+                for link in RobotJoints.gripper.tool_joints:
                     joint_state.name.append(link)
                     joint_state.position.append(pos)
-                    joint_state.velocity.append(vel)
-                    joint_state.effort.append(eff)
-            elif cg.name == "parallel_gripper_joint":
-                finger_pos = -pos / 2.0
-                for link in ['finger_left_joint', 'finger_right_joint']:
-                    joint_state.name.append(link)
-                    joint_state.position.append(finger_pos)
                     joint_state.velocity.append(vel)
                     joint_state.effort.append(eff)
             elif cg.name == "translate_mobile_base":
@@ -567,9 +567,9 @@ class StretchDriver(Node):
 
             joint_status_key = cg.name.replace("_joint","")
             if joint_status_key == "gripper":
-                joint_status_key = "stretch_gripper"
+                joint_status_key = RobotJoints.gripper.value
 
-            if joint_status_key in ["wrist_roll", "wrist_pitch", "wrist_yaw", "stretch_gripper", "parallel_gripper"]:
+            if joint_status_key in end_of_arm_joint_names:
                 status_dict = robot_status["end_of_arm"][joint_status_key]
                 is_homed = bool(status_dict.get('pos_calibrated', False))
                 is_homing = bool(status_dict.get('is_homing', False))
@@ -606,7 +606,7 @@ class StretchDriver(Node):
         battery_state.temperature = float(robot_status['power_periph']['temp'])
         battery_state.percentage = float(robot_status['power_periph']['battery_soc']) / 100.0
 
-        if robot_status['power_periph']['adapter_voltage_present']:
+        if robot_status['power_periph']['adapter_connected']:
             if robot_status['power_periph']['charger_is_charging']:
                 battery_state.power_supply_status = BatteryState.POWER_SUPPLY_STATUS_CHARGING
             else:
