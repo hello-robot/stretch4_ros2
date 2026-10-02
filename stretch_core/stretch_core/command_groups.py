@@ -174,14 +174,15 @@ class GripperCommandGroup(BaseCommandGroup):
         if tool is None:
             return
 
-        zero_command = RobotJoints.gripper.urdf_to_command(0.0)
+        goal_p = self.goal['position']
         goal_v = self.goal['velocity']
         goal_a = self.goal['acceleration']
-
+    
+    
         tool.move_to(
-            RobotJoints.gripper.urdf_to_command(self.goal['position']),
-            RobotJoints.gripper.urdf_to_command(goal_v) - zero_command if goal_v is not None else None,
-            RobotJoints.gripper.urdf_to_command(goal_a) - zero_command if goal_a is not None else None,
+            RobotJoints.gripper.urdf_to_command(goal_p),
+            RobotJoints.gripper.urdf_to_actuator_velocity(goal_v, goal_p) if goal_v is not None else None,
+            RobotJoints.gripper.urdf_to_actuator_velocity(goal_a, goal_p) if goal_a is not None else None,
         )
 
     @override
@@ -227,8 +228,10 @@ class GripperCommandGroup(BaseCommandGroup):
         elif 'finger_pos' in gripper_status:
             return (gripper_status['finger_pos'], gripper_status.get('finger_vel', 0.0), gripper_status.get('effort', 0.0))
         else:
-            pos_m = gripper_status.get('pos_mm', 0.0) / 1000.0
-            return (pos_m, gripper_status.get('vel', 0.0), gripper_status.get('effort', 0.0))
+            # Derive the fields the branch above reads; status_to_metadata() converts the rate
+            # as well as the position, so the pair shares one unit space.
+            conversion = RobotJoints.gripper.get_gripper_model('joint_state').status_to_metadata(gripper_status)
+            return (conversion['finger_rad'], conversion['finger_vel'], gripper_status.get('effort', 0.0))
 
 
 class ArmCommandGroup(BaseCommandGroup):
