@@ -8,6 +8,7 @@ from threading import Lock
 import time
 import copy
 import numpy as np
+import traceback
 
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.action.server import ServerGoalHandle
@@ -1086,7 +1087,7 @@ class StretchTrajectoryActionServer:
         add_param("kp", 0.1)
         add_param("ki", 0.001)
         add_param("kd", 0.01)
-        add_param("default_tolerance", 0.01)
+        add_param("default_tolerance", 0.1)
         add_param("loop_rate", 50.0)
         # if velocity not specified, how to do interpolation
         # options are 'zero' (stop between waypoints) or 'smooth'
@@ -1356,10 +1357,17 @@ class StretchTrajectoryActionServer:
 
     def at_target(self, feedback_msg):
         all_joints_ok = True
+        errors = [0.0 for joint in feedback_msg.joint_names]
+        tols = [0.0 for joint in feedback_msg.joint_names]
+
         for i, joint_name in enumerate(feedback_msg.joint_names):
-            tolerance = self.get_param(f"trajectory_tolerance.{joint}")
+            tolerance = self.get_param(f"trajectory_tolerance.{joint_name}")
             tolerance = self.get_param("default_tolerance") if tolerance is None else tolerance
             all_joints_ok = all_joints_ok and abs(feedback_msg.desired.positions[i]-feedback_msg.actual.positions[i])<tolerance
+            errors[i] = abs(feedback_msg.desired.positions[i]-feedback_msg.actual.positions[i])
+            tols[i] = tolerance
+            
+        self.driver.get_logger().info(f"Joint/Error/Tolerance: {list(zip(feedback_msg.joint_names,list(map(lambda x: round(x,4),errors)),list(map(lambda x: round(x,4),tols))))}", throttle_duration_sec=1.0)
 
         return all_joints_ok
 
@@ -1590,8 +1598,9 @@ class StretchTrajectoryActionServer:
 
             result = self.follow_trajectory(next_point_condition, first_loop_command, every_loop_command, trajectory, goal_handle)
         except Exception as e:
-            self.driver.get_logger().error(f"Cannot execute trajectory in pid_normal m\
-ode because of error {e}.")
+            self.driver.get_logger().error(
+                f"Cannot execute trajectory in {mode} mode because of error {e}.\n"
+                f"{traceback.format_exc()}")
             result = FollowJointTrajectory.Result()
             result.error_code = FollowJointTrajectory.Result.GOAL_TOLERANCE_VIOLATED
             result.error_string = f"Error {e} occurred."
