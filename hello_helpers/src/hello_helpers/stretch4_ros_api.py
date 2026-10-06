@@ -668,7 +668,7 @@ class Stretch4ROSDriver(Node, ABC):
             self.check_and_set_vel(self.resolve_joint_name(target.name[i]),target.velocity[i])
 
     @abstractmethod
-    def set_joint_velocity(self, joint, target, v = None, a = None):
+    def set_joint_velocity(self, joint, target, a = None):
         pass
 
     def check_and_set_vel(self, joint_name, goal, a = None):
