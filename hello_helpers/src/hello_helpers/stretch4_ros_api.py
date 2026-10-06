@@ -210,6 +210,7 @@ class Stretch4ROSDriver(Node, ABC):
             self.declare_parameter(f"joint_limit.{joint}.velocity",None, desc)
             self.declare_parameter(f"joint_limit.{joint}.acceleration",None, desc)
             self.declare_parameter(f"joint_mode.{joint}","position", ParameterDescriptor(type=ParameterType.PARAMETER_STRING, description=f"Control mode for individual joint (valid options are: {self.joint_modes})"))
+            self.declare_parameter(f"trajectory_server.trajectory_tolerance.{joint}", None, desc)
             #default to position control mode
             
         self.declare_parameter("joint_acceleration.omnibase.linear", None, desc)
@@ -1085,7 +1086,7 @@ class StretchTrajectoryActionServer:
         add_param("kp", 0.1)
         add_param("ki", 0.001)
         add_param("kd", 0.01)
-        add_param("threshold", 0.1)
+        add_param("default_tolerance", 0.01)
         add_param("loop_rate", 50.0)
         # if velocity not specified, how to do interpolation
         # options are 'zero' (stop between waypoints) or 'smooth'
@@ -1354,10 +1355,10 @@ class StretchTrajectoryActionServer:
         return actual_time >= desired_time
 
     def at_target(self, feedback_msg):
-        tolerance = self.get_param("threshold")
-
         all_joints_ok = True
-        for i, joint_names in enumerate(feedback_msg.joint_names):
+        for i, joint_name in enumerate(feedback_msg.joint_names):
+            tolerance = self.get_param(f"trajectory_tolerance.{joint}")
+            tolerance = self.get_param("default_tolerance") if tolerance is None else tolerance
             all_joints_ok = all_joints_ok and abs(feedback_msg.desired.positions[i]-feedback_msg.actual.positions[i])<tolerance
 
         return all_joints_ok
