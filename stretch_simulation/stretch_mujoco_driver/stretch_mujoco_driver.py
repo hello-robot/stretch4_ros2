@@ -386,7 +386,7 @@ class StretchMujocoDriver(Stretch4ROSDriver):
     def set_base_velocity(self, x, y, theta):
         self.sim.base.set_velocity(x, y, theta)
 
-    def set_joint_position(self, joint, target):  
+    def set_joint_position(self, joint, target, v=None, a=None):
         self.logger.info(f"Driver setting joint {joint} to position {target}. current position is {self.cmd_joint_position(joint)}.") 
         subsys = None
          
@@ -403,10 +403,12 @@ class StretchMujocoDriver(Stretch4ROSDriver):
 
         if subsys is None:
             self.logger.error(f"Joint {joint} not found.  Do you have the name correct? Available joints to command are {self.command_joints}.  If joint is in this list, check that the interface to the Mujoco simulator hasn't changed.")
+            return
 
-        subsys.move_to(target)
+        # The sim accepts v/a for API parity with the real driver; it does not currently apply them.
+        subsys.move_to(target, v_m=v, a_m=a)
 
-    def set_joint_velocity(self, joint, target):
+    def set_joint_velocity(self, joint, target, a=None):
         self.logger.info(f"Driver setting joint {joint} to velocity {target}")
         
         subsys = None
@@ -424,8 +426,9 @@ class StretchMujocoDriver(Stretch4ROSDriver):
 
         if subsys is None:
             self.logger.error(f"Joint {joint} not found.  Do you have the name correct? Available joints to command are {self.command_joints}.  If joint is in this list, check that the interface to the Mujoco simulator hasn't changed.")
+            return
 
-        subsys.set_velocity(target)
+        subsys.set_velocity(target, a_m=a)
     
 
     def publish_child_info(self):
