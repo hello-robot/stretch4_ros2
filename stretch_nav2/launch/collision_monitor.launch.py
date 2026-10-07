@@ -4,7 +4,8 @@ Params used are the same ones used in navigation.
 """
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, GroupAction, IncludeLaunchDescription
+from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.descriptions import ParameterFile
@@ -12,6 +13,11 @@ from launch_ros.substitutions import FindPackageShare
 from nav2_common.launch import RewrittenYaml
 
 from hello_helpers.multi_yaml import MultiYaml
+
+
+def scoped(action):
+    """Keep an include's launch_arguments from leaking into later includes."""
+    return GroupAction([action])
 
 
 def generate_launch_description():
@@ -46,6 +52,7 @@ def generate_launch_description():
 
     stretch_driver_launch = IncludeLaunchDescription(
         PathJoinSubstitution([stretch_core_path, 'launch', 'stretch_driver.launch.py']),
+        condition=IfCondition(LaunchConfiguration('launch_driver')),
         launch_arguments={
             'broadcast_odom_tf': 'True',
             'mode': 'velocity',
@@ -57,6 +64,7 @@ def generate_launch_description():
         launch_arguments={
             'filter_type': 'sor_ransac',
             'tool_preset': LaunchConfiguration('tool_preset'),
+            'use_rviz': LaunchConfiguration('use_rviz'),
         }.items(),
     )
 
@@ -104,13 +112,25 @@ def generate_launch_description():
             description='Log level',
         ),
         DeclareLaunchArgument(
+            'launch_driver',
+            default_value='true',
+            choices=['true', 'false'],
+            description='Start stretch_driver; set false when the caller already runs one',
+        ),
+        DeclareLaunchArgument(
+            'use_rviz',
+            default_value='false',
+            choices=['true', 'false'],
+            description='Start RViz with the lidar bringup',
+        ),
+        DeclareLaunchArgument(
             'tool_preset',
             default_value='auto',
             description='Mounted tool preset for lidar self-filter: auto, sg4, pg4, tablet, or nil',
         ),
-        stretch_driver_launch,
-        hlidar_launch,
-        footprint_launch,
+        scoped(stretch_driver_launch),
+        scoped(hlidar_launch),
+        scoped(footprint_launch),
         Node(
             package='nav2_collision_monitor',
             executable='collision_monitor',
