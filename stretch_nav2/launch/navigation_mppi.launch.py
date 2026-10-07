@@ -1,5 +1,6 @@
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, GroupAction, IncludeLaunchDescription
+from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.substitutions import FindPackageShare
 from hello_helpers.multi_yaml import MultiYaml
@@ -21,6 +22,7 @@ def generate_launch_description():
 
     stretch_driver_launch = IncludeLaunchDescription(
         PathJoinSubstitution([stretch_core_path, 'launch', 'stretch_driver.launch.py']),
+        condition=IfCondition(LaunchConfiguration('launch_driver')),
         launch_arguments={'broadcast_odom_tf': 'True', 'mode': 'navigation'}.items())
 
     hlidar_launch = IncludeLaunchDescription(
@@ -62,6 +64,12 @@ def generate_launch_description():
                 stretch_navigation_path, 'maps', 'dual_ds3.yaml'
             ]),
             description='Full path to the map.yaml file to use for navigation',
+        ),
+        DeclareLaunchArgument(
+            'launch_driver',
+            default_value='true',
+            choices=['true', 'false'],
+            description='Start stretch_driver; set false when the caller already runs one',
         ),
         DeclareLaunchArgument(
             'tool_preset',
