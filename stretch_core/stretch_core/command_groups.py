@@ -200,6 +200,18 @@ class ParallelGripperCommandGroup(BaseCommandGroup):
     @override
     @check_active()
     def is_finished(self, robot_status: Dict[str, Any], **kwargs: Any) -> bool:
+        # Closing on an object: stretch4_body's contact guard holds the gripper at a virtual goal just past
+        # the contact, so the commanded position is never reached. Finished once it has settled there.
+        gripper_status = robot_status['end_of_arm']['parallel_gripper']
+        cg = gripper_status.get('contact_guard', {})
+        if cg.get('in_contact') and cg.get('virtual_goal_mm') is not None and \
+                self.goal['position'] * 1000.0 < cg['contact_pos_mm']:
+            if abs(gripper_status.get('vel', 0.0)) < 0.05:  # Settled
+                contact_detected_callback = kwargs.get('contact_detected_callback')
+                if contact_detected_callback:
+                    contact_detected_callback(f"parallel gripper holding object: contact at {cg['contact_pos_mm']:.1f} mm, "
+                                              f"holding at {gripper_status.get('pos_mm', 0.0):.1f} mm")
+                return True
         return abs(self.error) < 0.002
 
     @override
