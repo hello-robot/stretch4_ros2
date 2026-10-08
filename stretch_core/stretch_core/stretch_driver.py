@@ -116,6 +116,7 @@ class StretchDriver(Node):
             tool_metadata = None
             tool_is_actuated = False
             tool_joints = []
+        self.tool_is_actuated = tool_is_actuated
         self.declare_parameter("tool_info.name", tool_name or "unknown")
         self.declare_parameter("tool_info.is_actuated", tool_is_actuated)
         self.declare_parameter("tool_info.tool_joints", tool_joints)
