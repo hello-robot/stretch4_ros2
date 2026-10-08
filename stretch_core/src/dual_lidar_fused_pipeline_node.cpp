@@ -1,8 +1,4 @@
-// Publishes BOTH the merged point cloud and the LaserScan from a single pass.
-//
-// Replaces the pair dual_lidar_pointcloud_merger + dual_lidar_laserscan, which each ran
-// their own ApproximateTime sync, their own cached TF lookup and their own full per-point
-// transform.
+// Publishes the merged point cloud and the LaserScan from both lidars in a single pass.
 
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/laser_scan.hpp>
@@ -77,10 +73,8 @@ public:
       tf_lidar2_ = stretch_core::LinearTransform3f::fromAffine(
         tf2::transformToEigen(tf_b.transform).cast<float>());
 
-      // Every z threshold in the YAML is written relative to param_z_frame
-      // (base_footprint), but the pipeline works in target_frame (base_link). Derive the
-      // shift from TF rather than hardcoding 0.028, so a URDF change cannot silently
-      // desynchronise the two.
+      // z thresholds are given relative to param_z_frame; look up its offset from
+      // target_frame instead of hardcoding it.
       if (param_z_frame_ == target_frame_) {
         z_offset_ = 0.0;
       } else {
@@ -359,7 +353,7 @@ private:
     {
       RCLCPP_WARN_THROTTLE(
         get_logger(), *get_clock(), 5000,
-        "Cloud from %s is missing '%s' or '%s', which GLIM needs to deskew. Fields: [%s]",
+        "Cloud from %s is missing '%s' or '%s', which are needed for deskewing. Fields: [%s]",
         cloud.header.frame_id.c_str(), ring_field_.c_str(), timestamp_field_.c_str(),
         stretch_core::fieldNames(cloud).c_str());
       return false;
@@ -492,7 +486,6 @@ private:
         [&](const std::string & label, bool received, const rclcpp::Time & stamp) {
           if (!received) {
             faults.push_back(label + ": no data yet");
-            any_stale = true;
             return;
           }
           const double age = (current - stamp).seconds();
@@ -509,7 +502,6 @@ private:
 
       if (!output_received_) {
         faults.push_back("fused output: not published yet");
-        any_stale = true;
       } else {
         const double age = (current - last_output_stamp_).seconds();
         addValue("fused/age_s", age);

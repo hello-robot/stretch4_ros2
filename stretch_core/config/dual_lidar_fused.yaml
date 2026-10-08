@@ -9,12 +9,9 @@
     cloud_topic: /lidar_points
     scan_topic: /scan_filtered
 
-    # Both branches work in base_link. NOT called frame_id, because robot_self_filter.yaml
-    # sets frame_id: base_footprint under a /** wildcard and would clobber it.
+    # Frame both outputs are computed in. Not named frame_id, which robot_self_filter.yaml
+    # sets for every node.
     target_frame: base_link
-    # The URDF pins `laser` to base_link with an identity joint, so projecting in base_link
-    # makes this stamp exact. The legacy node projects in base_footprint and stamps `laser`
-    # regardless, which is 28 mm out in z.
     scan_frame: laser
     param_z_frame: base_footprint
 
@@ -46,14 +43,14 @@
     floor_detect_z_min: -0.05
     floor_detect_z_max: 0.05
 
-    # StatisticalOutlierRemoval 
+    # ---- statistical outlier removal (scan only) -------------------------------------
     enable_sor_filter: false
     dist_rob: 2.5
     leaf_size: 0.05
     sor_mean_k: 50
     sor_stddev: 0.3
 
-    # Speckle_filter
+    # ---- speckle filter (scan only) --------------------------------------------------
     speckle_filter_enabled: true
     speckle_min_points: 2
     speckle_neighbor_window: 3

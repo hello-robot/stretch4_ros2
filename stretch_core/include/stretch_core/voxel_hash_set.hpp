@@ -1,13 +1,7 @@
 #pragma once
 
-// Open-addressing "first point in a voxel wins" set.
-//
-// The merger builds a std::unordered_map per frame (dual_lidar_pointcloud_merger_node.cpp
-// voxelDownsample). At ~460k points a frame that is a node allocation and a pointer chase
-// per point -- tens of milliseconds against a 100 ms budget at 10 Hz. This is the same
-// decimation rule with the buckets flattened into one preallocated array: no allocation in
-// the hot path, linear probing, and the storage is reused across frames.
-//
+// Open-addressing set where the first point in a voxel wins. The storage is preallocated and
+// reused across frames, so inserting never allocates.
 
 #include <algorithm>
 #include <cmath>
@@ -42,12 +36,12 @@ public:
     size_t capacity = 1024;
     while (capacity < expected_points * 2) {
       capacity <<= 1;
-  }
+    }
     if (slots_.size() != capacity) {
       slots_.assign(capacity, 0);
     } else {
       std::fill(slots_.begin(), slots_.end(), 0);
-  }
+    }
     mask_ = capacity - 1;
   }
 
@@ -66,7 +60,7 @@ public:
         return false;
       }
       slot = (slot + 1) & mask_;
-  }
+    }
   }
 
 private:

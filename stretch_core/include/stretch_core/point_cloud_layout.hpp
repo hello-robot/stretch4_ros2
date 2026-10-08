@@ -1,9 +1,7 @@
 #pragma once
 
-// Raw sensor_msgs::PointCloud2 byte-layout helpers.
-//
-// The dual-lidar path deliberately does NOT go through pcl::fromROSMsg. Converting to
-// pcl::PointXYZ drops per-point `ring` and `timestamp` fields needed to deskew.
+// Raw PointCloud2 byte-layout helpers. Converting to pcl::PointXYZ instead would drop the
+// per-point `ring` and `timestamp` fields.
 
 #include <algorithm>
 #include <cstdint>

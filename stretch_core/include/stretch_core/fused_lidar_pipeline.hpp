@@ -34,18 +34,14 @@ struct FusedScanConfig
   int num_ranges{3600};
 };
 
-
 struct FusedPipelineConfig
 {
   float voxel_leaf_size{0.05f};
 
-  // Radius inside which the self-filter geometry test can fire. 
+  // Radius inside which the self-filter geometry test can fire.
   float near_field_radius{1.5f};
 
-  // The height band outside which NO check can fire: not the scan band, but the
-  // self-filter gate span, which strictly contains it. The robot's mast top (1.554) and
-  // head (1.571) sit above the scan's z_max (1.472) and below the gate top (1.572), so a
-  // fast lane keyed on z_max would leave the robot's own head in the published cloud.
+  // Height span outside which no filter can fire. 
   float filter_z_bot{-0.078f};
   float filter_z_top{1.572f};
 
@@ -101,7 +97,7 @@ public:
     FusedPipelineOutput & output);
 
 private:
-  // How a point was classified by the first pass. 
+  // How a point was classified by the first pass.
   enum class PointClass : uint8_t
   {
     Dead = 0,   // non-finite input
@@ -202,7 +198,6 @@ private:
     int nz_{0};
     std::vector<uint64_t> words_;
   };
-
 
   std::optional<std::array<float, 4>> fitFloorPlane(rclcpp::Logger logger);
 

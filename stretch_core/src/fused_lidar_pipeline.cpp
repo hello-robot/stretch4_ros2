@@ -22,7 +22,8 @@ void FusedLidarPipeline::setConfig(const FusedPipelineConfig & config)
   floor_filter_.setConfig(config_.floor);
   sor_filter_.setConfig(config_.sor);
 
-  // SOR applied on scan
+  // Thin the scan before projection: over SOR's whole box when SOR is on, otherwise only
+  // inside the self-filter gate.
   const float scan_leaf = config_.enable_sor ?
     static_cast<float>(config_.sor.leaf_size) : config_.voxel_leaf_size;
   const float half_extent = config_.enable_sor ?
@@ -33,7 +34,7 @@ void FusedLidarPipeline::setConfig(const FusedPipelineConfig & config)
   }
 }
 
-// Transform and classify. 
+// Transform and classify.
 void FusedLidarPipeline::classifyCloud(
   const sensor_msgs::msg::PointCloud2 & msg,
   const LinearTransform3f & tf,
@@ -78,7 +79,7 @@ void FusedLidarPipeline::classifyCloud(
     tf.transform(x, y, z, p.x, p.y, p.z);
     p.key = voxelize ? VoxelHashSet::key(p.x, p.y, p.z, inv_leaf) : 0;
 
-    // Saves the height for the pointcloud because its not needed for the laserscan
+    // Outside the gate's z span no filter can fire, so the point goes to the cloud only.
     if (p.z > z_top || p.z < z_bot) {
       p.cls = PointClass::Fast;
       continue;
@@ -178,7 +179,8 @@ void FusedLidarPipeline::reduceAndCompact(
     if (representative && publish_cloud) {
       const uint8_t * src = src_base[p.source] + static_cast<size_t>(p.source_index) * point_step;
       uint8_t * dst = dst_base + written * point_step;
-      // The whole point rides across untouched -- intensity, ring and the absolute float64
+      // Copy the whole point so intensity, ring and timestamp survive, then overwrite x/y/z
+      // with the transformed values.
       if (xyz_contiguous) {
         const size_t head_bytes = static_cast<size_t>(x_offset);
         if (head_bytes > 0) {
@@ -200,7 +202,7 @@ void FusedLidarPipeline::reduceAndCompact(
       scan_candidates_.push_back(static_cast<uint32_t>(i));
     }
 
-    // Sample for the floor fit
+    // Sample for the floor fit.
     if (collect_floor && (p.cls != PointClass::Gate || representative) &&
       p.z >= floor_lo && p.z <= floor_hi)
     {
@@ -237,7 +239,7 @@ std::optional<std::array<float, 4>> FusedLidarPipeline::fitFloorPlane(rclcpp::Lo
   return floor_filter_.getFloorCoefficients(floor_sample_, logger);
 }
 
-// Project into angular bins. Parallel with per-thread range arrays
+// Project into angular bins, in parallel with per-thread range arrays.
 void FusedLidarPipeline::projectScan(
   const FusedScanConfig & scan_cfg,
   FusedPipelineOutput & output) const
@@ -282,7 +284,6 @@ void FusedLidarPipeline::projectScan(
     }
   }
 }
-
 
 void FusedLidarPipeline::process(
   const sensor_msgs::msg::PointCloud2 & msg_a,
@@ -341,7 +342,7 @@ void FusedLidarPipeline::process(
     const float inv_norm = 1.0f / norm;
     const float threshold = static_cast<float>(config_.floor.plane_fitting_threshold);
 
-    // Drop floor returns from the scan only. The floor points stay addressable in the tail 
+    // Drop floor returns from the scan only. The floor points stay addressable in the tail
     // so SOR can still see them as neighbours, while only the obstacle prefix is ever projected.
     const auto obstacle_end = std::partition(
       scan_candidates_.begin(), scan_candidates_.end(),
@@ -356,7 +357,6 @@ void FusedLidarPipeline::process(
   }
 
   if (config_.enable_sor) {
-    // Statistical outlier removal
     output.scan.ranges.assign(static_cast<size_t>(scan_cfg.num_ranges), kNoHitRange);
     output.scan.hit_counts.assign(static_cast<size_t>(scan_cfg.num_ranges), 0);
     size_t kept = 0;
@@ -407,7 +407,7 @@ void FusedLidarPipeline::process(
       pcl::Indices inliers;
       const bool statistic_ran = sor_filter_.statisticalInlierIndices(cloud, inliers);
       if (!statistic_ran) {
-        // Box empty or too small to support the statistic: keep every obstacle, as before.
+        // Box empty or too small to support the statistic: keep every obstacle.
         for (size_t i = 0; i < cloud->points.size(); ++i) {
           if (floor_flags[i]) {
             continue;

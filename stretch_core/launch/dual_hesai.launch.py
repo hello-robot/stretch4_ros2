@@ -1,7 +1,7 @@
 from ament_index_python.packages import get_package_share_directory
 from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch.actions import DeclareLaunchArgument, LogInfo, OpaqueFunction
-from launch.conditions import IfCondition, UnlessCondition
+from launch.conditions import UnlessCondition
 from launch import LaunchDescription
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
@@ -21,6 +21,34 @@ from self_filter_config import (
     validate_tool_preset,
 )
 
+LIDAR_PIPELINES = ('laserscan', 'fused', 'none')
+
+def resolve_lidar_pipeline(context):
+    """The lidar_pipeline to run, honouring the deprecated launch_filter_node and
+    use_fused_lidar_pipeline args when lidar_pipeline is not given."""
+    pipeline = LaunchConfiguration('lidar_pipeline').perform(context).strip().lower()
+    use_fused = LaunchConfiguration('use_fused_lidar_pipeline').perform(context).strip().lower()
+    launch_filter = LaunchConfiguration('launch_filter_node').perform(context).strip().lower()
+
+    notes = []
+    if use_fused or launch_filter:
+        notes.append(LogInfo(msg=(
+            'launch_filter_node and use_fused_lidar_pipeline are deprecated; '
+            'use lidar_pipeline:=laserscan|fused|none.')))
+
+    if not pipeline:
+        if use_fused == 'true':
+            pipeline = 'fused'
+        elif launch_filter == 'false':
+            pipeline = 'none'
+        else:
+            pipeline = 'laserscan'
+
+    if pipeline not in LIDAR_PIPELINES:
+        raise ValueError(
+            f"lidar_pipeline must be one of {', '.join(LIDAR_PIPELINES)}, got '{pipeline}'.")
+    return pipeline, notes
+
 
 def launch_setup(context, *args, **kwargs):
     stretch_core = get_package_share_directory('stretch_core')
@@ -28,7 +56,7 @@ def launch_setup(context, *args, **kwargs):
     validate_tool_preset(tool_preset)
     self_filter_params = dual_lidar_self_filter_parameters(stretch_core, tool_preset)
     fused_params = dual_lidar_fused_parameters(stretch_core, tool_preset)
-    use_fused = LaunchConfiguration('use_fused_lidar_pipeline').perform(context).lower() == 'true'
+    lidar_pipeline, notes = resolve_lidar_pipeline(context)
 
     template_file = Path(stretch_core) / 'config' / 'hesai_dual_lidar.yaml'
     with open(template_file, "r") as f:
@@ -56,7 +84,6 @@ def launch_setup(context, *args, **kwargs):
 
     filter_type = LaunchConfiguration('filter_type')
     scan_angle_increment_deg = LaunchConfiguration('scan_angle_increment_deg')
-    launch_filter_node = LaunchConfiguration('launch_filter_node')
 
     dual_lidar_filter_node = Node(
         package='stretch_core',
@@ -73,10 +100,9 @@ def launch_setup(context, *args, **kwargs):
                 'pub_pointcloud': pub_pointcloud,
             },
         ],
-        condition=IfCondition(launch_filter_node),
     )
 
-    # One node in place of dual_lidar_laserscan + dual_lidar_pointcloud_merger. 
+    # Publishes both /lidar_points and /scan_filtered.
     fused_pipeline_node = Node(
         package='stretch_core',
         executable='dual_lidar_fused_pipeline',
@@ -107,10 +133,18 @@ def launch_setup(context, *args, **kwargs):
     )
 
     rviz_config_path = os.path.join(stretch_core, 'rviz', 'lidars.rviz')
-    lidar_processing_node = fused_pipeline_node if use_fused else dual_lidar_filter_node
+    processing_nodes = {
+        'laserscan': [
+            LogInfo(msg=['==== lidar_pipeline: laserscan, filter_type: ', filter_type]),
+            dual_lidar_filter_node,
+        ],
+        'fused': [LogInfo(msg='==== lidar_pipeline: fused'), fused_pipeline_node],
+        'none': [LogInfo(msg='==== lidar_pipeline: none (driver only)')],
+    }
     return [
+        *notes,
         hesai_node,
-        lidar_processing_node,
+        *processing_nodes[lidar_pipeline],
         *get_rviz_node(rviz_config_path),
     ]
 
@@ -119,14 +153,12 @@ def generate_launch_description():
     filter_type_arg = DeclareLaunchArgument(
         'filter_type',
         default_value='sor_ransac',
-        description='Pipeline preset: region | sor | sor_ransac | self | none | custom',
+        description=(
+            'lidar_pipeline:=laserscan only. '
+            'Preset: region | sor | sor_ransac | self | none | custom'),
     )
 
     filter_type = LaunchConfiguration('filter_type')
-
-    print_filter_cmd = LogInfo(
-        msg=['==== USING FILTER TYPE: ', filter_type]
-    )
 
     error_log = LogInfo(
         condition=UnlessCondition(PythonExpression([
@@ -141,10 +173,21 @@ def generate_launch_description():
         description="If true, launch Rviz2 automatically.",
     )
 
+    lidar_pipeline_arg = DeclareLaunchArgument(
+        'lidar_pipeline',
+        default_value='',
+        description=(
+            'What runs after the lidar driver (default laserscan). '
+            'laserscan: dual_lidar_laserscan publishes /scan_filtered; filter_type and '
+            'pub_pointcloud apply. '
+            'fused: one node publishes /lidar_points and /scan_filtered; the enable_* args apply. '
+            'none: driver only, raw /lidar_points_left and /lidar_points_right.'),
+    )
+
     launch_filter_node_arg = DeclareLaunchArgument(
         'launch_filter_node',
-        default_value='true',
-        description='If true, launch the dual_lidar_laserscan filter node.',
+        default_value='',
+        description='Deprecated: use lidar_pipeline. false means lidar_pipeline:=none.',
     )
 
     tool_preset_arg = DeclareLaunchArgument(
@@ -159,58 +202,53 @@ def generate_launch_description():
         description='LaserScan angular bin width in degrees. Try 0.1 or 0.2 for Nav2.',
     )
 
-    pub_pointcloud_arg = DeclareLaunchArgument('pub_pointcloud', default_value='false', description='Publish a pointcloud from the filter node.')
+    pub_pointcloud_arg = DeclareLaunchArgument(
+        'pub_pointcloud', default_value='false',
+        description='lidar_pipeline:=laserscan only. Publish a pointcloud from the filter node.')
 
     fused_stage_args = [
         DeclareLaunchArgument(
             'enable_self_robot_filter', default_value='true', choices=['true', 'false'],
-            description='Fused pipeline: cut the robot body out of both outputs.'),
+            description='lidar_pipeline:=fused only. Cut the robot body out of both outputs.'),
         DeclareLaunchArgument(
             'enable_floor_ransac_filter', default_value='true', choices=['true', 'false'],
             description=(
-                'Fused pipeline: remove the floor FROM THE SCAN with a fitted plane. '
-                'false falls back to the plain z_min cut.'),
+                'lidar_pipeline:=fused only. Remove the floor from the scan with a fitted plane. '
+                'false uses the z_min cut instead.'),
         ),
         DeclareLaunchArgument(
             'enable_sor_filter', default_value='false', choices=['true', 'false'],
-            description=(
-                'Fused pipeline: StatisticalOutlierRemoval on the scan band.'),
+            description='lidar_pipeline:=fused only. StatisticalOutlierRemoval on the scan band.',
         ),
         DeclareLaunchArgument(
             'scan_range_max', default_value='30.0',
-            description=(
-                'Fused pipeline: max scan range. '),
+            description='lidar_pipeline:=fused only. Max scan range in meters.',
         ),
         DeclareLaunchArgument(
             'log_stats_period_sec', default_value='0.0',
-            description='Fused pipeline: seconds between point-count lines. 0 disables.'),
+            description=(
+                'lidar_pipeline:=fused only. Seconds between point-count lines. 0 disables.')),
         DeclareLaunchArgument(
             'pub_self_filter_markers', default_value='false', choices=['true', 'false'],
-            description='Publish the self-filter volumes on /self_filter_markers for RViz.'),
+            description='lidar_pipeline:=fused only. Publish the self-filter volumes for RViz.'),
     ]
 
     use_fused_lidar_pipeline_arg = DeclareLaunchArgument(
         'use_fused_lidar_pipeline',
-        default_value='false',
-        choices=['true', 'false'],
-        description=(
-            'Run the single fused node that publishes BOTH /lidar_points and '
-            '/scan_filtered from one pass, instead of dual_lidar_laserscan. Callers must '
-            'also stop launching dual_lidar_pointcloud_merger when this is true, since '
-            'the fused node publishes /lidar_points itself.'
-        ),
+        default_value='',
+        description='Deprecated: use lidar_pipeline. true means lidar_pipeline:=fused.',
     )
 
     return LaunchDescription([
         filter_type_arg,
         tool_preset_arg,
-        print_filter_cmd,
         error_log,
         scan_angle_increment_arg,
         pub_pointcloud_arg,
-        use_fused_lidar_pipeline_arg,
+        lidar_pipeline_arg,
         *fused_stage_args,
         use_rviz_arg,
         launch_filter_node_arg,
+        use_fused_lidar_pipeline_arg,
         OpaqueFunction(function=launch_setup),
     ])
