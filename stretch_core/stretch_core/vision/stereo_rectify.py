@@ -1,70 +1,61 @@
 """Stereo rectification for the head camera pair.
 
-The per-camera undistortion in `rectify.py` removes fisheye distortion but leaves each camera with
-its own focal length, its own principal point, and its own orientation. Stereo matching needs more
-than that: both images must share one focal length and be row-aligned, so a feature in the left
-image lies on the same pixel row in the right one. That is what `cv2.fisheye.stereoRectify` gives,
-and it needs the extrinsics between the two cameras -- which live in camera_extrinsics.yaml, not in
-the per-camera calibration.
-
-The head is mounted rolled ~179 degrees, and stereoRectify resolves that by rotating each camera
-~89.5 degrees into a common frame. That frame is a valid rectification but it comes out upside
-down, and an upside-down pair also has its left and right swapped, since a 180 degree roll reverses
-the horizontal order. Both problems are one problem, so ROLL_FIX folds a further 180 degrees into
-both rectification rotations. With it the images are upright AND each physical camera feeds the
-stereo side of the same name; without it neither is true.
-
 Frames must be fed in UNROTATED. All of the mounting roll is already inside R1/R2, so applying the
 usual np.rot90 first would double-correct it.
 """
 
-import glob
+import os
 
 import cv2
 import numpy as np
+import tf_transformations
 import yaml
 
-CALIBRATION_GLOB = "/home/hello-robot/stretch_user/*/calibration_cameras/calibration_rgb_head_camera.yaml"
-EXTRINSICS_GLOB = "/home/hello-robot/stretch_user/*/calibration_cameras/camera_extrinsics.yaml"
+from stretch4_body.subsystem.cameras.enums.distortion_models import DistortionModels
+from stretch4_body.subsystem.cameras.enums.rgb_camera import RGBCameras
+from stretch4_body.subsystem.cameras.models.camera_calibration import DEFAULT_CALIBRATION_FOLDER_PATH
 
-# (calibration name, extrinsics key, physical optical frame) for the stereo left camera then right.
-ROS_LEFT = ("head_left", "left_to_center", "camera_left_optical_link")
-ROS_RIGHT = ("head_right", "right_to_center", "camera_right_optical_link")
+from stretch_core.vision.vision_topics import VisionFrames
 
-# A 180 degree roll about the optical axis. See the module docstring.
+EXTRINSICS_PATH = os.path.join(DEFAULT_CALIBRATION_FOLDER_PATH, "camera_extrinsics.yaml")
+
+# (camera, extrinsics key, physical optical frame) for the stereo left camera then right.
+ROS_LEFT = (RGBCameras.head_left, "left_to_center", VisionFrames.camera_frame("left"))
+ROS_RIGHT = (RGBCameras.head_right, "right_to_center", VisionFrames.camera_frame("right"))
+
+# A 180 degree roll about the optical axis. stereoRectify leaves the pair upside down, which also
+# swaps left and right; folding this into R1/R2 makes the pair upright and correctly ordered.
 ROLL_FIX = np.diag([-1.0, -1.0, 1.0])
-
-
-def _load(path_glob):
-    matches = glob.glob(path_glob)
-    if not matches:
-        raise RuntimeError(f"No file matching {path_glob}")
-    return yaml.safe_load(open(matches[0]))
 
 
 class StereoRectifier:
     """Builds and applies the rectifying remap for the head stereo pair."""
 
     def __init__(self, balance: float = 0.0, fov_scale: float = 1.0):
-        calib = _load(CALIBRATION_GLOB)
-        ext = _load(EXTRINSICS_GLOB)
+        with open(EXTRINSICS_PATH) as f:
+            ext = yaml.safe_load(f)
 
-        def intrinsics(name):
-            c = calib[name]
-            K = np.array(c["camera_matrix"], dtype=np.float64)
-            D = np.array(c["distortion_coefficients"], dtype=np.float64).reshape(-1, 1)
-            if c["distortion_model"] != "equidistant":
+        def intrinsics(camera_type):
+            # load_calibration() also shifts cx/cy when the stream size differs from the
+            # calibration size, which reading the YAML directly would miss.
+            c = camera_type.load_calibration()
+            if c is None:
+                raise RuntimeError(f"No calibration is available for {camera_type.name}.")
+            if not c.distortion_model.is_fisheye() or c.distortion_model is DistortionModels.omnidir:
                 raise RuntimeError(
-                    f"{name} is calibrated as {c['distortion_model']}; this rectifier assumes fisheye.")
-            return K, D, (c["image_size"][1], c["image_size"][0])
+                    f"{camera_type.name} is calibrated as {c.distortion_model.name}; "
+                    "this rectifier assumes the equidistant fisheye model.")
+            K = np.asarray(c.camera_matrix, dtype=np.float64)
+            D = np.asarray(c.distortion_coefficients, dtype=np.float64).reshape(-1, 1)
+            return K, D, (c.width, c.height)
 
-        (lname, lext, lframe), (rname, rext, rframe) = ROS_LEFT, ROS_RIGHT
+        (lcam, lext, lframe), (rcam, rext, rframe) = ROS_LEFT, ROS_RIGHT
         self.PARENT_FRAME = {"left": lframe, "right": rframe}
 
-        K1, D1, self.size = intrinsics(lname)
-        K2, D2, size2 = intrinsics(rname)
+        K1, D1, self.size = intrinsics(lcam)
+        K2, D2, size2 = intrinsics(rcam)
         if size2 != self.size:
-            raise RuntimeError(f"{lname} is {self.size} but {rname} is {size2}; both must match.")
+            raise RuntimeError(f"{lcam.name} is {self.size} but {rcam.name} is {size2}; both must match.")
         width, height = self.size
 
         # Pose of each camera in the head-centre frame, composed into left -> right.
@@ -122,25 +113,8 @@ class StereoRectifier:
         """Orientation of a rectified optical frame relative to its physical optical frame.
 
         Rectification maps a point as x_rect = R @ x_optical, so the frame itself rotates by the
-        inverse. Returned as (x, y, z, w) for a static_transform_publisher whose parent is
-        PARENT_FRAME[side].
+        inverse. Returned as (x, y, z, w), with PARENT_FRAME[side] as the parent.
         """
-        R = np.asarray(self.R1 if side == "left" else self.R2, dtype=np.float64).T
-        trace = np.trace(R)
-        if trace > 0:
-            s = np.sqrt(trace + 1.0) * 2
-            w = 0.25 * s
-            x = (R[2, 1] - R[1, 2]) / s
-            y = (R[0, 2] - R[2, 0]) / s
-            z = (R[1, 0] - R[0, 1]) / s
-        else:
-            i = int(np.argmax(np.diag(R)))
-            j, k = (i + 1) % 3, (i + 2) % 3
-            s = np.sqrt(R[i, i] - R[j, j] - R[k, k] + 1.0) * 2
-            q = [0.0, 0.0, 0.0]
-            q[i] = 0.25 * s
-            q[j] = (R[j, i] + R[i, j]) / s
-            q[k] = (R[k, i] + R[i, k]) / s
-            w = (R[k, j] - R[j, k]) / s
-            x, y, z = q
-        return float(x), float(y), float(z), float(w)
+        T = np.eye(4)
+        T[:3, :3] = np.asarray(self.R1 if side == "left" else self.R2, dtype=np.float64).T
+        return tuple(float(v) for v in tf_transformations.quaternion_from_matrix(T))

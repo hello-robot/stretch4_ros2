@@ -73,15 +73,13 @@ class VisionFrames(str, Enum):
         raise ValueError(f"{camera_name} is not a valid gripper camera name")
 
     @staticmethod
-    def head_stereo_frame(side: str) -> str:
+    def stereo_camera_frame(side: str) -> str:
         """Optical frame of a rectified head stereo image.
 
-        Rectification rotates each camera by ~89.5 degrees, so these are NOT the physical optical
-        frames; rtabmap_glim.launch.py publishes the static transform from each camera to its
-        rectified frame.
+        Rectification rotates each camera, so these are NOT the physical optical frames.
         """
         if side in ("left", "right"):
-            return f"head_stereo_{side}_optical"
+            return f"camera_stereo_{side}_optical_link"
         raise ValueError(f"{side} is not a valid stereo side")
 
     @staticmethod
