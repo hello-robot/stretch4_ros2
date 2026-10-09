@@ -100,7 +100,15 @@ class Stretch4ROSDriver(Node, ABC):
     BACKEND_JOINT_NAMES = {
         "gripper_joint": "stretch_gripper",
     }
-    
+
+    # Default position tolerances (m or rad) the trajectory server uses to decide a
+    # joint has reached a waypoint. Joints not listed fall back to
+    # trajectory_server.default_tolerance.
+    TRAJECTORY_TOLERANCES = {
+        "lift_joint": 0.05,
+        "arm_joint": 0.05,
+    }
+
     def __init__(self,name):
         super().__init__(name)
         self.startup_robot()
@@ -211,8 +219,8 @@ class Stretch4ROSDriver(Node, ABC):
             self.declare_parameter(f"joint_limit.{joint}.velocity",None, desc)
             self.declare_parameter(f"joint_limit.{joint}.acceleration",None, desc)
             self.declare_parameter(f"joint_mode.{joint}","position", ParameterDescriptor(type=ParameterType.PARAMETER_STRING, description=f"Control mode for individual joint (valid options are: {self.joint_modes})"))
-            self.declare_parameter(f"trajectory_server.trajectory_tolerance.{joint}", None, desc)
             #default to position control mode
+            self.declare_parameter(f"trajectory_server.trajectory_tolerance.{joint}", self.TRAJECTORY_TOLERANCES.get(joint), desc)
             
         self.declare_parameter("joint_acceleration.omnibase.linear", None, desc)
         self.declare_parameter("joint_acceleration.omnibase.angular", None, desc)
@@ -1093,6 +1101,13 @@ class StretchTrajectoryActionServer:
         # options are 'zero' (stop between waypoints) or 'smooth'
         # (average slope between prev and next points)
         add_param("velocity_inference", "smooth")
+        # if True, once the final waypoint is reached, joints must stay stopped
+        # (below settling.vel_threshold) for settle_duration seconds before the
+        # goal succeeds; if False, the goal succeeds as soon as the final
+        # waypoint's condition is met, even if joints are still moving
+        add_param("settle_before_return", False)
+        add_param("settle_duration", 0.25)
+        # per-joint tolerances (trajectory_tolerance.<joint>) are declared by the driver
 
     def get_param(self, short_name):
         return self.driver.get_parameter(f"{self.param_prefix}.{short_name}").value
@@ -1188,55 +1203,59 @@ class StretchTrajectoryActionServer:
         feedback_msg.actual.time_from_start = Duration(seconds=elapsed_sec).to_msg()
         return feedback_msg
 
-    def follow_trajectory(self, next_point_condition, first_loop_command, every_loop_command, trajectory, goal_handle):
-        self.driver.logger.warning("Starting to follow trajectory")
-        point_i = 0
+    def _abort(self, goal_handle, error_code, error_string):
+        self.active_joints = None
+        self.driver.get_logger().warn(f"Goal aborted: {error_string}")
+        goal_handle.abort()
+        result = FollowJointTrajectory.Result()
+        result.error_code = error_code
+        result.error_string = error_string
+        return result
+
+    @staticmethod
+    def _msg_seconds(duration_msg):
+        return duration_msg.sec + duration_msg.nanosec*1e-9
+
+    def _seconds_since(self, start_time):
+        return (self.driver.get_clock().now() - start_time).nanoseconds*1e-9
+
+    def follow_trajectory(self, next_point_condition, first_loop_command, every_loop_command, trajectory, goal_handle, settle_on_position):
+        self.driver.logger.info("Starting to follow trajectory")
         start_time = self.driver.get_clock().now()
+        rate = self.driver.create_rate(self.get_param("loop_rate"))
+        timeout = self.get_param("timeout")
+        last_point_i = len(trajectory.points) - 1
 
+        point_i = 0
         prev_state = None
-
         feedback_msg = self._get_feedback(trajectory.points[0], 0.0, trajectory.joint_names)
 
-        rate = self.driver.create_rate(self.get_param("loop_rate"))
-        last_timepoint =self.driver.get_clock().now()
-        counter = 0
-
-        
-        while point_i < len(trajectory.points):
+        while point_i <= last_point_i:
             active_point = trajectory.points[point_i]
-            next_state = trajectory.points[point_i+1] if point_i < len(trajectory.points)-1 else None
-            elapsed_time = self.driver.get_clock().now()-start_time
+            next_state = trajectory.points[point_i+1] if point_i < last_point_i else None
             first = True
-            self.driver.logger.warning(f"On point {point_i}")
-            
-            time_on_this_point = self.driver.get_clock().now()-last_timepoint
-            if time_on_this_point.to_msg().sec + time_on_this_point.to_msg().nanosec * 1e-9 > self.get_param("timeout"):
-                self.active_joints = None
-                self.driver.get_logger().warn("Goal canceled because getting to the next waypoint timed out.")
-                goal_handle.abort()
-                result.error_code = FollowJointTrajectory.Result.PATH_TOLERANCE_VIOLATED
-                result.error_string = "Waypoint took too long"
-                return result
-            
+            self.driver.logger.debug(f"On point {point_i}")
+
+            # A waypoint times out if it is still unsatisfied `timeout` seconds after
+            # its scheduled time (or after we started on it, if that is later).
+            deadline = max(self._seconds_since(start_time), self._msg_seconds(active_point.time_from_start)) + timeout
+
             while True:
                 interrupt_result = self._check_for_interrupt(goal_handle)
                 if interrupt_result is not None:
                     return interrupt_result
-                
+
                 elapsed_time = self.driver.get_clock().now()-start_time
-                
+                if elapsed_time.nanoseconds*1e-9 > deadline:
+                    return self._abort(goal_handle, FollowJointTrajectory.Result.PATH_TOLERANCE_VIOLATED,
+                                       f"Timed out after {timeout}s waiting to reach waypoint {point_i}")
+
                 if first:
-                    #self.driver.logger.warning(f"Time: {self.driver.get_clock().now()-last_timepoint}")
-                    #last_timepoint =self.driver.get_clock().now()
                     pos, vel, acc = first_loop_command(active_point, prev_state, next_state, feedback_msg)
                     first = False
                 else:
-                    #self.driver.logger.warning(f"Time: {self.driver.get_clock().now()-last_timepoint}")
-                    #last_timepoint =self.driver.get_clock().now()
-                    t0 = time.perf_counter_ns()
                     pos, vel, acc = every_loop_command(active_point, prev_state, next_state, feedback_msg)
-                    
-                #t0 = time.perf_counter_ns()
+
                 command = JointState()
                 command.name = trajectory.joint_names
                 command.position = pos if pos is not None else []
@@ -1244,7 +1263,7 @@ class StretchTrajectoryActionServer:
                 command.effort = acc if acc is not None else []
 
                 self.pub_commands.publish(command)
-                    
+
                 succeeded = True
                 for joint_i, joint_name in enumerate(trajectory.joint_names):
                     if pos is not None:
@@ -1257,26 +1276,21 @@ class StretchTrajectoryActionServer:
                             a = acc[joint_i]
                         else:
                             a = None
-                        
+
                         succeeded = succeeded and self.driver.check_and_set_pos(joint_name, pos[joint_i], v, a)
                     elif vel is not None:
                         if acc is not None:
                             a = acc[joint_i]
                         else:
                             a = None
-                        
+
                         succeeded = succeeded and self.driver.check_and_set_vel(joint_name, vel[joint_i], a)
-                    
+
 
                 if not succeeded and self.get_param("strict_mode"):
-                    self.active_joints = None
-                    self.driver.logger.warn("Goal canceled because sending command to a joint failed under strict_mode.")
-                    goal_handle.abort()
-                    result = FollowJointTrajectory.Result()
-                    result.error_code = FollowJointTrajectory.Result.PATH_TOLERANCE_VIOLATED
-                    result.error_string = "Joint command failed in strict mode"
-                    return result
-                
+                    return self._abort(goal_handle, FollowJointTrajectory.Result.PATH_TOLERANCE_VIOLATED,
+                                       "Joint command failed in strict mode")
+
                 feedback_msg = self._get_feedback(active_point, elapsed_time.nanoseconds*1e-9, trajectory.joint_names)
                 goal_handle.publish_feedback(feedback_msg)
 
@@ -1286,7 +1300,7 @@ class StretchTrajectoryActionServer:
 
                 actual = JointState()
                 desired = JointState()
-                
+
                 actual.name = trajectory.joint_names
                 actual.position = feedback_msg.actual.positions
                 actual.velocity = feedback_msg.actual.velocities
@@ -1298,18 +1312,17 @@ class StretchTrajectoryActionServer:
                 self.pub_actual_state.publish(actual)
                 self.pub_desired_state.publish(desired)
 
-                #if counter % 10 == 0:
-                #        print(f"dt: {(time.perf_counter_ns()-t0)/1000.0}")
-                        
                 if next_point_condition(feedback_msg):
-                    #prev_state = copy.deepcopy(feedback_msg.actual)
                     prev_state = copy.deepcopy(feedback_msg.desired)
-                    last_timepoint = self.driver.get_clock().now()
                     break
-                
+
                 rate.sleep()
-                            
-            while point_i < len(trajectory.points): #zip through points until we get to the first unsatisfied point
+
+            # Skip ahead past any intermediate waypoints that are already satisfied.
+            # The final waypoint is never skipped: it always gets commanded, so the
+            # robot's last command is always the trajectory's actual goal.
+            point_i += 1
+            while point_i < last_point_i:
                 active_point = trajectory.points[point_i]
                 elapsed_time = self.driver.get_clock().now()-start_time
 
@@ -1323,8 +1336,17 @@ class StretchTrajectoryActionServer:
                 else:
                     break
             rate.sleep()
-        
-                
+
+        if self.get_param("settle_before_return"):
+            if not settle_on_position:
+                # Velocity-controlled joints keep moving at their last commanded
+                # velocity, so stop them before waiting for the robot to settle.
+                self.stop_vel_joints(trajectory.joint_names)
+
+            settle_result = self._wait_until_settled(trajectory, goal_handle, start_time, rate, settle_on_position)
+            if settle_result is not None:
+                return settle_result
+
         # Successful Completion
         goal_handle.succeed()
         result = FollowJointTrajectory.Result()
@@ -1332,6 +1354,56 @@ class StretchTrajectoryActionServer:
         result.error_string = "Completed trajectory successfully"
         self.driver.get_logger().info('Goal succeeded.')
         return result
+
+    def _wait_until_settled(self, trajectory, goal_handle, start_time, rate, check_position):
+        """Wait for the robot to stop moving at the end of the trajectory.
+
+        The final waypoint's condition can be met while joints are still moving
+        (e.g. in target_priority mode, the moment a moving joint passes within
+        tolerance of the goal), so success is only reported once every joint has
+        stayed below settling.vel_threshold for trajectory_server.settle_duration
+        seconds -- and, if check_position is set, has also stayed within tolerance
+        of the final waypoint.
+
+        Requiring the condition to hold for settle_duration (rather than a single
+        check) also covers the lag between sending the final command and seeing
+        the robot start to move in the joint state.
+
+        Returns None once settled, or an abort result on timeout.
+        """
+        final_point = trajectory.points[-1]
+        vel_threshold = self.driver.get_parameter("settling.vel_threshold").value
+        settle_duration = self.get_param("settle_duration")
+        timeout = self.get_param("timeout")
+        deadline = self._seconds_since(start_time) + timeout
+        settled_since = None
+
+        while True:
+            interrupt_result = self._check_for_interrupt(goal_handle)
+            if interrupt_result is not None:
+                return interrupt_result
+
+            elapsed = self._seconds_since(start_time)
+            feedback_msg = self._get_feedback(final_point, elapsed, trajectory.joint_names)
+            goal_handle.publish_feedback(feedback_msg)
+
+            stopped = all(abs(v) < vel_threshold for v in feedback_msg.actual.velocities)
+            in_position = self.at_target(feedback_msg) if check_position else True
+
+            if stopped and in_position:
+                if settled_since is None:
+                    settled_since = elapsed
+                if elapsed - settled_since >= settle_duration:
+                    return None
+            else:
+                settled_since = None
+
+            if elapsed > deadline:
+                return self._abort(goal_handle, FollowJointTrajectory.Result.GOAL_TOLERANCE_VIOLATED,
+                                   f"Joints did not settle at the final waypoint within {timeout}s "
+                                   f"(stopped: {stopped}, in position: {in_position})")
+
+            rate.sleep()
 
     def stop_vel_joints(self, joint_names):
         for joint_name in joint_names:
@@ -1390,22 +1462,6 @@ class StretchTrajectoryActionServer:
 
         dt = 1.0/self.get_param("loop_rate")
 
-        '''if end_t - start_t < 3.0*dt:
-            #don't do full interpolation if points are very close together
-            pos = active_point.positions if len(active_point.positions) > 0 else None
-            vel = active_point.velocities if len(active_point.velocities) > 0 else None
-            acc = active_point.accelerations if len(active_point.accelerations) > 0 else None
-
-            if vel is None:
-                vel = []
-                for i, joint in enumerate(feedback_msg.joint_names):
-                    if prev_state is not None:
-                        vel.append(active_point.positions[i]-prev_state.positions[i]/(end_t-start_t))
-                    elif end_t > 0:
-                        vel.append(active_point.positions[i]/end_t)
-                    else:
-                        vel.append(0.0)
-            return pos, vel, acc'''
         
         
         for i, goal_pos in enumerate(active_point.positions):
@@ -1457,8 +1513,6 @@ class StretchTrajectoryActionServer:
                     slope1 = (d1)/(dt1) if dt1 != 0.0 else 0.0
                     slope2 = (d2)/(dt2) if dt2 != 0.0 else 0.0
 
-                    print(f"d1: {d1} dt1: {dt1}/d2:{d2} dt2:{dt2}")
-                    
                     end_vel = 0.5*(slope1+slope2)                    
                 else:
                     self.driver.logger.warning("No end velocity specified and unknown velocity inference method. Setting waypoint target velocity to zero")
@@ -1548,7 +1602,6 @@ class StretchTrajectoryActionServer:
         self.driver.get_logger().info(f'Executing trajectory in {mode} mode (mode cannot be changed during execution)')
 
         try:
-            self.driver.get_logger().info(f'Checkpoint')
             trajectory = goal_handle.request.trajectory
             resolved = [
                 self.driver.resolve_joint_name(n) for n in trajectory.joint_names
@@ -1572,6 +1625,7 @@ class StretchTrajectoryActionServer:
                     next_point_condition = self.at_time
                     first_loop_command = self.interpolate_velocities
                     every_loop_command = self.interpolate_velocities
+                    settle_on_position = False
                 case "time_priority":
                     result = self._check_joints_in_mode(
                         goal_handle.request.trajectory.joint_names,
@@ -1583,6 +1637,7 @@ class StretchTrajectoryActionServer:
                     next_point_condition = self.at_time
                     first_loop_command = self.active_point_goal
                     every_loop_command = lambda *args, **kwargs: [None, None, None]
+                    settle_on_position = True
                 case "target_priority":
                     result = self._check_joints_in_mode(
                         goal_handle.request.trajectory.joint_names,
@@ -1594,9 +1649,10 @@ class StretchTrajectoryActionServer:
                     next_point_condition = self.at_target
                     first_loop_command = self.active_point_goal
                     every_loop_command = lambda *args, **kwargs: [None, None, None]
+                    settle_on_position = True
 
 
-            result = self.follow_trajectory(next_point_condition, first_loop_command, every_loop_command, trajectory, goal_handle)
+            result = self.follow_trajectory(next_point_condition, first_loop_command, every_loop_command, trajectory, goal_handle, settle_on_position)
         except Exception as e:
             self.driver.get_logger().error(
                 f"Cannot execute trajectory in {mode} mode because of error {e}.\n"
