@@ -223,39 +223,39 @@ class StretchLiveDriverTester(Node):
         assert res_gp_dt_neg is not None and not res_gp_dt_neg.results[0].successful, "Unexpectedly allowed negative gamepad.dt"
         print(f"{GREEN}✓ Successfully rejected negative value for 'gamepad.dt'{RESET}")
 
-        # Test I: Set valid gamepad.max_vel.lift (0.3)
+        # Test I: Set valid gamepad.max_vel.lift_joint (0.3)
         req_set_gp_vel = SetParameters.Request()
         p_gp_vel = ParameterMsg()
-        p_gp_vel.name = 'gamepad.max_vel.lift'
+        p_gp_vel.name = 'gamepad.max_vel.lift_joint'
         p_gp_vel.value.type = ParameterType.PARAMETER_DOUBLE
         p_gp_vel.value.double_value = 0.3
         req_set_gp_vel.parameters = [p_gp_vel]
         future_gp_vel = self.param_set_cli.call_async(req_set_gp_vel)
         rclpy.spin_until_future_complete(self, future_gp_vel)
         res_gp_vel = future_gp_vel.result()
-        assert res_gp_vel is not None and res_gp_vel.results[0].successful, "Failed to set valid gamepad.max_vel.lift"
-        print(f"{GREEN}✓ Successfully set parameter 'gamepad.max_vel.lift' to 0.3{RESET}")
+        assert res_gp_vel is not None and res_gp_vel.results[0].successful, "Failed to set valid gamepad.max_vel.lift_joint"
+        print(f"{GREEN}✓ Successfully set parameter 'gamepad.max_vel.lift_joint' to 0.3{RESET}")
 
-        # Test J: Set valid gamepad.deadzone.lift (0.02)
+        # Test J: Set valid gamepad.deadzone.lift_joint (0.02)
         req_set_gp_dz = SetParameters.Request()
         p_gp_dz = ParameterMsg()
-        p_gp_dz.name = 'gamepad.deadzone.lift'
+        p_gp_dz.name = 'gamepad.deadzone.lift_joint'
         p_gp_dz.value.type = ParameterType.PARAMETER_DOUBLE
         p_gp_dz.value.double_value = 0.02
         req_set_gp_dz.parameters = [p_gp_dz]
         future_gp_dz = self.param_set_cli.call_async(req_set_gp_dz)
         rclpy.spin_until_future_complete(self, future_gp_dz)
         res_gp_dz = future_gp_dz.result()
-        assert res_gp_dz is not None and res_gp_dz.results[0].successful, "Failed to set valid gamepad.deadzone.lift"
-        print(f"{GREEN}✓ Successfully set parameter 'gamepad.deadzone.lift' to 0.02{RESET}")
+        assert res_gp_dz is not None and res_gp_dz.results[0].successful, "Failed to set valid gamepad.deadzone.lift_joint"
+        print(f"{GREEN}✓ Successfully set parameter 'gamepad.deadzone.lift_joint' to 0.02{RESET}")
 
-        # Test K: Set invalid gamepad.deadzone.lift (1.5) -> should fail
+        # Test K: Set invalid gamepad.deadzone.lift_joint (1.5) -> should fail
         p_gp_dz.value.double_value = 1.5
         future_gp_dz_inv = self.param_set_cli.call_async(req_set_gp_dz)
         rclpy.spin_until_future_complete(self, future_gp_dz_inv)
         res_gp_dz_inv = future_gp_dz_inv.result()
-        assert res_gp_dz_inv is not None and not res_gp_dz_inv.results[0].successful, "Unexpectedly allowed invalid gamepad.deadzone.lift"
-        print(f"{GREEN}✓ Successfully rejected invalid value for 'gamepad.deadzone.lift'{RESET}")
+        assert res_gp_dz_inv is not None and not res_gp_dz_inv.results[0].successful, "Unexpectedly allowed invalid gamepad.deadzone.lift_joint"
+        print(f"{GREEN}✓ Successfully rejected invalid value for 'gamepad.deadzone.lift_joint'{RESET}")
 
     # =========================================================================
     # 2. HOMING & STOWING SERVICE INTERFACES
@@ -602,7 +602,7 @@ class StretchLiveDriverTester(Node):
         # Set joint_mode.lift to position
         req_set = SetParameters.Request()
         p_mode = ParameterMsg()
-        p_mode.name = 'joint_mode.lift'
+        p_mode.name = 'joint_mode.lift_joint'
         p_mode.value.type = ParameterType.PARAMETER_STRING
         p_mode.value.string_value = 'position'
         req_set.parameters = [p_mode]
@@ -614,7 +614,6 @@ class StretchLiveDriverTester(Node):
         # -------------------------------------------------------------
         print(f"\n{BOLD}{CYAN}Test A: 'time_priority' Mode{RESET}")
         assert set_traj_param("mode", "time_priority", ParameterType.PARAMETER_STRING), "Failed to set mode"
-        assert set_traj_param("offset", 0.0, ParameterType.PARAMETER_DOUBLE), "Failed to set offset"
         
         goal_a = make_lift_goal(0.3, 2.0)
         print(f"{YELLOW}Sending goal to move lift to 0.3m in 2.0s using time_priority...{RESET}")
@@ -637,11 +636,11 @@ class StretchLiveDriverTester(Node):
         # -------------------------------------------------------------
         print(f"\n{BOLD}{CYAN}Test B: 'target_priority' Mode{RESET}")
         assert set_traj_param("mode", "target_priority", ParameterType.PARAMETER_STRING), "Failed to set mode"
-        assert set_traj_param("threshold", 0.05, ParameterType.PARAMETER_DOUBLE), "Failed to set threshold"
+        assert set_traj_param("default_tolerance", 0.05, ParameterType.PARAMETER_DOUBLE), "Failed to set default_tolerance"
         assert set_traj_param("timeout", 5.0, ParameterType.PARAMETER_DOUBLE), "Failed to set timeout"
 
         goal_b = make_lift_goal(0.6, 2.0)
-        print(f"{YELLOW}Sending goal to move lift to 0.6m (threshold 0.05) using target_priority...{RESET}")
+        print(f"{YELLOW}Sending goal to move lift to 0.6m (default_tolerance 0.05) using target_priority...{RESET}")
         
         send_goal_future = self.trajectory_client.send_goal_async(goal_b)
         rclpy.spin_until_future_complete(self, send_goal_future)
@@ -664,21 +663,18 @@ class StretchLiveDriverTester(Node):
         self.ros_sleep(1.0)
 
         # -------------------------------------------------------------
-        # Test C: pid_normal mode (calculates and sends velocities)
+        # Test C: adaptive_velocity mode (follows an interpolated velocity profile)
         # -------------------------------------------------------------
-        print(f"\n{BOLD}{CYAN}Test C: 'pid_normal' Mode{RESET}")
-        assert set_traj_param("mode", "pid_normal", ParameterType.PARAMETER_STRING), "Failed to set mode"
-        assert set_traj_param("kp", 2.0, ParameterType.PARAMETER_DOUBLE), "Failed to set kp"
-        assert set_traj_param("ki", 0.05, ParameterType.PARAMETER_DOUBLE), "Failed to set ki"
-        assert set_traj_param("kd", 0.1, ParameterType.PARAMETER_DOUBLE), "Failed to set kd"
+        print(f"\n{BOLD}{CYAN}Test C: 'adaptive_velocity' Mode{RESET}")
+        assert set_traj_param("mode", "adaptive_velocity", ParameterType.PARAMETER_STRING), "Failed to set mode"
 
-        # Change joint mode of lift to velocity first because pid_normal outputs velocities
+        # Change joint mode of lift to velocity first because adaptive_velocity outputs velocities
         p_mode.value.string_value = 'velocity'
         future = self.param_set_cli.call_async(req_set)
         rclpy.spin_until_future_complete(self, future)
 
         goal_c = make_lift_goal(0.4, 2.0)
-        print(f"{YELLOW}Sending goal to move lift to 0.4m using pid_normal PID control...{RESET}")
+        print(f"{YELLOW}Sending goal to move lift to 0.4m using adaptive_velocity...{RESET}")
         
         send_goal_future = self.trajectory_client.send_goal_async(goal_c)
         rclpy.spin_until_future_complete(self, send_goal_future)
@@ -697,36 +693,9 @@ class StretchLiveDriverTester(Node):
             idx = self.latest_joint_state.name.index("lift_joint")
             pos = self.latest_joint_state.position[idx]
             print(f"  Final position: {pos:.3f} m")
-            assert abs(pos - 0.4) < 0.1, f"PID failed to regulate to target position! Expected 0.4, got {pos}"
-        print(f"{GREEN}✓ pid_normal test passed successfully!{RESET}")
+            assert abs(pos - 0.4) < 0.1, f"adaptive_velocity failed to reach target position! Expected 0.4, got {pos}"
+        print(f"{GREEN}✓ adaptive_velocity test passed successfully!{RESET}")
         self.ros_sleep(1.0)
-
-        # -------------------------------------------------------------
-        # Test D: pid_correction mode (REMOVED)
-        # -------------------------------------------------------------
-        # print(f"\n{BOLD}{CYAN}Test D: 'pid_correction' Mode{RESET}")
-        # assert set_traj_param("mode", "pid_correction", ParameterType.PARAMETER_STRING), "Failed to set mode"
-        # 
-        # # Restore lift joint mode to position since pid_correction adds correction on top of position commands
-        # p_mode.value.string_value = 'position'
-        # future = self.param_set_cli.call_async(req_set)
-        # rclpy.spin_until_future_complete(self, future)
-        # 
-        # goal_d = make_lift_goal(0.5, 2.0)
-        # print(f"{YELLOW}Sending goal to move lift to 0.5m using pid_correction...{RESET}")
-        # 
-        # send_goal_future = self.trajectory_client.send_goal_async(goal_d)
-        # rclpy.spin_until_future_complete(self, send_goal_future)
-        # goal_handle = send_goal_future.result()
-        # assert goal_handle.accepted, "Goal was rejected!"
-        # 
-        # get_result_future = goal_handle.get_result_async()
-        # rclpy.spin_until_future_complete(self, get_result_future)
-        # result = get_result_future.result()
-        # 
-        # assert result.result.error_code == FollowJointTrajectory.Result.SUCCESSFUL, f"Goal failed: {result.result.error_code}"
-        # print(f"{GREEN}✓ pid_correction test passed successfully!{RESET}")
-        # self.ros_sleep(2.0)
 
         # -------------------------------------------------------------
         # Test E: Interruption via direct joint commands (preemption)
@@ -887,7 +856,7 @@ class StretchLiveDriverTester(Node):
         # Restore lift joint mode to position
         req_set = SetParameters.Request()
         p_mode = ParameterMsg()
-        p_mode.name = 'joint_mode.lift'
+        p_mode.name = 'joint_mode.lift_joint'
         p_mode.value.type = ParameterType.PARAMETER_STRING
         p_mode.value.string_value = 'position'
         req_set.parameters = [p_mode]
@@ -1060,7 +1029,7 @@ class StretchLiveDriverTester(Node):
         # Set joint_mode.lift to velocity mode before testing stop_the_robot
         req_set = SetParameters.Request()
         p_mode = ParameterMsg()
-        p_mode.name = 'joint_mode.lift'
+        p_mode.name = 'joint_mode.lift_joint'
         p_mode.value.type = ParameterType.PARAMETER_STRING
         p_mode.value.string_value = 'velocity'
         req_set.parameters = [p_mode]
