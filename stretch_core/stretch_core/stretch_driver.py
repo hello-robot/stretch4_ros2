@@ -242,10 +242,12 @@ class StretchDriver(Stretch4ROSDriver):
             pos, vel, eff = cg.joint_state(robot_status)
 
             if cg.name == "arm_joint":
+                # the arm's extension is split evenly across its four telescoping links
+                # (arm_l1..arm_l4); command_joint_pose_from_joint_state sums them back up
                 for link in ['arm_l4_joint', 'arm_l3_joint', 'arm_l2_joint', 'arm_l1_joint']:
                     joint_state.name.append(link)
-                    joint_state.position.append(pos/5.0)
-                    joint_state.velocity.append(vel/5.0)
+                    joint_state.position.append(pos/4.0)
+                    joint_state.velocity.append(vel/4.0)
                     joint_state.effort.append(eff)
                     
             elif cg.name == "gripper_joint":
