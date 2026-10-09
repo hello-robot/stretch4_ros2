@@ -524,7 +524,7 @@ class StretchDriver(Stretch4ROSDriver):
         battery_state.temperature = float(robot_status['power_periph']['temp'])
         battery_state.percentage = float(robot_status['power_periph']['battery_soc']) / 100.0
 
-        if robot_status['power_periph']['adapter_connected']:
+        if robot_status['power_periph']['adapter_voltage_present']:
             if robot_status['power_periph']['charger_is_charging']:
                 battery_state.power_supply_status = BatteryState.POWER_SUPPLY_STATUS_CHARGING
             else:
@@ -605,8 +605,9 @@ class StretchDriver(Stretch4ROSDriver):
         is_homing_msg = DiagnosticStatus(name="is_homing")
         is_runstopped_msg = DiagnosticStatus(name="is_runstopped")
         current_msg = DiagnosticStatus(name="current")
+        in_collision_msg = DiagnosticStatus(name="in_collision")
 
-        
+
         for cg in self.joint_command_groups:
             pos, vel, eff = cg.joint_state(robot_status)
             if cg.name == "translate_mobile_base":
@@ -637,6 +638,7 @@ class StretchDriver(Stretch4ROSDriver):
             is_homed_msg.values.append(KeyValue(key=cg.name, value=f"{is_homed}"))
             is_homing_msg.values.append(KeyValue(key=cg.name, value=f"{is_homing}"))
             is_runstopped_msg.values.append(KeyValue(key=cg.name, value=f"{is_runstopped}"))
+            in_collision_msg.values.append(KeyValue(key=cg.name, value=f"{status_dict['in_collision_stop']}"))
 
         joint_state_diagnostics.status.append(is_runstopped_msg)
         joint_state_diagnostics.status.append(is_homed_msg)
@@ -645,6 +647,7 @@ class StretchDriver(Stretch4ROSDriver):
         joint_state_diagnostics.status.append(soft_limits_msg)
         joint_state_diagnostics.status.append(braking_distance_msg)
         joint_state_diagnostics.status.append(current_msg)
+        joint_state_diagnostics.status.append(in_collision_msg)
 
         return joint_state_diagnostics
     
