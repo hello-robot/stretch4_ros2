@@ -155,7 +155,7 @@ class StretchDriver(Node):
                 joint_metadata = RobotJoints.get_joint_by_name(joint)
                 is_gripper = joint_metadata is RobotJoints.gripper
 
-                set_vel_fn = lambda d, a, j=joint, c=joint_client: end_of_arm.quick_stop(j) if d == 0.0 else c.move_by(d, a_r=a)
+                set_vel_fn = lambda d, a, j=joint: self.robot.end_of_arm.hold_position(j) if d == 0.0 else self.robot.end_of_arm.move_by(j, d, a_r = a)
                 self.set_vel_functions[f'{joint}_joint'] = set_vel_fn
                 self.joint_metadata_cache[f'{joint}_joint'] = joint_metadata
 
