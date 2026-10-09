@@ -1243,8 +1243,14 @@ class StretchTrajectoryActionServer:
         self.active_joints = list(trajectory.joint_names)
 
         point_i = 0
-        prev_state = None
         feedback_msg = self._get_feedback(trajectory.points[0], 0.0, trajectory.joint_names)
+
+        # The trajectory starts from the robot's current state at t=0, so the
+        # segment to the first waypoint is interpolated like any other segment.
+        prev_state = JointTrajectoryPoint()
+        prev_state.positions = list(feedback_msg.actual.positions)
+        prev_state.velocities = list(feedback_msg.actual.velocities)
+        prev_state.time_from_start = Duration(seconds=0.0).to_msg()
 
         while point_i <= last_point_i:
             active_point = trajectory.points[point_i]
@@ -1471,7 +1477,7 @@ class StretchTrajectoryActionServer:
     def interpolate(self, active_point, prev_state, next_state, feedback_msg):
         now = feedback_msg.actual.time_from_start.sec + feedback_msg.actual.time_from_start.nanosec*1e-9
         end_t = active_point.time_from_start.sec + active_point.time_from_start.nanosec*1e-9
-        start_t = prev_state.time_from_start.sec + prev_state.time_from_start.nanosec*1e-9 if prev_state is not None else now
+        start_t = self._msg_seconds(prev_state.time_from_start)
         prop_elapsed = (now-start_t)/(end_t-start_t) if end_t != start_t else 1.0
         secs_remaining = end_t-now
         target_poses = []
@@ -1501,9 +1507,7 @@ class StretchTrajectoryActionServer:
             current_vel = feedback_msg.actual.velocities[i]
 
             
-            if prev_state is None:
-                start_vel = 0.0
-            elif prev_state.velocities is not None and len(prev_state.velocities) > 0:
+            if prev_state.velocities is not None and len(prev_state.velocities) > 0:
                 start_vel = prev_state.velocities[i]
             else:
                 self.driver.logger.error("Previous state should have velocities; check your code!")
@@ -1519,14 +1523,14 @@ class StretchTrajectoryActionServer:
                     end_vel = 0.0
                 elif self.get_param("velocity_inference") == "smooth":
                     d2 = next_state.positions[i] - active_point.positions[i]
-                    d1 = active_point.positions[i] - prev_state.positions[i] if prev_state is not None else d2
-                    
-                    t0 = prev_state.time_from_start.sec + prev_state.time_from_start.nanosec*1e-9 if prev_state is not None else None
-                    t1 = active_point.time_from_start.sec + active_point.time_from_start.nanosec*1e-9
-                    t2 = next_state.time_from_start.sec + next_state.time_from_start.nanosec*1e-9
+                    d1 = active_point.positions[i] - prev_state.positions[i]
+
+                    t0 = self._msg_seconds(prev_state.time_from_start)
+                    t1 = self._msg_seconds(active_point.time_from_start)
+                    t2 = self._msg_seconds(next_state.time_from_start)
 
                     dt2 = t2-t1
-                    dt1 = t1-t0 if t0 is not None else dt2
+                    dt1 = t1-t0
 
                     slope1 = (d1)/(dt1) if dt1 != 0.0 else 0.0
                     slope2 = (d2)/(dt2) if dt2 != 0.0 else 0.0
@@ -1537,7 +1541,7 @@ class StretchTrajectoryActionServer:
                     end_vel = 0.0
 
                            
-            start_pos = prev_state.positions[i] if prev_state is not None else current_pos
+            start_pos = prev_state.positions[i]
             end_pos = active_point.positions[i]
             
             """
