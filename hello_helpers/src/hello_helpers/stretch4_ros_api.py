@@ -105,8 +105,8 @@ class Stretch4ROSDriver(Node, ABC):
     # joint has reached a waypoint. Joints not listed fall back to
     # trajectory_server.default_tolerance.
     TRAJECTORY_TOLERANCES = {
-        "lift_joint": 0.05,
-        "arm_joint": 0.05,
+        "lift_joint": 0.01,
+        "arm_joint": 0.01,
     }
 
     def __init__(self,name):
@@ -1095,7 +1095,7 @@ class StretchTrajectoryActionServer:
         add_param("kp", 0.1)
         add_param("ki", 0.001)
         add_param("kd", 0.01)
-        add_param("default_tolerance", 0.1)
+        add_param("default_tolerance", 0.05)
         add_param("loop_rate", 50.0)
         # if velocity not specified, how to do interpolation
         # options are 'zero' (stop between waypoints) or 'smooth'
