@@ -291,7 +291,7 @@ class StretchLiveDriverTester(Node):
 
         # Construct position command for the lift joint
         js = JointState()
-        js.name = ["lift"]
+        js.name = ["lift_joint"]
         js.position = [0.5]
         
         # Publish command multiple times to ensure subscriber receives it
@@ -324,7 +324,7 @@ class StretchLiveDriverTester(Node):
         print_robot_behavior("The simulated gripper should set to a few values, and we will verify the left and right finger joints sum up to the commanded value.")
         for target_gripper_val in [0.1, 0.25]:
             js = JointState()
-            js.name = ["stretch_gripper"]
+            js.name = ["gripper_joint"]
             js.position = [target_gripper_val]
             
             for _ in range(5):
@@ -396,26 +396,26 @@ class StretchLiveDriverTester(Node):
         assert self.latest_joint_state is not None, "No JointState received yet!"
 
         def get_joint_pos(joint_name):
-            if joint_name == "arm":
+            if joint_name == "arm_joint":
                 arm_positions = [self.latest_joint_state.position[self.latest_joint_state.name.index(link)] for link in ['arm_l1_joint', 'arm_l2_joint', 'arm_l3_joint', 'arm_l4_joint']]
                 return sum(arm_positions)
-            elif joint_name == "stretch_gripper":
+            elif joint_name == "gripper_joint":
                 idx_l = self.latest_joint_state.name.index("gripper_finger_left_joint")
                 idx_r = self.latest_joint_state.name.index("gripper_finger_right_joint")
                 return self.latest_joint_state.position[idx_l] + self.latest_joint_state.position[idx_r]
             else:
-                actual_name = "lift_joint" if joint_name == "lift" else f"{joint_name}_joint"
+                actual_name = joint_name
                 idx = self.latest_joint_state.name.index(actual_name)
                 return self.latest_joint_state.position[idx]
 
         joints_to_test = [
             # (joint_name, test_vel, duration, threshold, check_positive)
-            ("lift", 0.08, 2.0, 0.05, True),
-            ("arm", 0.05, 2.0, 0.03, True),
-            ("wrist_yaw", 0.15, 1.5, 0.05, False),
-            ("wrist_pitch", 0.15, 1.5, 0.05, False),
-            ("wrist_roll", 0.15, 1.5, 0.05, False),
-            ("stretch_gripper", 0.1, 1.5, 0.02, False),
+            ("lift_joint", 0.08, 2.0, 0.05, True),
+            ("arm_joint", 0.05, 2.0, 0.03, True),
+            ("wrist_yaw_joint", 0.15, 1.5, 0.05, False),
+            ("wrist_pitch_joint", 0.15, 1.5, 0.05, False),
+            ("wrist_roll_joint", 0.15, 1.5, 0.05, False),
+            ("gripper_joint", 0.1, 1.5, 0.02, False),
         ]
 
         for joint_name, test_vel, duration, threshold, check_positive in joints_to_test:
@@ -531,7 +531,7 @@ class StretchLiveDriverTester(Node):
 
         # Step 2: Attempt position command (should be blocked)
         js = JointState()
-        js.name = ["lift"]
+        js.name = ["lift_joint"]
         js.position = [0.9]  # Command lift to go high up
         for _ in range(5):
             self.position_cmd_pub.publish(js)
@@ -571,7 +571,7 @@ class StretchLiveDriverTester(Node):
         # Helper to construct a simple 1-waypoint trajectory goal for the lift joint
         def make_lift_goal(pos_target, time_from_start_sec):
             goal = FollowJointTrajectory.Goal()
-            goal.trajectory.joint_names = ["lift"]
+            goal.trajectory.joint_names = ["lift_joint"]
             
             point = JointTrajectoryPoint()
             point.positions = [float(pos_target)]
@@ -754,7 +754,7 @@ class StretchLiveDriverTester(Node):
         # Send a direct position command to the lift joint to preempt it
         print(f"{YELLOW}Publishing direct joint command to 'lift' joint to preempt the active goal...{RESET}")
         js = JointState()
-        js.name = ["lift"]
+        js.name = ["lift_joint"]
         js.position = [0.45]
         self.position_cmd_pub.publish(js)
         
@@ -816,7 +816,7 @@ class StretchLiveDriverTester(Node):
         assert set_traj_param("mode", "time_priority", ParameterType.PARAMETER_STRING), "Failed to set mode"
         
         # Set relevant joints to position mode
-        for joint in ["wrist_pitch", "wrist_roll", "stretch_gripper", "wrist_yaw"]:
+        for joint in ["wrist_pitch_joint", "wrist_roll_joint", "gripper_joint", "wrist_yaw_joint"]:
             req_set_joint = SetParameters.Request()
             p_joint_mode = ParameterMsg()
             p_joint_mode.name = f'joint_mode.{joint}'
@@ -828,7 +828,7 @@ class StretchLiveDriverTester(Node):
 
         # Build trajectory goal
         goal_g = FollowJointTrajectory.Goal()
-        goal_g.trajectory.joint_names = ["wrist_pitch", "wrist_yaw", "wrist_roll", "stretch_gripper"]
+        goal_g.trajectory.joint_names = ["wrist_pitch_joint", "wrist_yaw_joint", "wrist_roll_joint", "gripper_joint"]
         
         # Create 40 waypoints over 8.0 seconds to trace a circle
         num_points = 40
@@ -895,14 +895,14 @@ class StretchLiveDriverTester(Node):
         rclpy.spin_until_future_complete(self, future)
 
         tests = [
-            ("lift", 0.4),
-            ("lift", 0.6),
-            ("lift", 0.8),
-            ("wrist_yaw", 1.0),
-            ("wrist_pitch", 0.2),
-            ("wrist_roll", 0.5),
-            ("stretch_gripper", 0.5),
-            ("arm", 0.3)
+            ("lift_joint", 0.4),
+            ("lift_joint", 0.6),
+            ("lift_joint", 0.8),
+            ("wrist_yaw_joint", 1.0),
+            ("wrist_pitch_joint", 0.2),
+            ("wrist_roll_joint", 0.5),
+            ("gripper_joint", 0.5),
+            ("arm_joint", 0.3)
         ]
 
         for joint, target in tests:
@@ -916,14 +916,14 @@ class StretchLiveDriverTester(Node):
             self.ros_sleep(2.5)
                 
             # Get actual position from /joint_states
-            actual_joint_name = "lift_joint" if joint == "lift" else f"{joint}_joint"
-            if joint == "arm":
+            actual_joint_name = joint
+            if joint == "arm_joint":
                 actual_joint_name = "arm_l1_joint"  # or sum of arm_l1_joint..arm_l4_joint
-            elif joint == "stretch_gripper":
+            elif joint == "gripper_joint":
                 actual_joint_name = "gripper_finger_left_joint"
                 
             if self.latest_joint_state is not None:
-                if joint == "arm":
+                if joint == "arm_joint":
                     # Sum of arm_l1_joint to arm_l4_joint
                     arm_positions = [self.latest_joint_state.position[self.latest_joint_state.name.index(link)] for link in ['arm_l1_joint', 'arm_l2_joint', 'arm_l3_joint', 'arm_l4_joint']]
                     pos = sum(arm_positions)
@@ -975,13 +975,13 @@ class StretchLiveDriverTester(Node):
             return goal
 
         trajectory_tests = [
-            ("lift", 0.4),
-            ("lift", 0.6),
-            ("lift", 0.8),
-            ("wrist_yaw", 0.5),
-            ("wrist_pitch", 0.2),
-            ("wrist_roll", 0.4),
-            ("stretch_gripper", 0.1),
+            ("lift_joint", 0.4),
+            ("lift_joint", 0.6),
+            ("lift_joint", 0.8),
+            ("wrist_yaw_joint", 0.5),
+            ("wrist_pitch_joint", 0.2),
+            ("wrist_roll_joint", 0.4),
+            ("gripper_joint", 0.1),
         ]
 
         for joint, target in trajectory_tests:
@@ -998,8 +998,8 @@ class StretchLiveDriverTester(Node):
                 # Sleep and spin to let telemetry settle
                 self.ros_sleep(2.0)
                 
-                actual_joint_name = "lift_joint" if joint == "lift" else f"{joint}_joint"
-                if joint == "stretch_gripper":
+                actual_joint_name = joint
+                if joint == "gripper_joint":
                     actual_joint_name = "gripper_finger_left_joint"
                 if self.latest_joint_state is not None:
                     idx = self.latest_joint_state.name.index(actual_joint_name)
@@ -1069,7 +1069,7 @@ class StretchLiveDriverTester(Node):
 
         # Command lift upward via velocity
         js_vel = JointState()
-        js_vel.name = ["lift"]
+        js_vel.name = ["lift_joint"]
         js_vel.velocity = [0.1]
         self.velocity_cmd_pub.publish(js_vel)
         self.ros_sleep(1.0) # Let it move a bit

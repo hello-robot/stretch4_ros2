@@ -4,13 +4,49 @@ import sys
 import launch_ros
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, OpaqueFunction
+from launch.logging import get_logger
 from launch.substitutions import Command, LaunchConfiguration
 from launch_ros.actions import Node
 from stretch4_urdf import get_urdf_from_robot_params
 
+DEPRECATED_DRIVER_MODES = {
+    "position": "active",
+    "navigation": "active",
+    "velocity": "active",
+}
+
+CONTROL_MODES = ["active", "teleop"]
+DEFAULT_MODE = "active"
+
+
+def resolve_mode(context):
+    """Map a pre-alignment mode onto its replacement, warning loudly if used.
+
+    Anything this cannot map falls back to DEFAULT_MODE, which is how the driver has
+    always treated a mode outside its control_modes: warn and carry on rather than
+    refuse to start. Never returns None -- the value is passed straight to the node as
+    a parameter, and None is not a usable parameter value.
+    """
+    requested = LaunchConfiguration("mode").perform(context)
+    logger = get_logger("launch.user")
+
+    if requested in CONTROL_MODES:
+        return requested
+    elif requested in DEPRECATED_DRIVER_MODES:
+        replacement = DEPRECATED_DRIVER_MODES[requested]
+        logger.warning(
+            f"DEPRECATION WARNING: {requested} mode is DEPRECATED.  Valid driver control modes are {CONTROL_MODES}. "
+            f"Launching with mode:={replacement}."
+        )
+        return replacement
+    else:
+        # This should not be reachable
+        logger.error(f"Unexpected driver control mode {requested}, defaulting to {DEFAULT_MODE}")
+        return DEFAULT_MODE
+
 
 def compile_robot_description(context, *args, **kwargs):
-    """This OpaqueFunction compiles the robot's default URDF 
+    """This OpaqueFunction compiles the robot's default URDF
     and spawns the robot_state_publisher with the correct namespace.
     """
 
@@ -67,8 +103,9 @@ def generate_launch_description():
     # Driver mode
     declare_mode_arg = DeclareLaunchArgument(
         'mode',
-        default_value='navigation', choices=['position', 'velocity', 'navigation', 'teleop'],
-        description='The mode in which the ROS driver commands the robot'
+        default_value=DEFAULT_MODE, choices=CONTROL_MODES + list(DEPRECATED_DRIVER_MODES.keys()),
+        description='The mode in which the ROS driver commands the robot. '
+                    f'{list(DEPRECATED_DRIVER_MODES.keys())} are deprecated: they are replaced by {DEFAULT_MODE}.'
     )
     ld.add_action(declare_mode_arg)
 
@@ -88,10 +125,20 @@ def generate_launch_description():
     )
     ld.add_action(action_timeout_arg)
 
+    # Deprecated interface shims
+    declare_deprecated_interfaces_arg = DeclareLaunchArgument(
+        "deprecated_interfaces",
+        default_value="True",
+        choices=["True", "False", "true", "false"],
+        description="Launch joint_jog_converter to republish deprecated joint_vel (JointJog) commands as joint_velocity_cmd (JointState) commands.",
+    )
+    ld.add_action(declare_deprecated_interfaces_arg)
+
     # Convert the robot_id LaunchConfiguration into a python string so we can check it
     def add_stretch_driver(context, *args, **kwargs):
         prefix = LaunchConfiguration('driver_namespace').perform(context)
         ns = prefix if prefix != 'UNSET' else ''
+        mode = resolve_mode(context)
         stretch_driver = Node(package='stretch_core',
                               executable='stretch_driver',
                               name='stretch_driver',
@@ -99,7 +146,7 @@ def generate_launch_description():
                               emulate_tty=True,
                               output='screen',
                               parameters=[{'broadcast_odom_tf': LaunchConfiguration('broadcast_odom_tf')},
-                                          {'mode': LaunchConfiguration('mode')},
+                                          {'mode': mode},
                                           {'action_timeout': LaunchConfiguration('action_timeout')}],
                               ros_arguments=['--log-level', ['stretch_driver:=', LaunchConfiguration('log_level')]],
         )
@@ -107,5 +154,25 @@ def generate_launch_description():
 
     add_stretch_driver_fn = OpaqueFunction(function=add_stretch_driver)
     ld.add_action(add_stretch_driver_fn)
+
+    def add_deprecated_interfaces(context, *args, **kwargs):
+        if (
+            LaunchConfiguration("deprecated_interfaces").perform(context).lower()
+            != "true"
+        ):
+            return []
+        prefix = LaunchConfiguration("driver_namespace").perform(context)
+        ns = prefix if prefix != "UNSET" else ""
+        joint_jog_converter = Node(
+            package="stretch_core",
+            executable="joint_jog_converter",
+            name="joint_jog_converter",
+            namespace=ns,
+            emulate_tty=True,
+            output="screen",
+        )
+        return [joint_jog_converter]
+
+    ld.add_action(OpaqueFunction(function=add_deprecated_interfaces))
 
     return ld

@@ -1,12 +1,14 @@
 #! /usr/bin/env python3
 
 from abc import ABC, abstractmethod
+from enum import Enum
 from typing import Any
 import threading
 from threading import Lock
 import time
 import copy
 import numpy as np
+import traceback
 
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.action.server import ServerGoalHandle
@@ -41,11 +43,72 @@ from hello_helpers.joy_conversion import (
 )
 
 
+class JointMode(str, Enum):
+    POSITION = "position"
+    VELOCITY = "velocity"
+    SETTLING = "settling"
+
+    def __str__(self):
+        return self.value
+
+
+class DriverMode(str, Enum):
+    ACTIVE = "active"
+    TELEOP = "teleop"
+    HOMING = "homing"
+    STOWING = "stowing"
+    RUNSTOPPED = "runstopped"
+
+    def __str__(self):
+        return self.value
+
+
 class Stretch4ROSDriver(Node, ABC):
     command_joints = None
-    joint_modes = ["position", "velocity", "settling"]
+    joint_modes = [mode.value for mode in JointMode]
+    position_mode = JointMode.POSITION
+    velocity_mode = JointMode.VELOCITY
+    settling_mode = JointMode.SETTLING
     velocity_joints = None
-    
+
+    driver_modes = [mode.value for mode in DriverMode]
+    active_mode = DriverMode.ACTIVE
+    teleop_mode = DriverMode.TELEOP
+    homing_mode = DriverMode.HOMING
+    stowing_mode = DriverMode.STOWING
+    runstopped_mode = DriverMode.RUNSTOPPED
+
+    control_modes = [DriverMode.ACTIVE.value, DriverMode.TELEOP.value]
+    priority_modes = [DriverMode.HOMING.value, DriverMode.STOWING.value, DriverMode.RUNSTOPPED.value]
+    default_mode = DriverMode.ACTIVE
+
+    DEPRECATED_CONTROL_MODES = {
+        "position": (DriverMode.ACTIVE, JointMode.POSITION),
+        "navigation": (DriverMode.ACTIVE, JointMode.POSITION),
+        "velocity": (DriverMode.ACTIVE, JointMode.VELOCITY),
+    }
+
+    # Extra spellings accepted for a command joint on command messages and trajectory
+    # goals. Parameters are never aliased -- a parameter name cannot be.
+    JOINT_NAME_ALIASES = {
+        "stretch_gripper_joint": "gripper_joint",
+        "gripper_aperture": "gripper_joint",
+    }
+
+    # Command joints whose stretch_body / stretch_mujoco name is not the command joint
+    # with '_joint' removed.
+    BACKEND_JOINT_NAMES = {
+        "gripper_joint": "stretch_gripper",
+    }
+
+    # Default position tolerances (m or rad) the trajectory server uses to decide a
+    # joint has reached a waypoint. Joints not listed fall back to
+    # trajectory_server.default_tolerance.
+    TRAJECTORY_TOLERANCES = {
+        "lift_joint": 0.01,
+        "arm_joint": 0.01,
+    }
+
     def __init__(self,name):
         super().__init__(name)
         self.startup_robot()
@@ -55,10 +118,6 @@ class Stretch4ROSDriver(Node, ABC):
         self.logger.info("For use with S T R E T C H (TM) RESEARCH EDITION from Hello Robot Inc.")
         
         self.logger.info("{0} started".format(self.node_name))
-
-        self.control_modes = ['active', 'teleop']
-        self.default_mode = 'active'
-        self.priority_modes = ['homing', 'stowing', 'runstopped']
         
         self._declare_common_params()
         self.declare_node_params()
@@ -94,7 +153,9 @@ class Stretch4ROSDriver(Node, ABC):
         mode=self.get_parameter('mode').value
         if mode not in self.control_modes:
             self.logger.warn(f'given invalid mode={mode}, using {self.default_mode} instead')
-            self.set_parameters([Parameter("mode",Parameter.Type.STRING,self.default_mode)])
+            self.set_parameters(
+                [Parameter("mode", Parameter.Type.STRING, self.default_mode.value)]
+            )
             mode = self.get_parameter("mode").value
             
         self.logger.info('mode = ' + str(mode))
@@ -141,7 +202,7 @@ class Stretch4ROSDriver(Node, ABC):
         pass
     
     def _declare_common_params(self):
-        self.declare_parameter('mode',self.default_mode)
+        self.declare_parameter("mode", self.default_mode.value)
         self.declare_parameter('sensitivity','default')
         self.declare_parameter('broadcast_odom_tf', False) # based on wheel odometry
 
@@ -159,6 +220,7 @@ class Stretch4ROSDriver(Node, ABC):
             self.declare_parameter(f"joint_limit.{joint}.acceleration",None, desc)
             self.declare_parameter(f"joint_mode.{joint}","position", ParameterDescriptor(type=ParameterType.PARAMETER_STRING, description=f"Control mode for individual joint (valid options are: {self.joint_modes})"))
             #default to position control mode
+            self.declare_parameter(f"trajectory_server.trajectory_tolerance.{joint}", self.TRAJECTORY_TOLERANCES.get(joint), desc)
             
         self.declare_parameter("joint_acceleration.omnibase.linear", None, desc)
         self.declare_parameter("joint_acceleration.omnibase.angular", None, desc)
@@ -318,11 +380,72 @@ class Stretch4ROSDriver(Node, ABC):
     # mode change fails.  Otherwise it will return a boolean with whether the
     # mode change succeeded.
     def change_mode(self, mode, require_success = False):
-        mode_param = Parameter("mode",Parameter.Type.STRING,mode)
+        mode_param = Parameter("mode", Parameter.Type.STRING, str(mode))
         result = self.set_parameters([mode_param])[0]
         if not result.successful and require_success:
             raise RuntimeError(f"Failed to change mode parameter to {mode} when strict success checking is enabled. Reason: {result.reason}")
         return result.successful
+
+    # How often a repeated per-joint mode complaint may be logged. These sit on paths
+    # that run per command message or per control loop, so they need a rate limit.
+    MODE_WARNING_PERIOD_S = 5.0
+
+    def resolve_joint_name(self, name):
+        """Return the command joint `name` addresses, accepting JOINT_NAME_ALIASES.
+
+        A name matching no command joint is returned unchanged, leaving the complaint
+        to the caller, which knows what interface it arrived on.
+        """
+        if self.command_joints and name in self.command_joints:
+            return name
+        joint = self.JOINT_NAME_ALIASES.get(name)
+        if joint is not None and self.command_joints and joint in self.command_joints:
+            return joint
+        return name
+
+    def backend_joint_name(self, name):
+        """Translate a command joint ('lift_joint') into its actuator name ('lift').
+
+        Called by concrete drivers where they dispatch into stretch_body or
+        stretch_mujoco.
+        """
+        backend = self.BACKEND_JOINT_NAMES.get(name)
+        if backend is not None:
+            return backend
+        return name[: -len("_joint")] if name.endswith("_joint") else name
+
+    def replace_deprecated_mode(self, legacy_mode):
+        """Set the control mode and joint_mode according to the legacy robot mode."""
+        replacement, joint_mode = self.DEPRECATED_CONTROL_MODES[legacy_mode]
+
+        if joint_mode == JointMode.VELOCITY:
+            joints = self.velocity_joints or []
+        else:
+            joints = self.command_joints or []
+
+        self.logger.warn(
+            f"mode '{legacy_mode}' is DEPRECATED and is no longer a robot mode. "
+            f"Setting control mode to '{replacement}'"
+            + (
+                f" and joint_mode.<joint> to '{joint_mode}' for {list(joints)}"
+                if joints
+                else ""
+            )
+            + f". Valid driver control modes are {self.control_modes} and joint modes are {self.joint_modes}"
+        )
+
+        params = [Parameter("mode", Parameter.Type.STRING, str(replacement))]
+        params += [
+            Parameter(f"joint_mode.{joint}", Parameter.Type.STRING, joint_mode.value)
+            for joint in joints
+        ]
+
+        for param, result in zip(params, self.set_parameters(params)):
+            if not result.successful:
+                self.logger.error(
+                    f"Failed to apply '{param.name}' while replacing deprecated mode "
+                    f"'{legacy_mode}': {result.reason}"
+                )
     
     def update_parameter(self, parameter: Parameter):
         #This function only gets called if all requested parameter updates are
@@ -331,6 +454,9 @@ class Stretch4ROSDriver(Node, ABC):
         # the parameter that will return from get_parameter has already changed.
         match parameter.name:
             case "mode":
+                if parameter.value in self.DEPRECATED_CONTROL_MODES:
+                    self.replace_deprecated_mode(parameter.value)
+                    return
                 self.handle_mode_change(parameter.value)
             case "velocity_timeout":
                 velocity_timeout = parameter.value
@@ -432,7 +558,11 @@ class Stretch4ROSDriver(Node, ABC):
         match parameter.name:
             case "mode":
                 found=True
-                if parameter.value not in self.control_modes and parameter.value not in self.priority_modes:
+                if (
+                    parameter.value not in self.control_modes
+                    and parameter.value not in self.priority_modes
+                    and parameter.value not in self.DEPRECATED_CONTROL_MODES
+                ):
                     reason=f"Mode does not exist. (Control modes are {self.control_modes}. Priority modes are {self.priority_modes}.)"
             case "action_timeout":
                 found=True
@@ -512,8 +642,10 @@ class Stretch4ROSDriver(Node, ABC):
         self.logger.debug(f"Got request for base twist: x:{twist.linear.x}, y:{twist.linear.y}, theta:{twist.angular.z}") 
         
         mode = self.robot_mode()
-        if self.robot_mode() != "active":
-            self.logger.warn(f"Cannot send base commands while robot is in mode {mode}.  Must be in mode 'active'")
+        if self.robot_mode() != self.active_mode:
+            self.logger.warn(
+                f"Cannot send base commands while robot is in mode {mode}.  Must be in mode '{self.active_mode}'"
+            )
             return
 
         self.set_base_velocity(twist.linear.x, twist.linear.y, twist.angular.z)
@@ -525,12 +657,14 @@ class Stretch4ROSDriver(Node, ABC):
     def velocity_cmd_callback(self, target: JointState):
         self.logger.debug(f"Got velocity command request: names: {target.name} velocities: {target.velocity} position: {target.position} (NB: position not used in velocity command!)")
         current_mode = self.get_parameter('mode').value
-        if current_mode != 'active':
-            self.logger.warn(f"Cannot send velocity commands while robot is in mode {current_mode}.  Must be in mode 'active'")
+        if current_mode != self.active_mode:
+            self.logger.warn(
+                f"Cannot send velocity commands while robot is in mode {current_mode}.  Must be in mode '{self.active_mode}'"
+            )
             return
             
         for i in range(len(target.name)):
-            self.check_and_set_vel(target.name[i],target.velocity[i])
+            self.check_and_set_vel(self.resolve_joint_name(target.name[i]),target.velocity[i])
 
     @abstractmethod
     def set_joint_velocity(self, joint, target, v = None, a = None):
@@ -550,14 +684,19 @@ class Stretch4ROSDriver(Node, ABC):
         except ParameterNotDeclaredException:
             self.logger.error(f"Joint name {joint_name} not found in mode parameters.  Joint name is probably incorrect.")
             mode = "<< joint unknown >>"
+            return False
             
         succeeded = False
-        if mode != "velocity":
-            self.logger.warn(f"Cannot send velocity command to joint {joint_name} while in {mode} mode (must be in 'velocity' mode).")
+        if mode != self.velocity_mode:
+            self.logger.warn(
+                f"Cannot send velocity command to joint {joint_name} while in {mode} mode (must be in {self.velocity_mode} mode)."
+            )
         else:
             robot_mode = self.get_parameter('mode').value
-            if robot_mode not in ["active", "teleop"]:
-                self.logger.warn(f"Cannot send velocity command to joint {joint_name} because robot mode is {robot_mode} (must be 'active' or 'teleop').")
+            if robot_mode not in self.control_modes:
+                self.logger.warn(
+                    f"Cannot send velocity command to joint {joint_name} because robot mode is {robot_mode} (must be one of {self.control_modes})."
+                )
             else:
                 try:
                     vel_limit = self.get_parameter(f"joint_limit.{joint_name}.velocity").value
@@ -588,8 +727,10 @@ class Stretch4ROSDriver(Node, ABC):
             mode = "<< joint unknown >>"
 
         succeeded = False
-        if mode != "position":
-            self.logger.warn(f"Cannot send position command to joint {joint_name} while in {mode} mode (must be in 'position' mode).")
+        if mode != self.position_mode:
+            self.logger.warn(
+                f"Cannot send position command to joint {joint_name} while in {mode} mode (must be in {self.position_mode} mode)."
+            )
         else:
             limits = self.get_parameters_by_prefix(f"joint_limit.{joint_name}")
             ul = limits["upper"].value
@@ -597,8 +738,10 @@ class Stretch4ROSDriver(Node, ABC):
                 
             if (ul is None or goal <= ul) and (ll is None or goal >= ll):
                 robot_mode = self.get_parameter('mode').value
-                if robot_mode not in ["active","teleop"]:
-                    self.logger.warn(f"Cannot send position command to joint {joint_name} because robot mode is {robot_mode} (must be 'active' or 'teleop').")
+                if robot_mode not in self.control_modes:
+                    self.logger.warn(
+                        f"Cannot send position command to joint {joint_name} because robot mode is {robot_mode} (must be one of {self.control_modes})."
+                    )
                 else:
                     self.last_position_target[joint_name]=goal
                     self.set_joint_position(joint_name, goal, v=v, a=a)
@@ -610,12 +753,14 @@ class Stretch4ROSDriver(Node, ABC):
     def position_cmd_callback(self, target: JointState):
         self.logger.debug(f"Got position command request: names: {target.name} velocities: {target.velocity} position: {target.position} (NB: velocity not used in velocity command!)")
         current_mode = self.get_parameter('mode').value
-        if current_mode != 'active':
-            self.logger.warn(f"Cannot send position commands while robot is in mode {current_mode}.  Must be in mode 'active'")
+        if current_mode != self.active_mode:
+            self.logger.warn(
+                f"Cannot send position commands while robot is in mode {current_mode}.  Must be in mode '{self.active_mode}'"
+            )
             return
             
         for i in range(len(target.name)):
-            self.check_and_set_pos(target.name[i],target.position[i])
+            self.check_and_set_pos(self.resolve_joint_name(target.name[i]),target.position[i])
 
     @abstractmethod
     def set_joint_position(self, joint, target, v, a):
@@ -643,8 +788,10 @@ class Stretch4ROSDriver(Node, ABC):
         self.logger.debug(f"Got joy message. Buttons: {joy_msg.buttons} Axes: {joy_msg.axes} (this message is throttled to appear at most every 2s)", throttle_duration_sec = 2.0)
         
         current_mode = self.get_parameter('mode').value
-        if current_mode != 'teleop':
-            self.logger.warn(f"Cannot send joystick commands while robot is in mode {current_mode}.  Must be in mode 'teleop'")
+        if current_mode != self.teleop_mode:
+            self.logger.warn(
+                f"Cannot send joystick commands while robot is in mode {current_mode}.  Must be in mode '{self.teleop_mode}'"
+            )
             return
         
         goal = self.joy_to_joint_cmd(joy_msg)
@@ -656,14 +803,18 @@ class Stretch4ROSDriver(Node, ABC):
             joint_name = goal.name[i]
             joint_mode = self.get_parameter(f"joint_mode.{joint_name}").value
             match joint_mode:
-                case "position":
+                case self.position_mode:
                     if len(goal.position) < len(goal.name):
-                        self.logger.error(f"Joystick command mapping for position has length {len(goal.position)} (expected length {len(goal.name)} to set target for joint {joint_name} in position control mode)")
+                        self.logger.error(
+                            f"Joystick command mapping for position has length {len(goal.position)} (expected length {len(goal.name)} to set target for joint {joint_name} in {self.position_mode} control mode)"
+                        )
                     else:
                         self.check_and_set_pos(joint_name, goal.position[i])
-                case "velocity":
+                case self.velocity_mode:
                     if len(goal.velocity) < len(goal.name):
-                        self.logger.error(f"Joystick command mapping for velocity has length {len(goal.velocity)} (expected length {len(goal.name)} to set target for joint {joint_name} in velocity control mode)")
+                        self.logger.error(
+                            f"Joystick command mapping for velocity has length {len(goal.velocity)} (expected length {len(goal.name)} to set target for joint {joint_name} in {self.velocity_mode} control mode)"
+                        )
                     else:
                         self.check_and_set_vel(joint_name, goal.velocity[i])
                 case _:
@@ -701,12 +852,12 @@ class Stretch4ROSDriver(Node, ABC):
         
         # Define targets dictionary mapping joints to velocities
         targets = {
-            "lift": get_val('left_stick_y', 'lift'),
-            "arm": get_val('left_stick_x', 'arm'),
-            "wrist_yaw": get_val('right_stick_x', 'wrist_yaw'),
-            "wrist_pitch": get_val('right_stick_y', 'wrist_pitch'),
-            "wrist_roll": get_button_vel('wrist_roll', 'right_shoulder_button_pressed', 'left_shoulder_button_pressed'),
-            "stretch_gripper": get_button_vel('stretch_gripper', 'top_button_pressed', 'bottom_button_pressed')
+            "lift_joint": get_val('left_stick_y', 'lift_joint'),
+            "arm_joint": get_val('left_stick_x', 'arm_joint'),
+            "wrist_yaw_joint": get_val('right_stick_x', 'wrist_yaw_joint'),
+            "wrist_pitch_joint": get_val('right_stick_y', 'wrist_pitch_joint'),
+            "wrist_roll_joint": get_button_vel('wrist_roll_joint', 'right_shoulder_button_pressed', 'left_shoulder_button_pressed'),
+            "gripper_joint": get_button_vel('gripper_joint', 'top_button_pressed', 'bottom_button_pressed')
         }
 
         goal = JointState()
@@ -944,12 +1095,19 @@ class StretchTrajectoryActionServer:
         add_param("kp", 0.1)
         add_param("ki", 0.001)
         add_param("kd", 0.01)
-        add_param("threshold", 0.1)
+        add_param("default_tolerance", 0.05)
         add_param("loop_rate", 50.0)
         # if velocity not specified, how to do interpolation
         # options are 'zero' (stop between waypoints) or 'smooth'
         # (average slope between prev and next points)
         add_param("velocity_inference", "smooth")
+        # if True, once the final waypoint is reached, joints must stay stopped
+        # (below settling.vel_threshold) for settle_duration seconds before the
+        # goal succeeds; if False, the goal succeeds as soon as the final
+        # waypoint's condition is met, even if joints are still moving
+        add_param("settle_before_return", False)
+        add_param("settle_duration", 0.25)
+        # per-joint tolerances (trajectory_tolerance.<joint>) are declared by the driver
 
     def get_param(self, short_name):
         return self.driver.get_parameter(f"{self.param_prefix}.{short_name}").value
@@ -966,6 +1124,27 @@ class StretchTrajectoryActionServer:
         
         return CancelResponse.ACCEPT
 
+    def _check_joints_in_mode(self, joint_names, required_mode, goal_handle):
+        for joint_name in joint_names:
+            try:
+                j_mode = self.driver.get_parameter(f"joint_mode.{joint_name}").value
+            except Exception:
+                j_mode = None
+            if j_mode != required_mode:
+                self.driver.get_logger().error(
+                    f"Cannot execute trajectory because joint {joint_name} is in "
+                    f"'{j_mode}' mode (must be in '{required_mode}' mode). It can be set with "
+                    f"the parameter joint_mode.{joint_name}"
+                )
+                result = FollowJointTrajectory.Result()
+                result.error_code = FollowJointTrajectory.Result.INVALID_JOINTS
+                result.error_string = (
+                    f"Joint {joint_name} is not in {required_mode} mode"
+                )
+                goal_handle.abort()
+                return result
+        return None
+
 
     def _check_for_interrupt(self, goal_handle):
         # 1. Check for interrupts / cancellation requests
@@ -979,9 +1158,11 @@ class StretchTrajectoryActionServer:
             return result
 
         # Check robot mode
-        if self.driver.robot_mode() != "active":
+        if self.driver.robot_mode() != self.driver.active_mode:
             self.active_joints = None
-            self.driver.get_logger().warn(f"Goal canceled because robot mode is {self.driver.robot_mode()} (must be 'active').")
+            self.driver.get_logger().warn(
+                f"Goal canceled because robot mode is {self.driver.robot_mode()} (must be '{self.driver.active_mode}')."
+            )
             goal_handle.abort()
             result.error_code = FollowJointTrajectory.Result.INVALID_GOAL
             result.error_string = f"Robot mode changed to {self.driver.robot_mode()}"
@@ -1022,55 +1203,59 @@ class StretchTrajectoryActionServer:
         feedback_msg.actual.time_from_start = Duration(seconds=elapsed_sec).to_msg()
         return feedback_msg
 
-    def follow_trajectory(self, next_point_condition, first_loop_command, every_loop_command, trajectory, goal_handle):
-        self.driver.logger.warning("Starting to follow trajectory")
-        point_i = 0
+    def _abort(self, goal_handle, error_code, error_string):
+        self.active_joints = None
+        self.driver.get_logger().warn(f"Goal aborted: {error_string}")
+        goal_handle.abort()
+        result = FollowJointTrajectory.Result()
+        result.error_code = error_code
+        result.error_string = error_string
+        return result
+
+    @staticmethod
+    def _msg_seconds(duration_msg):
+        return duration_msg.sec + duration_msg.nanosec*1e-9
+
+    def _seconds_since(self, start_time):
+        return (self.driver.get_clock().now() - start_time).nanoseconds*1e-9
+
+    def follow_trajectory(self, next_point_condition, first_loop_command, every_loop_command, trajectory, goal_handle, settle_on_position):
+        self.driver.logger.info("Starting to follow trajectory")
         start_time = self.driver.get_clock().now()
+        rate = self.driver.create_rate(self.get_param("loop_rate"))
+        timeout = self.get_param("timeout")
+        last_point_i = len(trajectory.points) - 1
 
+        point_i = 0
         prev_state = None
-
         feedback_msg = self._get_feedback(trajectory.points[0], 0.0, trajectory.joint_names)
 
-        rate = self.driver.create_rate(self.get_param("loop_rate"))
-        last_timepoint =self.driver.get_clock().now()
-        counter = 0
-
-        
-        while point_i < len(trajectory.points):
+        while point_i <= last_point_i:
             active_point = trajectory.points[point_i]
-            next_state = trajectory.points[point_i+1] if point_i < len(trajectory.points)-1 else None
-            elapsed_time = self.driver.get_clock().now()-start_time
+            next_state = trajectory.points[point_i+1] if point_i < last_point_i else None
             first = True
-            self.driver.logger.warning(f"On point {point_i}")
-            
-            time_on_this_point = self.driver.get_clock().now()-last_timepoint
-            if time_on_this_point.to_msg().sec + time_on_this_point.to_msg().nanosec * 1e-9 > self.get_param("timeout"):
-                self.active_joints = None
-                self.driver.get_logger().warn("Goal canceled because getting to the next waypoint timed out.")
-                goal_handle.abort()
-                result.error_code = FollowJointTrajectory.Result.PATH_TOLERANCE_VIOLATED
-                result.error_string = "Waypoint took too long"
-                return result
-            
+            self.driver.logger.debug(f"On point {point_i}")
+
+            # A waypoint times out if it is still unsatisfied `timeout` seconds after
+            # its scheduled time (or after we started on it, if that is later).
+            deadline = max(self._seconds_since(start_time), self._msg_seconds(active_point.time_from_start)) + timeout
+
             while True:
                 interrupt_result = self._check_for_interrupt(goal_handle)
                 if interrupt_result is not None:
                     return interrupt_result
-                
+
                 elapsed_time = self.driver.get_clock().now()-start_time
-                
+                if elapsed_time.nanoseconds*1e-9 > deadline:
+                    return self._abort(goal_handle, FollowJointTrajectory.Result.PATH_TOLERANCE_VIOLATED,
+                                       f"Timed out after {timeout}s waiting to reach waypoint {point_i}")
+
                 if first:
-                    #self.driver.logger.warning(f"Time: {self.driver.get_clock().now()-last_timepoint}")
-                    #last_timepoint =self.driver.get_clock().now()
                     pos, vel, acc = first_loop_command(active_point, prev_state, next_state, feedback_msg)
                     first = False
                 else:
-                    #self.driver.logger.warning(f"Time: {self.driver.get_clock().now()-last_timepoint}")
-                    #last_timepoint =self.driver.get_clock().now()
-                    t0 = time.perf_counter_ns()
                     pos, vel, acc = every_loop_command(active_point, prev_state, next_state, feedback_msg)
-                    
-                #t0 = time.perf_counter_ns()
+
                 command = JointState()
                 command.name = trajectory.joint_names
                 command.position = pos if pos is not None else []
@@ -1078,7 +1263,7 @@ class StretchTrajectoryActionServer:
                 command.effort = acc if acc is not None else []
 
                 self.pub_commands.publish(command)
-                    
+
                 succeeded = True
                 for joint_i, joint_name in enumerate(trajectory.joint_names):
                     if pos is not None:
@@ -1091,26 +1276,21 @@ class StretchTrajectoryActionServer:
                             a = acc[joint_i]
                         else:
                             a = None
-                        
+
                         succeeded = succeeded and self.driver.check_and_set_pos(joint_name, pos[joint_i], v, a)
                     elif vel is not None:
                         if acc is not None:
                             a = acc[joint_i]
                         else:
                             a = None
-                        
+
                         succeeded = succeeded and self.driver.check_and_set_vel(joint_name, vel[joint_i], a)
-                    
+
 
                 if not succeeded and self.get_param("strict_mode"):
-                    self.active_joints = None
-                    self.driver.logger.warn("Goal canceled because sending command to a joint failed under strict_mode.")
-                    goal_handle.abort()
-                    result = FollowJointTrajectory.Result()
-                    result.error_code = FollowJointTrajectory.Result.PATH_TOLERANCE_VIOLATED
-                    result.error_string = "Joint command failed in strict mode"
-                    return result
-                
+                    return self._abort(goal_handle, FollowJointTrajectory.Result.PATH_TOLERANCE_VIOLATED,
+                                       "Joint command failed in strict mode")
+
                 feedback_msg = self._get_feedback(active_point, elapsed_time.nanoseconds*1e-9, trajectory.joint_names)
                 goal_handle.publish_feedback(feedback_msg)
 
@@ -1120,7 +1300,7 @@ class StretchTrajectoryActionServer:
 
                 actual = JointState()
                 desired = JointState()
-                
+
                 actual.name = trajectory.joint_names
                 actual.position = feedback_msg.actual.positions
                 actual.velocity = feedback_msg.actual.velocities
@@ -1132,18 +1312,17 @@ class StretchTrajectoryActionServer:
                 self.pub_actual_state.publish(actual)
                 self.pub_desired_state.publish(desired)
 
-                #if counter % 10 == 0:
-                #        print(f"dt: {(time.perf_counter_ns()-t0)/1000.0}")
-                        
                 if next_point_condition(feedback_msg):
-                    #prev_state = copy.deepcopy(feedback_msg.actual)
                     prev_state = copy.deepcopy(feedback_msg.desired)
-                    last_timepoint = self.driver.get_clock().now()
                     break
-                
+
                 rate.sleep()
-                            
-            while point_i < len(trajectory.points): #zip through points until we get to the first unsatisfied point
+
+            # Skip ahead past any intermediate waypoints that are already satisfied.
+            # The final waypoint is never skipped: it always gets commanded, so the
+            # robot's last command is always the trajectory's actual goal.
+            point_i += 1
+            while point_i < last_point_i:
                 active_point = trajectory.points[point_i]
                 elapsed_time = self.driver.get_clock().now()-start_time
 
@@ -1157,8 +1336,17 @@ class StretchTrajectoryActionServer:
                 else:
                     break
             rate.sleep()
-        
-                
+
+        if self.get_param("settle_before_return"):
+            if not settle_on_position:
+                # Velocity-controlled joints keep moving at their last commanded
+                # velocity, so stop them before waiting for the robot to settle.
+                self.stop_vel_joints(trajectory.joint_names)
+
+            settle_result = self._wait_until_settled(trajectory, goal_handle, start_time, rate, settle_on_position)
+            if settle_result is not None:
+                return settle_result
+
         # Successful Completion
         goal_handle.succeed()
         result = FollowJointTrajectory.Result()
@@ -1167,14 +1355,66 @@ class StretchTrajectoryActionServer:
         self.driver.get_logger().info('Goal succeeded.')
         return result
 
+    def _wait_until_settled(self, trajectory, goal_handle, start_time, rate, check_position):
+        """Wait for the robot to stop moving at the end of the trajectory.
+
+        The final waypoint's condition can be met while joints are still moving
+        (e.g. in target_priority mode, the moment a moving joint passes within
+        tolerance of the goal), so success is only reported once every joint has
+        stayed below settling.vel_threshold for trajectory_server.settle_duration
+        seconds -- and, if check_position is set, has also stayed within tolerance
+        of the final waypoint.
+
+        Requiring the condition to hold for settle_duration (rather than a single
+        check) also covers the lag between sending the final command and seeing
+        the robot start to move in the joint state.
+
+        Returns None once settled, or an abort result on timeout.
+        """
+        final_point = trajectory.points[-1]
+        vel_threshold = self.driver.get_parameter("settling.vel_threshold").value
+        settle_duration = self.get_param("settle_duration")
+        timeout = self.get_param("timeout")
+        deadline = self._seconds_since(start_time) + timeout
+        settled_since = None
+
+        while True:
+            interrupt_result = self._check_for_interrupt(goal_handle)
+            if interrupt_result is not None:
+                return interrupt_result
+
+            elapsed = self._seconds_since(start_time)
+            feedback_msg = self._get_feedback(final_point, elapsed, trajectory.joint_names)
+            goal_handle.publish_feedback(feedback_msg)
+
+            stopped = all(abs(v) < vel_threshold for v in feedback_msg.actual.velocities)
+            in_position = self.at_target(feedback_msg) if check_position else True
+
+            if stopped and in_position:
+                if settled_since is None:
+                    settled_since = elapsed
+                if elapsed - settled_since >= settle_duration:
+                    return None
+            else:
+                settled_since = None
+
+            if elapsed > deadline:
+                return self._abort(goal_handle, FollowJointTrajectory.Result.GOAL_TOLERANCE_VIOLATED,
+                                   f"Joints did not settle at the final waypoint within {timeout}s "
+                                   f"(stopped: {stopped}, in position: {in_position})")
+
+            rate.sleep()
+
     def stop_vel_joints(self, joint_names):
         for joint_name in joint_names:
             try:
                 j_mode = self.driver.get_parameter(f"joint_mode.{joint_name}").value
             except Exception:
                 j_mode = None
-            if j_mode != "velocity":
-                self.driver.get_logger().warning(f"Not sending stop command: {joint_name} is in {j_mode} mode (must be in 'velocity' mode to stop after trajectory).")
+            if j_mode != self.driver.velocity_mode:
+                self.driver.get_logger().warning(
+                    f"Not sending stop command: {joint_name} is in {j_mode} mode (must be in {self.driver.velocity_mode} mode to stop after trajectory)."
+                )
 
             else:
                 succeeded = self.driver.check_and_set_vel(joint_name, 0.0)
@@ -1188,11 +1428,18 @@ class StretchTrajectoryActionServer:
         return actual_time >= desired_time
 
     def at_target(self, feedback_msg):
-        tolerance = self.get_param("threshold")
-
         all_joints_ok = True
-        for i, joint_names in enumerate(feedback_msg.joint_names):
+        errors = [0.0 for joint in feedback_msg.joint_names]
+        tols = [0.0 for joint in feedback_msg.joint_names]
+
+        for i, joint_name in enumerate(feedback_msg.joint_names):
+            tolerance = self.get_param(f"trajectory_tolerance.{joint_name}")
+            tolerance = self.get_param("default_tolerance") if tolerance is None else tolerance
             all_joints_ok = all_joints_ok and abs(feedback_msg.desired.positions[i]-feedback_msg.actual.positions[i])<tolerance
+            errors[i] = abs(feedback_msg.desired.positions[i]-feedback_msg.actual.positions[i])
+            tols[i] = tolerance
+            
+        self.driver.get_logger().info(f"Joint/Error/Tolerance: {list(zip(feedback_msg.joint_names,list(map(lambda x: round(x,4),errors)),list(map(lambda x: round(x,4),tols))))}", throttle_duration_sec=1.0)
 
         return all_joints_ok
 
@@ -1215,22 +1462,6 @@ class StretchTrajectoryActionServer:
 
         dt = 1.0/self.get_param("loop_rate")
 
-        '''if end_t - start_t < 3.0*dt:
-            #don't do full interpolation if points are very close together
-            pos = active_point.positions if len(active_point.positions) > 0 else None
-            vel = active_point.velocities if len(active_point.velocities) > 0 else None
-            acc = active_point.accelerations if len(active_point.accelerations) > 0 else None
-
-            if vel is None:
-                vel = []
-                for i, joint in enumerate(feedback_msg.joint_names):
-                    if prev_state is not None:
-                        vel.append(active_point.positions[i]-prev_state.positions[i]/(end_t-start_t))
-                    elif end_t > 0:
-                        vel.append(active_point.positions[i]/end_t)
-                    else:
-                        vel.append(0.0)
-            return pos, vel, acc'''
         
         
         for i, goal_pos in enumerate(active_point.positions):
@@ -1282,8 +1513,6 @@ class StretchTrajectoryActionServer:
                     slope1 = (d1)/(dt1) if dt1 != 0.0 else 0.0
                     slope2 = (d2)/(dt2) if dt2 != 0.0 else 0.0
 
-                    print(f"d1: {d1} dt1: {dt1}/d2:{d2} dt2:{dt2}")
-                    
                     end_vel = 0.5*(slope1+slope2)                    
                 else:
                     self.driver.logger.warning("No end velocity specified and unknown velocity inference method. Setting waypoint target velocity to zero")
@@ -1373,63 +1602,61 @@ class StretchTrajectoryActionServer:
         self.driver.get_logger().info(f'Executing trajectory in {mode} mode (mode cannot be changed during execution)')
 
         try:
-            self.driver.get_logger().info(f'Checkpoint')
             trajectory = goal_handle.request.trajectory
+            resolved = [
+                self.driver.resolve_joint_name(n) for n in trajectory.joint_names
+            ]
+            if resolved != list(trajectory.joint_names):
+                self.driver.get_logger().info(
+                    f"follow_joint_trajectory: resolved joint_names "
+                    f"{list(trajectory.joint_names)} to {resolved}.",
+                    throttle_duration_sec=30.0,
+                )
+                trajectory.joint_names = resolved
             match mode:
                 case "adaptive_velocity":
-                    for joint_name in goal_handle.request.trajectory.joint_names:
-                        try:
-                            j_mode = self.driver.get_parameter(f"joint_mode.{joint_name}").value
-                        except Exception:
-                            j_mode = None
-                        if j_mode not in self.driver.joint_velocity_modes:
-                            self.driver.get_logger().error(f"Cannot execute trajectory in pid_normal mode because joint {joint_name} is in {j_mode} mode (must be in 'velocity mode).")
-                            result = FollowJointTrajectory.Result()
-                            result.error_code = FollowJointTrajectory.Result.INVALID_JOINTS
-                            result.error_string = f"Joint {joint_name} is not in velocity mode"
-                            goal_handle.abort()
-                            return result
-                        next_point_condition = self.at_time
-                        first_loop_command = self.interpolate_velocities
-                        every_loop_command = self.interpolate_velocities
+                    result = self._check_joints_in_mode(
+                        goal_handle.request.trajectory.joint_names,
+                        self.driver.velocity_mode,
+                        goal_handle,
+                    )
+                    if result is not None:
+                        return result
+                    next_point_condition = self.at_time
+                    first_loop_command = self.interpolate_velocities
+                    every_loop_command = self.interpolate_velocities
+                    settle_on_position = False
                 case "time_priority":
-                    for joint_name in goal_handle.request.trajectory.joint_names:
-                        try:
-                            j_mode = self.driver.get_parameter(f"joint_mode.{joint_name}").value
-                        except Exception:
-                            j_mode = None
-                        if j_mode != "position":
-                            self.driver.get_logger().error(f"Cannot execute trajectory in time priority mode because joint {joint_name} is in {j_mode} mode (must be in 'position' mode).")
-                            result = FollowJointTrajectory.Result()
-                            result.error_code = FollowJointTrajectory.Result.INVALID_JOINTS
-                            result.error_string = f"Joint {joint_name} is not in position mode"
-                            goal_handle.abort()
-                            return result
+                    result = self._check_joints_in_mode(
+                        goal_handle.request.trajectory.joint_names,
+                        self.driver.position_mode,
+                        goal_handle,
+                    )
+                    if result is not None:
+                        return result
                     next_point_condition = self.at_time
                     first_loop_command = self.active_point_goal
                     every_loop_command = lambda *args, **kwargs: [None, None, None]
+                    settle_on_position = True
                 case "target_priority":
-                    for joint_name in goal_handle.request.trajectory.joint_names:
-                        try:
-                            j_mode = self.driver.get_parameter(f"joint_mode.{joint_name}").value
-                        except Exception:
-                            j_mode = None
-                        if j_mode != "position":
-                            self.driver.get_logger().error(f"Cannot execute trajectory in time priority mode because joint {joint_name} is in {j_mode} mode (must be in 'position' mode).")
-                            result = FollowJointTrajectory.Result()
-                            result.error_code = FollowJointTrajectory.Result.INVALID_JOINTS
-                            result.error_string = f"Joint {joint_name} is not in position mode"
-                            goal_handle.abort()
-                            return result
+                    result = self._check_joints_in_mode(
+                        goal_handle.request.trajectory.joint_names,
+                        self.driver.position_mode,
+                        goal_handle,
+                    )
+                    if result is not None:
+                        return result
                     next_point_condition = self.at_target
                     first_loop_command = self.active_point_goal
                     every_loop_command = lambda *args, **kwargs: [None, None, None]
+                    settle_on_position = True
 
 
-            result = self.follow_trajectory(next_point_condition, first_loop_command, every_loop_command, trajectory, goal_handle)
+            result = self.follow_trajectory(next_point_condition, first_loop_command, every_loop_command, trajectory, goal_handle, settle_on_position)
         except Exception as e:
-            self.driver.get_logger().error(f"Cannot execute trajectory in pid_normal m\
-ode because of error {e}.")
+            self.driver.get_logger().error(
+                f"Cannot execute trajectory in {mode} mode because of error {e}.\n"
+                f"{traceback.format_exc()}")
             result = FollowJointTrajectory.Result()
             result.error_code = FollowJointTrajectory.Result.GOAL_TOLERANCE_VIOLATED
             result.error_string = f"Error {e} occurred."
