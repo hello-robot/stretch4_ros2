@@ -41,7 +41,7 @@ def generate_launch_description():
             'params_file': MultiYaml([
                 PathJoinSubstitution([stretch_navigation_path, 'config', 'original_nav2_params.yaml']),
                 PathJoinSubstitution([stretch_navigation_path, 'config', 'nav2_params_core.yaml']),
-                PathJoinSubstitution([stretch_navigation_path, 'config', 'nav2_params_mppi_filter.yaml']),
+                PathJoinSubstitution([stretch_navigation_path, 'config', 'nav2_params_mppi_binary_filter.yaml']),
                 PathJoinSubstitution([stretch_navigation_path, 'config', 'mppi_params.yaml']),
             ]),
             'use_rviz': LaunchConfiguration('use_rviz'),

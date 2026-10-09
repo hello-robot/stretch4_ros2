@@ -1,4 +1,3 @@
-#! /usr/bin/env python3
 
 
 import copy
@@ -15,7 +14,7 @@ import stretch4_body.robot.robot_client as rc
 import tf2_ros
 from control_msgs.msg import JointJog
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
-from geometry_msgs.msg import TransformStamped, Twist
+from geometry_msgs.msg import TransformStamped, Twist, TwistWithCovarianceStamped
 from nav_msgs.msg import Odometry
 from rcl_interfaces.msg import ParameterDescriptor, ParameterType, SetParametersResult
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
@@ -30,6 +29,8 @@ from std_msgs.msg import Bool, String
 from std_srvs.srv import SetBool, Trigger
 from stretch4_body.core.gamepad_control_mappings import ControlMapping
 from stretch4_body.core.gamepad_teleop import GamePadTeleop
+from stretch4_body.utils.stretch_pose_models import RobotJoints
+from stretch4_body.utils.tool_metadata import ToolConfigurationError, get_tool_metadata
 from tf_transformations import quaternion_from_euler
 
 from .joint_trajectory_server import JointTrajectoryAction
@@ -57,7 +58,7 @@ class StretchDriver(Node):
         self.declare_parameter('mode', "navigation")
         mode = self.get_parameter('mode').value
         self.control_modes = ['position', 'velocity', 'navigation', 'teleop']
-        self.priority_modes = ['homing', 'stowing']
+        self.priority_modes = ['homing', 'stowing', 'seating']
         if mode not in self.control_modes:
             self.robot.logger.warn(f'given invalid mode={mode}, using navigation instead')
             mode = 'navigation'
@@ -93,38 +94,105 @@ class StretchDriver(Node):
         self.battery_pub = self.create_publisher(BatteryState, 'battery', 1)
         self.diagnostics_pub = self.create_publisher(DiagnosticArray, '/diagnostics', 1) # Diagnostics are centralized, so we publish to a single global /diagnostics topic
         self.lease_holder_pub = self.create_publisher(DiagnosticStatus, 'server_lease_holder', 1)
-        self.joint_state_diagnostics_pub = self.create_publisher(DiagnosticArray, 'joint_states_diagnostics', 1) 
-    
+        self.joint_state_diagnostics_pub = self.create_publisher(DiagnosticArray, 'joint_states_diagnostics', 1)
+
         # Saved Message States (for latched topics)
         self.last_published_value = {}
 
         # Subscribers
         self.create_subscription(Twist, "cmd_vel", self.twist_callback, 1, callback_group=self.main_group)
+        self.create_subscription(TwistWithCovarianceStamped, "cmd_vel_stiff", self.stiff_twist_callback, 1, callback_group=self.main_group)
         self.create_subscription(JointJog, "joint_vel", self.velocity_callback, 1, callback_group=self.main_group)
         self.create_subscription(Joy, "joy", self.joy_callback, 1, callback_group=self.main_group)
 
+        # Tool Info Params
+        tool_name = self.robot.params.get('tool')
+        try:
+            tool_metadata = get_tool_metadata(tool_name)
+            tool_is_actuated = bool(tool_metadata.actuated_joints)
+            tool_joints = tool_metadata.tool_joints
+        except ToolConfigurationError:
+            # No tool configured, or a passive tool (e.g. a tablet) with no ToolMetadata.
+            tool_metadata = None
+            tool_is_actuated = False
+            tool_joints = []
+        self.tool_is_actuated = tool_is_actuated
+        self.declare_parameter("tool_info.name", tool_name or "unknown")
+        self.declare_parameter("tool_info.is_actuated", tool_is_actuated)
+        self.declare_parameter("tool_info.tool_joints", tool_joints)
+        # Ranges in URDF units, so a client can size jog increments and sliders from the tool.
+        if tool_metadata is not None and tool_is_actuated:
+            urdf_low, urdf_high = tool_metadata.urdf_range
+            aperture_low, aperture_high = tool_metadata.aperture_range
+            self.declare_parameter("tool_info.urdf_range", [float(urdf_low), float(urdf_high)])
+            self.declare_parameter(
+                "tool_info.aperture_range", [float(aperture_low), float(aperture_high)]
+            )
+            self.declare_parameter(
+                "tool_info.position_tolerance", float(tool_metadata.position_tolerance)
+            )
+
         # Velocity Control
         self.set_vel_functions = {}
+        self.joint_metadata_cache: dict[str, RobotJoints | None] = {}
 
         if hasattr(self.robot, 'lift'):
             self.set_vel_functions['lift_joint'] = lambda v, a:  self.robot.lift.set_velocity(v, a_m=a)
+            self.joint_metadata_cache['lift_joint'] = RobotJoints.lift
             self.declare_parameter("joint_acceleration.lift",self.robot.robot_params['lift']['motion']['default']['accel_m'])
+            self.declare_parameter("joint_velocity.lift",self.robot.robot_params['lift']['motion']['default']['vel_m'])
         if hasattr(self.robot, 'arm'):
             self.set_vel_functions['arm_joint'] = lambda v, a:  self.robot.arm.set_velocity(v, a_m=a)
+            self.joint_metadata_cache['arm_joint'] = RobotJoints.arm
             self.declare_parameter("joint_acceleration.arm",self.robot.robot_params['arm']['motion']['default']['accel_m'])
+            self.declare_parameter("joint_velocity.arm",self.robot.robot_params['arm']['motion']['default']['vel_m'])
         if hasattr(self.robot, 'end_of_arm') and hasattr(self.robot.end_of_arm, 'joints'):
-            for joint in self.robot.end_of_arm.joints: 
-                self.set_vel_functions[f'{joint}_joint']= lambda d, a, j=joint: self.robot.end_of_arm.quick_stop(j) if d == 0.0 else self.robot.end_of_arm.move_by(j, d, a_r = a)
+            end_of_arm = self.robot.end_of_arm
+            for joint in end_of_arm.joints:
+                joint_client = getattr(end_of_arm, joint, None)
+                if joint_client is None:
+                    continue
+                joint_metadata = RobotJoints.get_joint_by_name(joint)
+                is_gripper = joint_metadata is RobotJoints.gripper
+
+                set_vel_fn = lambda d, a, j=joint, c=joint_client: end_of_arm.quick_stop(j) if d == 0.0 else c.move_by(d, a_r=a)
+                self.set_vel_functions[f'{joint}_joint'] = set_vel_fn
+                self.joint_metadata_cache[f'{joint}_joint'] = joint_metadata
+
+                if is_gripper and not tool_is_actuated:
+                    continue
+
+                vel = self.robot.robot_params[joint]['motion']['default']['vel']
+
+                if is_gripper:
+                    # add a generic gripper joint for utility
+                    self.set_vel_functions['gripper_joint'] = set_vel_fn
+                    self.joint_metadata_cache['gripper_joint'] = RobotJoints.gripper
+
+                    vel = tool_metadata.position_independent_velocity_limit("urdf")
+                    self.declare_parameter("joint_velocity.gripper", vel)
+
                 self.declare_parameter(f"joint_acceleration.{joint}",self.robot.robot_params[joint]['motion']['default']['accel'])
+                self.declare_parameter(f"joint_velocity.{joint}", vel)
+
+
 
         self.declare_parameter("joint_acceleration.omnibase.linear", self.robot.robot_params['omnibase']['motion']['default']['accel_xy_m'])
         self.declare_parameter("joint_acceleration.omnibase.angular", self.robot.robot_params['omnibase']['motion']['default']['accel_w_r'])
+        self.declare_parameter("joint_velocity.omnibase.linear", self.robot.robot_params['omnibase']['motion']['default']['vel_xy_m'])
+        self.declare_parameter("joint_velocity.omnibase.angular", self.robot.robot_params['omnibase']['motion']['default']['vel_w_r'])
 
         # Services
         self.stop_the_robot_service = self.create_service(
             Trigger,
             'stop_the_robot',
             self.stop_the_robot_callback,
+            callback_group=self.main_group
+        )
+        self.freewheel_the_robot_service = self.create_service(
+            Trigger,
+            'freewheel_the_robot',
+            self.freewheel_the_robot_callback,
             callback_group=self.main_group
         )
         self.home_the_robot_service = self.create_service(
@@ -138,6 +206,12 @@ class StretchDriver(Node):
             'stow_the_robot',
             self.stow_the_robot_callback,
             callback_group=self.main_group
+        )
+        self.seat_dock_service = self.create_service(
+            Trigger,
+            'seat_into_dock',
+            self.seat_dock_callback,
+            callback_group=self.main_group,
         )
         self.runstop_service = self.create_service(
             SetBool,
@@ -204,8 +278,11 @@ class StretchDriver(Node):
             self.robot.logger.error(errmsg)
             return False, errmsg
         self.change_mode('homing')
-        self.robot.home(do_push=False, do_pull=False)
+        finished, _rid = self.robot.routines.routine_robot_home(
+            do_push=False, wait_on_completion=True, timeout=60, do_pull=False)
         self.change_mode(last_driver_mode)
+        if not finished:
+            return False, 'Homing routine did not complete.'
         return True, 'Homed.'
 
     def stow_the_robot(self):
@@ -217,9 +294,26 @@ class StretchDriver(Node):
             self.robot.logger.error(errmsg)
             return False, errmsg
         self.change_mode('stowing')
-        self.robot.stow(do_push=False, do_pull=False)
+        finished, _rid = self.robot.routines.routine_robot_stow(
+            do_push=False, wait_on_completion=True, timeout=30, do_pull=False)
         self.change_mode(last_driver_mode)
+        if not finished:
+            return False, 'Stowing routine did not complete.'
         return True, 'Stowed.'
+
+    def seat_into_dock(self):
+        with self.driver_mode_lock:
+            can_seat = self.driver_mode in self.control_modes
+            last_driver_mode = copy.copy(self.driver_mode)
+        if not can_seat:
+            errmsg = f'Cannot seat_into_dock while in mode={last_driver_mode}.'
+            self.robot.logger.error(errmsg)
+            return False, errmsg
+        self.change_mode('seating')
+        succeeded, _rid = self.robot.routines.routine_blind_dock(
+            do_push=False, wait_on_completion=True, do_pull=False)
+        self.change_mode(last_driver_mode)
+        return bool(succeeded), 'Success' if succeeded else 'Failure'
 
     def runstop_the_robot(self, runstopped, just_change_mode=False):
         if runstopped:
@@ -258,6 +352,15 @@ class StretchDriver(Node):
         response.message = 'Stopped the robot.'
         return response
 
+    def freewheel_the_robot_callback(self, request, response):
+        with self.driver_mode_lock:
+            self.robot.base.enable_freewheel_mode()
+
+        self.robot.logger.info('Received freewheel_the_robot service call, so commanded wheels to release control.')
+        response.success = True
+        response.message = 'Freewheeled the robot.'
+        return response
+
     def home_the_robot_callback(self, request, response):
         self.robot.logger.debug('Received home_the_robot service call.')
         did_succeed, msg = self.home_the_robot()
@@ -272,11 +375,33 @@ class StretchDriver(Node):
         response.message = msg
         return response
 
+    def seat_dock_callback(self, request, response):
+        self.robot.logger.debug('Received seat_into_dock service call.')
+        did_succeed, msg = self.seat_into_dock()
+        response.success = did_succeed
+        response.message = msg
+        return response
+
     def runstop_service_callback(self, request, response):
         self.runstop_the_robot(request.data)
         response.success = True
         response.message = 'is_runstopped: {0}'.format(request.data)
         return response
+
+    def _gripper_position_urdf(self, joint_metadata) -> float:
+        """
+        The gripper's current position in the tool's `urdf` unit type, for evaluating a
+        position-dependent conversion.
+
+        Taken from the actuator reading; SG4's gripper_conversion['finger_rad'] is a chord-model
+        half-angle, not its urdf unit type. Falls back to mid-range when status is unavailable.
+        """
+        try:
+            status = self.robot.status.get('end_of_arm', {}).get(joint_metadata.value, {})
+            return joint_metadata.actuator_to_urdf(status['pos'])
+        except (AttributeError, KeyError, TypeError):
+            low, high = joint_metadata.urdf_range
+            return (low + high) / 2.0
 
     def velocity_callback(self, jointjog_msg: JointJog):
         """
@@ -285,26 +410,35 @@ class StretchDriver(Node):
         before the robot stops moving. It cannot exceed velocity_timeout parameter.
         """
         with self.driver_mode_lock:
-            if self.driver_mode != 'velocity':
-                self.robot.logger.warn(f'Must be in velocity mode to service JointJog msg. Current mode = {self.driver_mode}.')
+            if self.driver_mode not in ['velocity', 'navigation']:
+                self.robot.logger.warn(f'Must be in velocity or navigation mode to service JointJog msg. Current mode = {self.driver_mode}.')
                 return
 
         # Queue velocity commands
         for i, joint in enumerate(jointjog_msg.joint_names):
-            
+
             if joint not in self.set_vel_functions.keys():
                 self.robot.logger.warn(f"Received velocity command for unexpected joint: {joint}")
                 continue
 
-            acceleration_param = self.get_parameter_or(f"joint_acceleration.{joint.split("_joint")[0]}",None).value
+            joint_metadata = self.joint_metadata_cache.get(joint)
+            acceleration_key = joint_metadata.value if joint_metadata else joint.split('_joint')[0]
+            acceleration_param = self.get_parameter_or(f"joint_acceleration.{acceleration_key}",None).value
 
             joint_velocity = jointjog_msg.velocities[i]
             duration = jointjog_msg.duration
 
-            if "gripper" in joint: 
-                joint_velocity *= 300
+            if joint_metadata is RobotJoints.gripper:
+                # move_by() takes a displacement in this tool's command units (Pct for SG4,
+                # aperture meters for PG4), so scale the rate by duration as the wrist joints do,
+                # then convert with convert_delta(), which is exact across PG4's linkage.
+                delta_urdf = joint_velocity * duration
+                at_urdf = self._gripper_position_urdf(joint_metadata)
+                joint_velocity = joint_metadata.convert_delta(
+                    delta_urdf, "urdf", "command", at_urdf
+                )
 
-            if "wrist" in joint:
+            elif joint_metadata in (RobotJoints.wrist_pitch, RobotJoints.wrist_roll, RobotJoints.wrist_yaw):
                 # account for move_by (lack of velocity control)
                 joint_velocity *= duration
 
@@ -326,7 +460,7 @@ class StretchDriver(Node):
         state = jc.unpack_joy_to_gamepad_state(joy_msg)
 
         self.gamepad_teleop.controller_state = state
-            
+
 
         ControlMapping.JOINT_SPACE.do_motion(self.robot, self.gamepad_teleop)
 
@@ -346,11 +480,27 @@ class StretchDriver(Node):
                 return
         linear_acc = self.get_parameter_or("joint_acceleration.omnibase.linear",None).value
         angular_acc = self.get_parameter_or("joint_acceleration.omnibase.angular",None).value
-        self.robot.omnibase.set_velocity(vx_m = twist.linear.x, 
-                                         vy_m = twist.linear.y, 
-                                         w_r = twist.angular.z, 
-                                         a_m = linear_acc, 
+        self.robot.omnibase.set_velocity(vx_m = twist.linear.x,
+                                         vy_m = twist.linear.y,
+                                         w_r = twist.angular.z,
+                                         a_m = linear_acc,
                                          a_r = angular_acc
+                                        )
+
+    def stiff_twist_callback(self, stiff_twist: TwistWithCovarianceStamped):
+        with self.driver_mode_lock:
+            if self.driver_mode not in ['navigation', 'velocity']:
+                self.robot.logger.warn(f'Must be in {['navigation', 'velocity']} modes to service Twist msg. Current mode = {self.driver_mode}.')
+                return
+        linear_acc = self.get_parameter_or("joint_acceleration.omnibase.linear",None).value
+        angular_acc = self.get_parameter_or("joint_acceleration.omnibase.angular",None).value
+        stiffness = 1.0 if stiff_twist.twist.covariance[-1] == 0.0 else stiff_twist.twist.covariance[0]
+        self.robot.omnibase.set_velocity(vx_m = stiff_twist.twist.twist.linear.x,
+                                         vy_m = stiff_twist.twist.twist.linear.y,
+                                         w_r = stiff_twist.twist.twist.angular.z,
+                                         a_m = linear_acc,
+                                         a_r = angular_acc,
+                                         stiffness=stiffness,
                                         )
 
     def update_latched_value(self, pub: Publisher, value: Any):
@@ -463,6 +613,8 @@ class StretchDriver(Node):
         is_runstopped_msg = DiagnosticStatus(name="is_runstopped")
         in_collision_msg = DiagnosticStatus(name="in_collision")
 
+        end_of_arm_joint_names = [j.value for j in RobotJoints.get_end_of_arm_joints() if j.value]
+
         for cg in self.joint_trajectory_action.command_groups:
             pos, vel, eff = cg.joint_state(robot_status)
 
@@ -472,17 +624,13 @@ class StretchDriver(Node):
                     joint_state.position.append(pos/4.0)
                     joint_state.velocity.append(vel/4.0)
                     joint_state.effort.append(eff)
-            elif cg.name == "gripper_joint":
-                for link in ['gripper_finger_left_joint', 'gripper_finger_right_joint']:
+            elif cg.name == "gripper_joint" or cg.name == f"{RobotJoints.gripper.value}_joint":
+                tool_joint_names = list(RobotJoints.gripper.tool_joints)
+                if "gripper_joint" not in tool_joint_names:
+                    tool_joint_names.append("gripper_joint")
+                for link in tool_joint_names:
                     joint_state.name.append(link)
                     joint_state.position.append(pos)
-                    joint_state.velocity.append(vel)
-                    joint_state.effort.append(eff)
-            elif cg.name == "parallel_gripper_joint":
-                finger_pos = -pos / 2.0
-                for link in ['finger_left_joint', 'finger_right_joint']:
-                    joint_state.name.append(link)
-                    joint_state.position.append(finger_pos)
                     joint_state.velocity.append(vel)
                     joint_state.effort.append(eff)
             elif cg.name == "translate_mobile_base":
@@ -502,13 +650,13 @@ class StretchDriver(Node):
 
             joint_status_key = cg.name.replace("_joint","")
             if joint_status_key == "gripper":
-                joint_status_key = "stretch_gripper"
+                joint_status_key = RobotJoints.gripper.value
 
-            if joint_status_key in ["wrist_roll", "wrist_pitch", "wrist_yaw", "stretch_gripper", "parallel_gripper"]:
+            if joint_status_key in end_of_arm_joint_names:
                 status_dict = robot_status["end_of_arm"][joint_status_key]
                 is_homed = bool(status_dict.get('pos_calibrated', False))
                 is_homing = bool(status_dict.get('is_homing', False))
-            else: 
+            else:
                 status_dict = robot_status[joint_status_key]
                 is_homed = bool(status_dict['motor'].get('pos_calibrated', False))
                 is_homing = bool(status_dict['motor'].get('is_homing', False))
@@ -541,7 +689,7 @@ class StretchDriver(Node):
         battery_state.temperature = float(robot_status['power_periph']['temp'])
         battery_state.percentage = float(robot_status['power_periph']['battery_soc']) / 100.0
 
-        if robot_status['power_periph']['adapter_connected']:
+        if robot_status['power_periph']['adapter_voltage_present']:
             if robot_status['power_periph']['charger_is_charging']:
                 battery_state.power_supply_status = BatteryState.POWER_SUPPLY_STATUS_CHARGING
             else:

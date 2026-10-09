@@ -2,6 +2,7 @@ import threading
 import queue
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import CameraInfo
 import numpy as np
 from dataclasses import dataclass
@@ -24,7 +25,7 @@ class CameraInfoBufferNode(Node):
             CameraInfo,
             topic_name,
             self.listener_callback,
-            10
+            QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT)
         )
 
     def listener_callback(self, msg):

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 #include <omp.h>
 #include <pcl_conversions/pcl_conversions.h>
@@ -12,6 +13,8 @@ namespace stretch_core
 
 namespace
 {
+
+constexpr float kNoHitRange = std::numeric_limits<float>::infinity();
 
 bool hasValidHit(
   const PipelineOutput & output,
@@ -207,7 +210,7 @@ void DualLidarPipeline::applySpeckleFilter(
     }
 
     if (similar_neighbors < config_.speckle_min_neighbors) {
-      filtered_ranges[bin] = scan_cfg.range_max;
+      filtered_ranges[bin] = kNoHitRange;
       output.hit_counts[bin] = 0;
     }
   }
@@ -227,7 +230,7 @@ PipelineOutput DualLidarPipeline::process(
   rclcpp::Logger logger) const
 {
   PipelineOutput output;
-  output.ranges.assign(static_cast<size_t>(scan_cfg.num_ranges), scan_cfg.range_max);
+  output.ranges.assign(static_cast<size_t>(scan_cfg.num_ranges), kNoHitRange);
   output.hit_counts.assign(static_cast<size_t>(scan_cfg.num_ranges), 0);
   pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_1;
   pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_2;

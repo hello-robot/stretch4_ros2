@@ -4,17 +4,20 @@ import queue
 import time
 import rclpy
 from rclpy.node import Node
-from sensor_msgs.msg import Image, PointCloud2, CameraInfo, Imu
+from rclpy.qos import QoSProfile, ReliabilityPolicy
+from sensor_msgs.msg import CompressedImage, Image, PointCloud2, CameraInfo, Imu
 import ros2_numpy
 import numpy as np
 from tf2_ros import Buffer, TransformListener
 from tf2_ros import LookupException, ConnectivityException, ExtrapolationException
 
-from .image_bridge import ImageFrame
-from .pointcloud_bridge import PointCloudFrame
+from .image_bridge import ImageFrame, compressed_image_message_to_frame
+from .pointcloud_bridge import PointCloudFrame, LidarPointCloudFrame, StereoPointCloudFrame
 from .transforms_bridge import TransformsFrame, transform_to_list, to_matrix
 from .camera_info_bridge import CameraInfoFrame
 from .imu_bridge import ImuFrame
+
+SENSOR_QOS = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT)
 
 class StreamManager:
     def __init__(self):
@@ -32,6 +35,7 @@ class StreamManager:
         
         # State tracking
         self.latest_frames = {}
+        self.generator_to_topic = {}
         self.tf_streams = {} # key -> (target_frame, base_frame)
         self.tf_last_stamps = {}
         
@@ -54,7 +58,17 @@ class StreamManager:
             Image,
             topic_name,
             lambda msg, topic=topic_name: self._handle_image(msg, topic),
-            10
+            SENSOR_QOS
+        )
+
+    def add_compressed_image_topic(self, topic_name: str):
+        """Subscribes to a CompressedImage topic. Frames arrive still encoded, so nothing is decoded here."""
+        self.latest_frames[topic_name] = None
+        self.node.create_subscription(
+            CompressedImage,
+            topic_name,
+            lambda msg, topic=topic_name: self._handle_compressed_image(msg, topic),
+            SENSOR_QOS
         )
 
     def add_pointcloud_topic(self, topic_name: str):
@@ -63,7 +77,7 @@ class StreamManager:
             PointCloud2,
             topic_name,
             lambda msg, topic=topic_name: self._handle_pc(msg, topic),
-            10
+            SENSOR_QOS
         )
 
     def add_camera_info_topic(self, topic_name: str):
@@ -72,7 +86,7 @@ class StreamManager:
             CameraInfo,
             topic_name,
             lambda msg, topic=topic_name: self._handle_camera_info(msg, topic),
-            10
+            SENSOR_QOS
         )
 
     def add_imu_topic(self, topic_name: str):
@@ -81,7 +95,7 @@ class StreamManager:
             Imu,
             topic_name,
             lambda msg, topic=topic_name: self._handle_imu(msg, topic),
-            10
+            SENSOR_QOS
         )
 
     def add_tf_stream(self, target_frame: str, base_frame: str = "base_link"):
@@ -95,15 +109,25 @@ class StreamManager:
             np_image = ros2_numpy.numpify(msg).copy()
             stamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
             frame = ImageFrame(image=np_image, timestamp=stamp)
+            self.latest_frames[topic] = frame
             self.master_queue.put((topic, frame))
         except Exception as e:
             self.node.get_logger().error(f'Image Convert error: {e}')
 
+    def _handle_compressed_image(self, msg, topic):
+        try:
+            frame = compressed_image_message_to_frame(msg)
+            self.latest_frames[topic] = frame
+            self.master_queue.put((topic, frame))
+        except Exception as e:
+            self.node.get_logger().error(f'Compressed image error: {e}')
+
     def _handle_pc(self, msg, topic):
         try:
             pc_array = ros2_numpy.numpify(msg)
-            stamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
-            frame = PointCloudFrame(points=pc_array, timestamp=stamp)
+            timestamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+            frame = PointCloudFrame.from_pointcloud2(pc_array, timestamp)
+            self.latest_frames[topic] = frame
             self.master_queue.put((topic, frame))
         except Exception as e:
             self.node.get_logger().error(f'PC Convert error: {e}')
@@ -119,6 +143,7 @@ class StreamManager:
                 distortion_model=msg.distortion_model,
                 timestamp=stamp
             )
+            self.latest_frames[topic] = frame
             self.master_queue.put((topic, frame))
         except Exception as e:
             self.node.get_logger().error(f'CameraInfo Convert error: {e}')
@@ -135,17 +160,29 @@ class StreamManager:
                 linear_acceleration=linear_acceleration,
                 timestamp=stamp
             )
+            self.latest_frames[topic] = frame
             self.master_queue.put((topic, frame))
         except Exception as e:
             self.node.get_logger().error(f'Imu Convert error: {e}')
 
     def create_topic_generator(self, topic: str):
+        gen = self._create_topic_generator_impl(topic)
+        self.generator_to_topic[gen] = topic
+        return gen
+
+    def _create_topic_generator_impl(self, topic: str):
         while rclpy.ok() and self._running:
             yield self.latest_frames.get(topic)
 
     def get(self, stream, block: bool = True, timeout: float | None = 10.0):
         start_time = time.time()
         is_gen = isinstance(stream, types.GeneratorType)
+        topic = self.generator_to_topic.get(stream) if is_gen else stream
+
+        is_synced_pipeline = any('left' in k or 'right' in k for k in self.latest_frames)
+        is_primary = topic is not None and ('left' in topic or 'right' in topic)
+        if is_synced_pipeline and not is_primary:
+            block = False
         
         def check_val():
             if is_gen:
@@ -154,6 +191,8 @@ class StreamManager:
             
         val = check_val()
         if val is not None:
+            if topic is not None and topic in self.latest_frames:
+                self.latest_frames[topic] = None
             return val
             
         if not block:
@@ -169,11 +208,13 @@ class StreamManager:
             
             try:
                 fetch_timeout = min(0.1, time_left) if time_left is not None else 0.1
-                topic, frame = self.master_queue.get(block=True, timeout=fetch_timeout)
-                self.latest_frames[topic] = frame
+                q_topic, frame = self.master_queue.get(block=True, timeout=fetch_timeout)
+                self.latest_frames[q_topic] = frame
                 
                 val = check_val()
                 if val is not None:
+                    if topic is not None and topic in self.latest_frames:
+                        self.latest_frames[topic] = None
                     self._drain_queue()
                     return val
             except queue.Empty:
@@ -204,6 +245,7 @@ class StreamManager:
                         pose_mat = to_matrix(trans, rot)
                         
                         frame = TransformsFrame(transform=pose_mat, timestamp=stamp)
+                        self.latest_frames[key] = frame
                         self.master_queue.put((key, frame))
                 except (LookupException, ConnectivityException, ExtrapolationException):
                     pass

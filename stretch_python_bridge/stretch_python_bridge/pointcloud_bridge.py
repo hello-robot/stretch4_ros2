@@ -1,9 +1,11 @@
+from __future__ import annotations
 from sensor_msgs.msg import PointCloud2
 from sensor_msgs_py import point_cloud2
 import threading
 import queue
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import Image
 import ros2_numpy
 import numpy as np
@@ -17,6 +19,20 @@ class PointCloudFrame:
     """A container for point cloud data and ros2 message timestamp."""
     points: list[tuple[float, float, float]] # x, y, z
     timestamp: float
+
+    @staticmethod
+    def from_pointcloud2(pc_array: np.ndarray, timestamp:float) -> LidarPointCloudFrame|StereoPointCloudFrame|PointCloudFrame:
+
+        if pc_array.dtype.names is not None:
+            if 'intensity' in pc_array.dtype.names:
+                return LidarPointCloudFrame.from_lidar_pointcloud2(pc_array, timestamp)
+            elif 'rgb' in pc_array.dtype.names:
+                return StereoPointCloudFrame.from_stereo_pointcloud2(pc_array, timestamp)
+            
+        return PointCloudFrame(
+            points=pc_array,
+            timestamp=timestamp
+        )
 
 @dataclass
 class LidarPointCloudFrame(PointCloudFrame):
@@ -90,7 +106,7 @@ class PointCloudBufferNode(Node):
             PointCloud2,
             topic_name,
             self.listener_callback,
-            10
+            QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT)
         )
 
     def listener_callback(self, msg):
@@ -110,18 +126,8 @@ class PointCloudBufferNode(Node):
                     self.data_queue.get_nowait()
                 except queue.Empty:
                     pass
-
-            pc_frame: PointCloudFrame
-            if 'intensity' in pc_array.dtype.names:
-                pc_frame = LidarPointCloudFrame.from_lidar_pointcloud2(pc_array, timestamp)
-            elif 'rgb' in pc_array.dtype.names:
-                pc_frame = StereoPointCloudFrame.from_stereo_pointcloud2(pc_array, timestamp)
-            else:
-                pc_frame = PointCloudFrame(
-                    points=pc_array,
-                    timestamp=msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
-                )
-            self.data_queue.put(pc_frame)
+                
+            self.data_queue.put(PointCloudFrame.from_pointcloud2(pc_array, timestamp))
         except Exception as e:
             self.get_logger().error(f'PC Conversion error: {e}')
 

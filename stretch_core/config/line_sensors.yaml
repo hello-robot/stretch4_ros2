@@ -1,0 +1,34 @@
+line_sensor_publisher:
+  ros__parameters:
+    # Output frame and timing.
+    base_frame: base_link
+    publish_rate_hz: 30.0
+    stale_timeout_s: 0.5 # Past this age the whole subsystem is treated as not reporting
+    use_tare: true
+    publish_debug: true
+
+    # --- hazard outputs -----------------------------------------------------
+    points_topic: /line_sensor/points
+    obstacle_topic: /line_sensor/obstacle_points
+    small_drop_topic: /line_sensor/small_drop_points
+    deep_drop_topic: /line_sensor/deep_drop_points
+    probable_cliff_topic: /line_sensor/probable_cliff_points
+    degraded_topic: /line_sensor/degraded_points
+
+    # --- coverage -----------------------------------------------------------
+    coverage_topic: /line_sensor/coverage # holds information about sensors
+
+    # --- debug (only created when publish_debug is true) --------------------
+    raw_obstacle_topic: /line_sensor/debug/raw_obstacle_points
+    spatial_obstacle_topic: /line_sensor/debug/spatial_obstacle_points
+    raw_small_drop_topic: /line_sensor/debug/raw_small_drop_points
+    spatial_small_drop_topic: /line_sensor/debug/spatial_small_drop_points
+    spray_topic: /line_sensor/debug/spray_points
+    benign_null_topic: /line_sensor/debug/benign_null_points
+
+    # --- filter tunables ----------------------------------------------------
+    # Defaults live in LineSensorConfig
+    # (stretch4_body/subsystem/line_sensor/filter/config.py). Naming a field
+    # under filter. overrides it; everything not named here keeps its default.
+    filter.cliff_min_drop_m: 0.02
+    filter.cliff_max_drop_m: 0.10

@@ -1,0 +1,20 @@
+# Code owners for stretch4_ros2
+#
+# Each line is a file pattern followed by one or more owners. The LAST
+# matching pattern takes precedence, so more specific rules go further down.
+
+# hello_helpers
+/hello_helpers/src/hello_helpers/base_command_group.py   @hello-binit
+/hello_helpers/src/hello_helpers/hello_misc.py           @hello-binit
+
+# stretch_core
+/stretch_core/README.md                                  @hello-binit
+/stretch_core/launch/stretch_driver.launch.py            @hello-binit
+/stretch_core/launch/dual_hesai.launch.py                @hello-binit
+/stretch_core/stretch_core/command_groups.py             @hello-binit
+/stretch_core/stretch_core/joint_trajectory_server.py    @hello-binit
+/stretch_core/stretch_core/stretch_driver.py             @hello-binit
+/stretch_core/test/                                      @hello-binit
+
+# stretch_description
+/stretch_description/                                    @hello-binit

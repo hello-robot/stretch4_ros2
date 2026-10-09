@@ -1,5 +1,9 @@
 from __future__ import annotations
-from typing import TYPE_CHECKING, Tuple, Any, Dict, List, Optional, Union, override
+
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union, override
+
+from stretch4_body.utils.stretch_pose_models import RobotJoints
+
 from hello_helpers.base_command_group import BaseCommandGroup, check_active
 
 if TYPE_CHECKING:
@@ -24,7 +28,7 @@ class WristYawCommandGroup(BaseCommandGroup):
 
     @override
     @check_active()
-    def monitor_execution(self, robot_status: Dict[str, Any], **kwargs: Any) -> Tuple[str, float]:
+    def monitor_execution(self, robot_status: Dict[str, Any], **kwargs: Any) -> Tuple[str, float, float, float]:
         desired = self.goal['position']
         actual = robot_status['end_of_arm']['wrist_yaw']['pos']
         self.error: float = desired - actual
@@ -65,7 +69,7 @@ class WristPitchCommandGroup(BaseCommandGroup):
 
     @override
     @check_active()
-    def monitor_execution(self, robot_status: Dict[str, Any], **kwargs: Any) -> Tuple[str, float]:
+    def monitor_execution(self, robot_status: Dict[str, Any], **kwargs: Any) -> Tuple[str, float, float, float]:
         desired = self.goal['position']
         actual = robot_status['end_of_arm']['wrist_pitch']['pos']
         self.error: float = desired - actual
@@ -106,7 +110,7 @@ class WristRollCommandGroup(BaseCommandGroup):
 
     @override
     @check_active()
-    def monitor_execution(self, robot_status: Dict[str, Any], **kwargs: Any) -> Tuple[str, float]:
+    def monitor_execution(self, robot_status: Dict[str, Any], **kwargs: Any) -> Tuple[str, float, float, float]:
         desired = self.goal['position']
         actual = robot_status['end_of_arm']['wrist_roll']['pos']
         self.error: float = desired - actual
@@ -135,79 +139,100 @@ class GripperCommandGroup(BaseCommandGroup):
     def __init__(self) -> None:
         super().__init__('gripper_joint')
 
+    @property
+    def gripper_joint_names(self) -> List[str]:
+        names = list(RobotJoints.gripper.tool_joints)
+        names.extend(['gripper_joint', f"{RobotJoints.gripper.value}_joint", RobotJoints.gripper.value])
+        return names
+
+    @staticmethod
+    def tool_client(robot: Any) -> Any:
+        """
+        The attached tool's client, or None if no tool is attached.
+        """
+        return getattr(getattr(robot, 'end_of_arm', None), 'gripper', None)
+
+    @override
+    def activate(self, commanded_joint_names: List[str], invalid_joints_callback: Callable[[str], None], **kwargs: Any) -> bool:
+        self.active = False
+        self.index = None
+        robot = kwargs.get('robot')
+
+        for name in commanded_joint_names:
+            if name in self.gripper_joint_names:
+                if robot is not None and self.tool_client(robot) is None:
+                    invalid_joints_callback(f"Commanded joint '{name}', but no active gripper tool is attached.")
+                    return False
+                self.index = commanded_joint_names.index(name)
+                self.active = True
+                break
+        return True
+
     @override
     @check_active()
     def queue_execution(self, robot: StretchDriver, **kwargs: Any) -> None:
-        robot.end_of_arm.move_to(
-            'stretch_gripper',
-            self.goal['position'],
-            self.goal['velocity'],
-            self.goal['acceleration'],
+        tool = self.tool_client(robot)
+        if tool is None:
+            return
+
+        goal_p = self.goal['position']
+        goal_v = self.goal['velocity']
+        goal_a = self.goal['acceleration']
+    
+    
+        tool.move_to(
+            RobotJoints.gripper.urdf_to_command(goal_p),
+            RobotJoints.gripper.urdf_to_actuator_velocity(goal_v, goal_p) if goal_v is not None else None,
+            RobotJoints.gripper.urdf_to_actuator_velocity(goal_a, goal_p) if goal_a is not None else None,
         )
 
     @override
     @check_active()
-    def monitor_execution(self, robot_status: Dict[str, Any], **kwargs: Any) -> Tuple[str, float]:
+    def monitor_execution(self, robot_status: Dict[str, Any], **kwargs: Any) -> Tuple[str, float, float, float]:
         desired = self.goal['position']
-        actual = robot_status['end_of_arm']['stretch_gripper']['pos']
+        tool_status = robot_status.get('end_of_arm', {}).get(RobotJoints.gripper.value)
+        if tool_status is None:
+            self.error = 0.0
+            return self.name, desired, 0.0, 0.0
+
+        actual, _, _ = self.joint_state(robot_status)
         self.error: float = desired - actual
         return self.name, desired, actual, self.error
 
     @override
     @check_active()
     def cancel_execution(self, robot: Any, **kwargs: Any) -> None:
-        robot.end_of_arm.move_by('stretch_gripper', 0)
+        tool = self.tool_client(robot)
+        if tool is not None:
+            tool.move_by(0)
 
     @override
     @check_active()
     def is_finished(self, robot_status: Dict[str, Any], **kwargs: Any) -> bool:
-        # TODO: switch to servo motion_generator.is_moving()
-        return abs(self.error) < 0.5
+        if self.error is None:
+            return True
+        tolerance = RobotJoints.gripper.position_tolerance
+        # Return True to prevent hanging on trajectory execution if a tool has not been configured
+        if tolerance is None:
+            return True
+        return abs(self.error) < tolerance
 
     @override
     def joint_state(self, robot_status: Dict[str, Any], **kwargs: Any) -> Tuple[float, float, float]:
-        gripper_status = robot_status['end_of_arm']['stretch_gripper']
-        conversion = gripper_status['gripper_conversion']
-        return (conversion['finger_rad'], conversion['finger_vel'], gripper_status['effort'])
+        gripper_status = robot_status.get('end_of_arm', {}).get(RobotJoints.gripper.value)
+        if not gripper_status:
+            return (0.0, 0.0, 0.0)
 
-
-class ParallelGripperCommandGroup(BaseCommandGroup):
-
-    @override
-    def __init__(self) -> None:
-        super().__init__('parallel_gripper_joint')
-
-    @override
-    @check_active()
-    def queue_execution(self, robot: Any, **kwargs: Any) -> None:
-        robot.end_of_arm.move_to('parallel_gripper', self.goal['position'], self.goal['velocity'], self.goal['acceleration'])
-
-    @override
-    @check_active()
-    def monitor_execution(self, robot_status: Dict[str, Any], **kwargs: Any) -> Tuple[str, float]:
-        desired_m = self.goal['position']
-        actual_mm = robot_status['end_of_arm']['parallel_gripper'].get('pos_mm', 0.0)
-        actual_m = actual_mm / 1000.0
-        
-        self.error: float = desired_m - actual_m
-        return self.name, desired_m, actual_m, self.error
-
-    @override
-    @check_active()
-    def cancel_execution(self, robot: Any, **kwargs: Any) -> None:
-        robot.end_of_arm.move_by('parallel_gripper', 0.0)
-
-    @override
-    @check_active()
-    def is_finished(self, robot_status: Dict[str, Any], **kwargs: Any) -> bool:
-        return abs(self.error) < 0.002
-
-    @override
-    def joint_state(self, robot_status: Dict[str, Any], **kwargs: Any) -> Tuple[float, float, float]:
-        gripper_status = robot_status['end_of_arm']['parallel_gripper']
-        pos_m = gripper_status.get('pos_mm', 0.0) / 1000.0
-
-        return (pos_m, gripper_status.get('vel', 0.0), gripper_status.get('effort', 0.0))
+        if 'gripper_conversion' in gripper_status and 'finger_rad' in gripper_status['gripper_conversion']:
+            conversion = gripper_status['gripper_conversion']
+            return (conversion['finger_rad'], conversion['finger_vel'], gripper_status.get('effort', 0.0))
+        elif 'finger_pos' in gripper_status:
+            return (gripper_status['finger_pos'], gripper_status.get('finger_vel', 0.0), gripper_status.get('effort', 0.0))
+        else:
+            # Derive the fields the branch above reads; status_to_metadata() converts the rate
+            # as well as the position, so the pair shares one unit space.
+            conversion = RobotJoints.gripper.get_gripper_model('joint_state').status_to_metadata(gripper_status)
+            return (conversion['finger_rad'], conversion['finger_vel'], gripper_status.get('effort', 0.0))
 
 
 class ArmCommandGroup(BaseCommandGroup):
@@ -232,7 +257,7 @@ class ArmCommandGroup(BaseCommandGroup):
 
     @override
     @check_active()
-    def monitor_execution(self, robot_status: Dict[str, Any], **kwargs: Any) -> Tuple[str, float]:
+    def monitor_execution(self, robot_status: Dict[str, Any], **kwargs: Any) -> Tuple[str, float, float, float]:
         desired = self.goal['position']
         actual = robot_status['arm']['pos']
         self.error: float = desired - actual
@@ -290,7 +315,7 @@ class LiftCommandGroup(BaseCommandGroup):
 
     @override
     @check_active()
-    def monitor_execution(self, robot_status: Dict[str, Any], **kwargs: Any) -> Tuple[str, float]:
+    def monitor_execution(self, robot_status: Dict[str, Any], **kwargs: Any) -> Tuple[str, float, float, float]:
         desired = self.goal['position']
         actual = robot_status['lift']['pos']
         self.error: float = desired - actual
@@ -348,7 +373,7 @@ class MobileBaseCommandGroup(BaseCommandGroup):
 
     @override
     @check_active()
-    def monitor_execution(self, robot_status: Dict[str, Any], **kwargs: Any) -> Tuple[str, float]:
+    def monitor_execution(self, robot_status: Dict[str, Any], **kwargs: Any) -> Tuple[str, float, float, float]:
         desired = self.goal['position']
         actual = robot_status['omnibase']['x'] - self.initx
         self.error: float = desired - actual

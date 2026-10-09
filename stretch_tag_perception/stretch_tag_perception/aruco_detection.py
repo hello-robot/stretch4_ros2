@@ -28,6 +28,24 @@ from visualization_msgs.msg import Marker, MarkerArray
 
 logger = rclpy.logging.get_logger('aruco_detection')
 
+# Columns of the debug image, left to right. Every camera gets a column whether or not this node
+# is running it, so the layout does not shift when a camera is dropped.
+DEBUG_IMAGE_CAMERAS = ['left', 'center', 'right']
+DEBUG_IMAGE_TOPIC = '/aruco/debug_image'
+MAX_DEBUG_IMAGE_WIDTH = 1920
+
+
+def annotation_scale(width):
+    """Stroke thickness and font scale for annotations drawn on an image this wide.
+
+    The composite is downscaled to MAX_DEBUG_IMAGE_WIDTH before publishing, so annotations drawn
+    at a fixed size shrink by however much their camera had to give up. The center camera is
+    4032px wide against 1920 for left/right, so a fixed 1px stroke lands at well under a pixel
+    there and disappears entirely. Scaling with the source width keeps annotations equally
+    legible whichever camera they came from.
+    """
+    return max(1, round(width / 300)), width / 1000.0
+
 
 class ArucoDetector:
     def __init__(self, aruco_detectors: List[aruco.ArucoDetector]):
@@ -440,9 +458,25 @@ class ArucoMarkerCollection:
                 detection_array.detections.append(ros_detection)
         return detection_array
 
-    def draw_markers(self, img: np.ndarray): 
+    def draw_markers(self, img: np.ndarray):
+        """Outline the detected markers, with a stroke that survives the debug-image downscale.
 
-        return aruco.drawDetectedMarkers(img, self.aruco_corners, np.array(self.aruco_ids))
+        aruco.drawDetectedMarkers always strokes a single pixel, which is invisible once a
+        4032px-wide center frame is scaled into the composite, so draw the outlines directly.
+        """
+        if self.aruco_ids is None or len(self.aruco_ids) == 0:
+            return img
+
+        thickness, font_scale = annotation_scale(img.shape[1])
+        for corners, aruco_id in zip(self.aruco_corners, self.aruco_ids):
+            points = corners.reshape(-1, 2).astype(np.int32)
+            cv2.polylines(img, [points], True, (0, 255, 0), thickness, cv2.LINE_AA)
+            # Mark the first corner, so marker orientation is readable at a glance.
+            cv2.circle(img, tuple(points[0]), thickness * 2, (0, 0, 255), -1)
+            cv2.putText(img, str(int(aruco_id)),
+                        (points[0][0] + 2 * thickness, points[0][1] - 2 * thickness),
+                        cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 255, 0), thickness, cv2.LINE_AA)
+        return img
 
 
 class DetectArucoNode(Node):
@@ -490,6 +524,12 @@ class DetectArucoNode(Node):
         self.publish_marker_point_clouds = False
         
         self.latest_images = {}
+        self.latest_image_stamp = None
+
+        # Created before the image subscriptions below, so a callback can never find it missing.
+        self.debug_image_pub = (
+            self.create_publisher(Image, DEBUG_IMAGE_TOPIC, 1) if self.show_debug_images else None
+        )
 
         self.marker_info = {}
         self.load_config_to_paramter_server()
@@ -633,58 +673,77 @@ class DetectArucoNode(Node):
             self.visualize_markers_pub.publish(marker_array)
 
         # save rotation for last
-        if self.show_debug_images:
+        # Drawing and compositing cost a copy per frame, so only pay for it while something is
+        # actually looking at the topic.
+        if self.debug_image_pub is not None and self.debug_image_pub.get_subscription_count() > 0:
             aruco_image = collection.draw_markers(rgb_image)
             # Overlay camera label on top-left
-            cv2.putText(aruco_image, camera_name.upper(), (20, 40),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
+            thickness, font_scale = annotation_scale(aruco_image.shape[1])
+            cv2.putText(aruco_image, camera_name.upper(),
+                        (10 * thickness, round(40 * font_scale)),
+                        cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 255, 0), thickness, cv2.LINE_AA)
             self.latest_images[camera_name] = aruco_image
-            self.display_combined_images()
+            self.latest_image_stamp = rgb_image_timestamp
+            self.publish_debug_image()
 
-    def display_combined_images(self):
-        ordered_cams = [c for c in ['left', 'center', 'right'] if c in self.cameras]
-        
-        # Get dimensions from the first available image to format placeholders
-        target_height = None
-        for cam in ordered_cams:
-            if cam in self.latest_images:
-                target_height = self.latest_images[cam].shape[0]
+    def publish_debug_image(self):
+        """Publish the head cameras side by side with detected markers drawn on them.
+
+        Every camera in DEBUG_IMAGE_CAMERAS gets a column, including ones this node was not asked
+        to run. Those show as black, so a camera dropped upstream -- by a failed calibration
+        check, say -- is visibly absent rather than silently missing from the layout.
+        """
+        # Columns are sized against the first real frame; until one arrives there is nothing to
+        # scale the black placeholders to.
+        reference = None
+        for camera_name in DEBUG_IMAGE_CAMERAS:
+            if camera_name in self.latest_images:
+                reference = self.latest_images[camera_name]
                 break
-                
-        if target_height is None:
+        if reference is None:
             return
 
-        images_to_show = []
-        for cam in ordered_cams:
-            if cam in self.latest_images:
-                img = self.latest_images[cam]
-                h, w = img.shape[:2]
-                if h != target_height:
-                    scale = target_height / h
-                    new_w = int(w * scale)
-                    img = cv2.resize(img, (new_w, target_height))
-                images_to_show.append(img)
-            else:
-                placeholder_width = int(target_height * 1.33)
-                placeholder = np.zeros((target_height, placeholder_width, 3), dtype=np.uint8)
-                cv2.putText(placeholder, f"Waiting for {cam}...", (placeholder_width // 6, target_height // 2),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-                images_to_show.append(placeholder)
+        # Black columns take the shape of a real one, so the composite stays proportionate
+        # however many cameras are missing.
+        target_height, placeholder_width = reference.shape[0], reference.shape[1]
 
-        # Concatenate horizontally
-        combined_image = np.hstack(images_to_show)
-        
-        # Resize if width exceeds 1920 pixels
-        max_display_width = 1920
-        h, w = combined_image.shape[:2]
-        if w > max_display_width:
-            scale = max_display_width / w
-            new_h = int(h * scale)
-            combined_image = cv2.resize(combined_image, (max_display_width, new_h))
+        columns = []
+        for camera_name in DEBUG_IMAGE_CAMERAS:
+            image = self.latest_images.get(camera_name)
+            if image is not None:
+                height, width = image.shape[:2]
+                if height != target_height:
+                    scale = target_height / height
+                    image = cv2.resize(image, (int(width * scale), target_height))
+                columns.append(image)
+                continue
 
-        cv2.namedWindow('Detected ArUco Markers - Combined', cv2.WINDOW_NORMAL)
-        cv2.imshow('Detected ArUco Markers - Combined', combined_image)
-        cv2.waitKey(1)
+            column = np.zeros((target_height, placeholder_width, 3), dtype=np.uint8)
+            state = 'off' if camera_name not in self.cameras else 'waiting'
+            thickness, font_scale = annotation_scale(placeholder_width)
+            cv2.putText(column, f"{camera_name.upper()}: {state}",
+                        (placeholder_width // 6, target_height // 2),
+                        cv2.FONT_HERSHEY_SIMPLEX, font_scale, (90, 90, 90), thickness, cv2.LINE_AA)
+            columns.append(column)
+
+        combined_image = np.hstack(columns)
+
+        height, width = combined_image.shape[:2]
+        if width > MAX_DEBUG_IMAGE_WIDTH:
+            scale = MAX_DEBUG_IMAGE_WIDTH / width
+            combined_image = cv2.resize(combined_image, (MAX_DEBUG_IMAGE_WIDTH, int(height * scale)))
+
+        try:
+            debug_msg = self.cv_bridge.cv2_to_imgmsg(combined_image, 'bgr8')
+        except CvBridgeError as error:
+            logger.error(error)
+            return
+
+        if self.latest_image_stamp is not None:
+            debug_msg.header.stamp = self.latest_image_stamp
+        # A composite spans several optical frames, so it belongs to none of them.
+        debug_msg.header.frame_id = 'aruco_debug_image'
+        self.debug_image_pub.publish(debug_msg)
 
     def camera_info_callback(self, msg, camera_name):
         matrix = np.array(msg.k).reshape((3, 3))
@@ -713,9 +772,7 @@ def main(args=None):
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
-        pass    
-    finally:
-        cv2.destroyAllWindows()
+        pass
 
     node.destroy_node()
     rclpy.shutdown()
