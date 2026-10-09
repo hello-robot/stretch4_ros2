@@ -9,6 +9,7 @@ import time
 import copy
 import numpy as np
 import traceback
+from contextlib import contextmanager
 
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.action.server import ServerGoalHandle
@@ -1219,12 +1220,27 @@ class StretchTrajectoryActionServer:
     def _seconds_since(self, start_time):
         return (self.driver.get_clock().now() - start_time).nanoseconds*1e-9
 
+    @contextmanager
+    def _server_commands(self):
+        """Mark joint commands sent inside this block as coming from the trajectory
+        server, so the driver doesn't treat them as direct commands that preempt it."""
+        self.driver.trajectory_command_active.set()
+        try:
+            yield
+        finally:
+            self.driver.trajectory_command_active.clear()
+
     def follow_trajectory(self, next_point_condition, first_loop_command, every_loop_command, trajectory, goal_handle, settle_on_position):
         self.driver.logger.info("Starting to follow trajectory")
         start_time = self.driver.get_clock().now()
         rate = self.driver.create_rate(self.get_param("loop_rate"))
         timeout = self.get_param("timeout")
         last_point_i = len(trajectory.points) - 1
+
+        # While the trajectory runs, a command to any of its joints from outside the
+        # server (e.g. /joint_position_cmd) preempts it; see check_and_set_pos/vel.
+        self.direct_command_preempted = False
+        self.active_joints = list(trajectory.joint_names)
 
         point_i = 0
         prev_state = None
@@ -1265,26 +1281,27 @@ class StretchTrajectoryActionServer:
                 self.pub_commands.publish(command)
 
                 succeeded = True
-                for joint_i, joint_name in enumerate(trajectory.joint_names):
-                    if pos is not None:
-                        if vel is not None:
-                            v = vel[joint_i]
-                        else:
-                            v = None
+                with self._server_commands():
+                    for joint_i, joint_name in enumerate(trajectory.joint_names):
+                        if pos is not None:
+                            if vel is not None:
+                                v = vel[joint_i]
+                            else:
+                                v = None
 
-                        if acc is not None:
-                            a = acc[joint_i]
-                        else:
-                            a = None
+                            if acc is not None:
+                                a = acc[joint_i]
+                            else:
+                                a = None
 
-                        succeeded = succeeded and self.driver.check_and_set_pos(joint_name, pos[joint_i], v, a)
-                    elif vel is not None:
-                        if acc is not None:
-                            a = acc[joint_i]
-                        else:
-                            a = None
+                            succeeded = succeeded and self.driver.check_and_set_pos(joint_name, pos[joint_i], v, a)
+                        elif vel is not None:
+                            if acc is not None:
+                                a = acc[joint_i]
+                            else:
+                                a = None
 
-                        succeeded = succeeded and self.driver.check_and_set_vel(joint_name, vel[joint_i], a)
+                            succeeded = succeeded and self.driver.check_and_set_vel(joint_name, vel[joint_i], a)
 
 
                 if not succeeded and self.get_param("strict_mode"):
@@ -1417,7 +1434,8 @@ class StretchTrajectoryActionServer:
                 )
 
             else:
-                succeeded = self.driver.check_and_set_vel(joint_name, 0.0)
+                with self._server_commands():
+                    succeeded = self.driver.check_and_set_vel(joint_name, 0.0)
                 if not succeeded:
                     self.driver.get_logger().warning(f"Stop command to {joint_name} failed.")
 
