@@ -221,5 +221,3 @@ class JointTrajectoryAction:
         result.error_string = cancel_str
         goal_handle.canceled()
         return result
-        goal_handle.canceled()
-        return result
