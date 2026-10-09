@@ -162,32 +162,32 @@ class StretchLiveDriverTester(Node):
         rclpy.spin_until_future_complete(self, future)
         print(f"{GREEN}✓ Restored parameter 'mode' back to 'active'{RESET}")
 
-        # Test C: Set joint_limit.lift.velocity to a valid value (0.05)
+        # Test C: Set joint_limit.lift_joint.velocity to a valid value (0.05)
         req_set_limit = SetParameters.Request()
         p_limit = ParameterMsg()
-        p_limit.name = 'joint_limit.lift.velocity'
+        p_limit.name = 'joint_limit.lift_joint.velocity'
         p_limit.value.type = ParameterType.PARAMETER_DOUBLE
         p_limit.value.double_value = 0.05
         req_set_limit.parameters = [p_limit]
         future_limit = self.param_set_cli.call_async(req_set_limit)
         rclpy.spin_until_future_complete(self, future_limit)
         res_limit = future_limit.result()
-        assert res_limit is not None and res_limit.results[0].successful, "Failed to set joint_limit.lift.velocity to a valid positive value"
-        print(f"{GREEN}✓ Successfully set parameter 'joint_limit.lift.velocity' to 0.05{RESET}")
+        assert res_limit is not None and res_limit.results[0].successful, "Failed to set joint_limit.lift_joint.velocity to a valid positive value"
+        print(f"{GREEN}✓ Successfully set parameter 'joint_limit.lift_joint.velocity' to 0.05{RESET}")
 
-        # Test D: Set joint_limit.lift.velocity to an invalid negative value (-0.05) -> should fail
+        # Test D: Set joint_limit.lift_joint.velocity to an invalid negative value (-0.05) -> should fail
         p_limit.value.double_value = -0.05
         future_limit_neg = self.param_set_cli.call_async(req_set_limit)
         rclpy.spin_until_future_complete(self, future_limit_neg)
         res_limit_neg = future_limit_neg.result()
         assert res_limit_neg is not None and not res_limit_neg.results[0].successful, "Unexpectedly allowed setting negative joint velocity limit"
-        print(f"{GREEN}✓ Successfully rejected negative value for 'joint_limit.lift.velocity'{RESET}")
+        print(f"{GREEN}✓ Successfully rejected negative value for 'joint_limit.lift_joint.velocity'{RESET}")
 
-        # Test E: Reset joint_limit.lift.velocity to None/large to not affect other tests
+        # Test E: Reset joint_limit.lift_joint.velocity to None/large to not affect other tests
         p_limit.value.double_value = 999.0
         future_limit_reset = self.param_set_cli.call_async(req_set_limit)
         rclpy.spin_until_future_complete(self, future_limit_reset)
-        print(f"{GREEN}✓ Reset parameter 'joint_limit.lift.velocity' back to default large value{RESET}")
+        print(f"{GREEN}✓ Reset parameter 'joint_limit.lift_joint.velocity' back to default large value{RESET}")
 
         # Test F: Set read-only 'control_loop_rate' -> should fail
         req_set_ro = SetParameters.Request()
