@@ -1,19 +1,23 @@
 #! /usr/bin/env python3
 from __future__ import annotations
+
 import copy
-import threading
 import importlib
-from typing import TYPE_CHECKING, Any, List, Tuple, Dict, Optional
+import threading
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 if TYPE_CHECKING:
-    from stretch_core.stretch_driver import StretchDriver
     from hello_helpers.base_command_group import BaseCommandGroup
 
+    from stretch_core.stretch_driver import StretchDriver
+
+from control_msgs.action import FollowJointTrajectory
 from rclpy.action import ActionServer, CancelResponse
 from rclpy.action.server import ServerGoalHandle
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
-from control_msgs.action import FollowJointTrajectory
+from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from trajectory_msgs.msg import JointTrajectoryPoint
+
+from stretch_core.command_groups import GripperCommandGroup
 
 
 class JointTrajectoryAction:
@@ -47,6 +51,9 @@ class JointTrajectoryAction:
             cg = class_obj()
             self.command_groups.append(cg)
             self.node.get_logger().debug(f"Discovered {class_name}")
+
+        if self.node.tool_is_actuated:
+            self.command_groups.append(GripperCommandGroup())
 
     def execute_cb(self, goal_handle: ServerGoalHandle) -> FollowJointTrajectory.Result:
         # Lock required because ReentrantCallbackGroup allows parallel execute_cbs
@@ -212,5 +219,7 @@ class JointTrajectoryAction:
         self.node.get_logger().debug(cancel_str)
         result = FollowJointTrajectory.Result()
         result.error_string = cancel_str
+        goal_handle.canceled()
+        return result
         goal_handle.canceled()
         return result
