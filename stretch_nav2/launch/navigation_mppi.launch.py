@@ -22,8 +22,13 @@ def generate_launch_description():
 
     stretch_driver_launch = IncludeLaunchDescription(
         PathJoinSubstitution([stretch_core_path, 'launch', 'stretch_driver.launch.py']),
-        condition=IfCondition(LaunchConfiguration('launch_driver')),
-        launch_arguments={'broadcast_odom_tf': 'True', 'mode': 'navigation'}.items())
+        launch_arguments={
+            'broadcast_odom_tf': 'True',
+            'mode': 'navigation',
+            'action_timeout': LaunchConfiguration('action_timeout', default='30.0'),
+        }.items(),
+        condition=IfCondition(LaunchConfiguration('launch_driver'))
+    )
 
     hlidar_launch = IncludeLaunchDescription(
         PathJoinSubstitution([stretch_core_path, 'launch', 'dual_hesai.launch.py']),
@@ -58,6 +63,11 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+        DeclareLaunchArgument(
+            'action_timeout',
+            default_value='30.0',
+            description='Default timeout (sec) for execution of joint traj action',
+        ),
         DeclareLaunchArgument(
             'map',
             default_value=PathJoinSubstitution([
