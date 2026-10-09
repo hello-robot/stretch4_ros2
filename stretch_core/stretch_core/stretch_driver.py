@@ -133,6 +133,12 @@ class StretchDriver(Node):
             )
 
         # Velocity Control
+        # Param prefix -> gamepad motion profile. Unprefixed joint_velocity.* is the gamepad's MEDIUM.
+        velocity_profiles = {
+            "joint_velocity": "default",
+            "joint_velocity.slow": "slow",
+            "joint_velocity.fast": "fast",
+        }
         self.set_vel_functions = {}
         self.joint_metadata_cache: dict[str, RobotJoints | None] = {}
 
@@ -140,12 +146,14 @@ class StretchDriver(Node):
             self.set_vel_functions['lift_joint'] = lambda v, a:  self.robot.lift.set_velocity(v, a_m=a)
             self.joint_metadata_cache['lift_joint'] = RobotJoints.lift
             self.declare_parameter("joint_acceleration.lift",self.robot.robot_params['lift']['motion']['default']['accel_m'])
-            self.declare_parameter("joint_velocity.lift",self.robot.robot_params['lift']['motion']['default']['vel_m'])
+            for prefix, profile in velocity_profiles.items():
+                self.declare_parameter(f"{prefix}.lift",self.robot.robot_params['lift']['motion'][profile]['vel_m'])
         if hasattr(self.robot, 'arm'):
             self.set_vel_functions['arm_joint'] = lambda v, a:  self.robot.arm.set_velocity(v, a_m=a)
             self.joint_metadata_cache['arm_joint'] = RobotJoints.arm
             self.declare_parameter("joint_acceleration.arm",self.robot.robot_params['arm']['motion']['default']['accel_m'])
-            self.declare_parameter("joint_velocity.arm",self.robot.robot_params['arm']['motion']['default']['vel_m'])
+            for prefix, profile in velocity_profiles.items():
+                self.declare_parameter(f"{prefix}.arm",self.robot.robot_params['arm']['motion'][profile]['vel_m'])
         if hasattr(self.robot, 'end_of_arm') and hasattr(self.robot.end_of_arm, 'joints'):
             end_of_arm = self.robot.end_of_arm
             for joint in end_of_arm.joints:
@@ -162,25 +170,27 @@ class StretchDriver(Node):
                 if is_gripper and not tool_is_actuated:
                     continue
 
-                vel = self.robot.robot_params[joint]['motion']['default']['vel']
-
                 if is_gripper:
                     # add a generic gripper joint for utility
                     self.set_vel_functions['gripper_joint'] = set_vel_fn
                     self.joint_metadata_cache['gripper_joint'] = RobotJoints.gripper
 
-                    vel = tool_metadata.position_independent_velocity_limit("urdf")
-                    self.declare_parameter("joint_velocity.gripper", vel)
-
                 self.declare_parameter(f"joint_acceleration.{joint}",self.robot.robot_params[joint]['motion']['default']['accel'])
-                self.declare_parameter(f"joint_velocity.{joint}", vel)
+                for prefix, profile in velocity_profiles.items():
+                    if is_gripper:
+                        vel = tool_metadata.position_independent_velocity_limit("urdf", profile)
+                        self.declare_parameter(f"{prefix}.gripper", vel)
+                    else:
+                        vel = self.robot.robot_params[joint]['motion'][profile]['vel']
+                    self.declare_parameter(f"{prefix}.{joint}", vel)
 
 
 
         self.declare_parameter("joint_acceleration.omnibase.linear", self.robot.robot_params['omnibase']['motion']['default']['accel_xy_m'])
         self.declare_parameter("joint_acceleration.omnibase.angular", self.robot.robot_params['omnibase']['motion']['default']['accel_w_r'])
-        self.declare_parameter("joint_velocity.omnibase.linear", self.robot.robot_params['omnibase']['motion']['default']['vel_xy_m'])
-        self.declare_parameter("joint_velocity.omnibase.angular", self.robot.robot_params['omnibase']['motion']['default']['vel_w_r'])
+        for prefix, profile in velocity_profiles.items():
+            self.declare_parameter(f"{prefix}.omnibase.linear", self.robot.robot_params['omnibase']['motion'][profile]['vel_xy_m'])
+            self.declare_parameter(f"{prefix}.omnibase.angular", self.robot.robot_params['omnibase']['motion'][profile]['vel_w_r'])
 
         # Services
         self.stop_the_robot_service = self.create_service(

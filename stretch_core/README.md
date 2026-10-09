@@ -32,6 +32,7 @@ ros2 param list /stretch_driver
 | `joint_velocity.<joint>` | double | Default velocity limit for `lift`, `arm`, and each end-of-arm joint. |
 | `joint_velocity.gripper` | double | Generic alias for the attached tool's velocity limit. Declared only when `tool_info.is_actuated` is true. |
 | `joint_velocity.omnibase.{linear,angular}` | double | Default base velocity limits. |
+| `joint_velocity.{slow,fast}.*` | double | The same keys as `joint_velocity.*`, from the gamepad's slow and fast motion profiles. Unprefixed `joint_velocity.*` is the medium (`default`) profile. |
 | `broadcast_odom_tf` | bool | Broadcast the wheel-odometry TF. |
 | `action_timeout` | double | Trajectory action server timeout, seconds. |
 | `velocity_timeout` | double | Upper bound on `JointJog.duration`, seconds. |
@@ -54,7 +55,7 @@ Limits are split across three surfaces according to how they change. A consumer 
 
 #### Joint velocity limits (parameters)
 
-Velocity and acceleration limits do not change while the driver runs, so they are parameters rather than a topic. `joint_velocity.*` mirrors `joint_acceleration.*`, with one exception: for the tool joint the velocity is published in URDF units, while the acceleration stays in the tool's actuator units (rad/s^2) — that is what the driver hands to `move_by()`, and converting it out and back would only add error. Values come from `stretch4_body`'s robot params (`robot_params[<joint>]['motion']['default']['vel']`, and `vel_m` / `vel_xy_m` / `vel_w_r` for lift, arm, and base), so they follow whatever tool and calibration the robot is actually configured with.
+Velocity and acceleration limits do not change while the driver runs, so they are parameters rather than a topic. `joint_velocity.*` mirrors `joint_acceleration.*`, with one exception: for the tool joint the velocity is published in URDF units, while the acceleration stays in the tool's actuator units (rad/s^2) — that is what the driver hands to `move_by()`, and converting it out and back would only add error. Values come from `stretch4_body`'s robot params (`robot_params[<joint>]['motion'][<profile>]['vel']`, with `<profile>` one of `default`, `slow`, `fast`, and `vel_m` / `vel_xy_m` / `vel_w_r` for lift, arm, and base), so they follow whatever tool and calibration the robot is actually configured with.
 
 Two things are specific to the tool joint:
 
