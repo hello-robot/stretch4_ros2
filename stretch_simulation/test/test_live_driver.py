@@ -721,7 +721,7 @@ class StretchLiveDriverTester(Node):
         self.ros_sleep(0.8)
         
         # Send a direct position command to the lift joint to preempt it
-        print(f"{YELLOW}Publishing direct joint command to 'lift' joint to preempt the active goal...{RESET}")
+        print(f"{YELLOW}Publishing direct joint command to 'lift_joint' to preempt the active goal...{RESET}")
         js = JointState()
         js.name = ["lift_joint"]
         js.position = [0.45]
