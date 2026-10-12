@@ -31,7 +31,6 @@ Four differences between the old and new paradigms are handled here:
 
 """
 
-import math
 import threading
 
 import rclpy
@@ -51,9 +50,9 @@ from sensor_msgs.msg import JointState
 try:
     # Only needed to reproduce legacy gripper commands. Absent on machines that run
     # the simulator without stretch4_body; the rest of the shim works without it.
-    from stretch4_body.subsystem.end_of_arm.gripper_conversion import GripperConversion
+    from stretch4_body.utils.tool_metadata import get_tool_metadata
 except Exception:
-    GripperConversion = None
+    get_tool_metadata = None
 
 JOINT_NAME_ALIASES = {
     "stretch_gripper_joint": "gripper_joint",
@@ -66,9 +65,9 @@ JOINT_NAME_ALIASES = {
 # motion means reproducing that displacement, so the factor is kept exactly.
 DEFAULT_GRIPPER_LEGACY_SCALE = 300.0
 
-# joint_states reports the gripper via GripperConversion.status_to_all, which halves the
-# aperture angle ("per finger"), while joint_position_cmd is consumed by finger_to_servo,
-# which does not. Both maps are affine, so the two differ by a constant. Exposed as a
+# joint_states reports each gripper finger's angle, which is half the aperture angle,
+# while joint_position_cmd's gripper_joint is the full aperture angle (the sum of the
+# two fingers). Both maps are affine, so the two differ by a constant. Exposed as a
 # parameter because it encodes a driver-side inconsistency rather than a physical value.
 DEFAULT_GRIPPER_STATE_TO_COMMAND = 2.0
 
@@ -181,16 +180,14 @@ class JointJogConverter(Node):
     def _setup_gripper_conversion(self):
         """Load the conversion needed to invert the driver's gripper position path.
 
-        set_joint_position turns a joint_position_cmd value into a servo angle with
-        finger_to_servo and then into a percentage. To land the gripper on the same
-        percentage the deprecated move_by would have reached, this node runs that
-        chain backwards, so it needs the same conversion the driver uses.
+        set_joint_position turns a joint_position_cmd value into a gripper percentage
+        with stretch4_body's tool metadata. To land the gripper on the same percentage
+        the deprecated move_by would have reached, this node runs that conversion
+        backwards, so it needs the same metadata the driver uses.
         """
-        self._gripper_conversion = None
-        self._gripper_servo_closed = None
-        self._gripper_pct_max_open = None
+        self._gripper_metadata = None
 
-        if GripperConversion is None:
+        if get_tool_metadata is None:
             self.get_logger().warn(
                 "stretch4_body is unavailable, so legacy gripper commands on "
                 f"{self.input_topic} cannot be reproduced. Every other joint is "
@@ -199,32 +196,20 @@ class JointJogConverter(Node):
             return
 
         try:
-            conversion = GripperConversion()
-            servo_closed = conversion.params["servo_closed_angle"]
-            servo_open = conversion.params["servo_open_angle"]
+            self._gripper_metadata = get_tool_metadata("stretch_gripper")
         except Exception as e:
             self.get_logger().warn(
                 f"Could not load the gripper conversion ({e}); legacy gripper "
                 f"commands on {self.input_topic} will not be reproduced."
             )
-            return
-
-        self._gripper_conversion = conversion
-        self._gripper_servo_closed = servo_closed
-        # StretchGripper.pct_max_open; a pct of -100 is fully closed.
-        self._gripper_pct_max_open = 100 * abs(servo_open / servo_closed)
 
     def _command_rad_to_pct(self, command_rad):
         """joint_position_cmd value -> gripper percentage, as set_joint_position does."""
-        servo_deg = self._gripper_conversion.finger_to_servo(command_rad)
-        return -100.0 * math.radians(servo_deg) / math.radians(self._gripper_servo_closed)
+        return self._gripper_metadata.urdf_to_command(command_rad / 2.0)
 
     def _pct_to_command_rad(self, pct):
         """Gripper percentage -> joint_position_cmd value (the inverse of the above)."""
-        servo_deg = math.degrees(
-            pct * math.radians(self._gripper_servo_closed) / -100.0
-        )
-        return self._gripper_conversion.servo_to_finger(servo_deg)
+        return 2.0 * self._gripper_metadata.command_to_urdf(pct)
 
     def joint_states_callback(self, msg: JointState):
         for joint in WRIST_JOINTS:
@@ -290,7 +275,7 @@ class JointJogConverter(Node):
         target rather than a velocity and arms no watchdog. A zero command stands in for
         the quick_stop the old callback issued: it holds the current position.
         """
-        if self._gripper_conversion is None:
+        if self._gripper_metadata is None:
             self.log_throttled(
                 "gripper_unavailable",
                 f"{self.input_topic}: dropping the command for '{original_name}' "
@@ -323,7 +308,8 @@ class JointJogConverter(Node):
         target_pct = current_pct + self.gripper_legacy_scale * velocity
         # StretchGripper.move_to would drive past the mechanism's range; the driver's
         # own joint limits are in finger units, so bound the percentage here instead.
-        target_pct = min(max(target_pct, -100.0), self._gripper_pct_max_open)
+        pct_closed, pct_open = self._gripper_metadata.command_range
+        target_pct = min(max(target_pct, pct_closed), pct_open)
 
         command = JointState()
         command.header.stamp = self.get_clock().now().to_msg()

@@ -3,12 +3,12 @@ from threading import Lock
 import importlib
 import copy
 import time
-from math import copysign, radians, degrees
+from math import copysign
 import pprint
 import sys
 
 import stretch4_body.robot.robot_client as rc
-from stretch4_body.subsystem.end_of_arm.gripper_conversion import GripperConversion
+from stretch4_body.utils.tool_metadata import get_tool_metadata, is_tool_joint
 import rclpy
 from rclpy.duration import Duration
 from rclpy.executors import MultiThreadedExecutor
@@ -42,7 +42,22 @@ import tf2_ros
 from tf_transformations import quaternion_from_euler
 
 class StretchDriver(Stretch4ROSDriver):
-    
+
+    # end_of_arm tool joint -> its command group in stretch_core.command_groups
+    TOOL_COMMAND_GROUPS = {
+        "stretch_gripper": "GripperCommandGroup",
+        "parallel_gripper": "ParallelGripperCommandGroup",
+    }
+
+    # How each tool's ROS joint relates to stretch4_body's tool metadata units:
+    # (metadata unit type, ROS value -> metadata value scale). The ROS gripper_joint
+    # is the sum of the two finger joints, while metadata "urdf" is a single finger;
+    # parallel_gripper_joint is the fingertip aperture in meters.
+    TOOL_ROS_UNITS = {
+        "stretch_gripper": ("urdf", 0.5),
+        "parallel_gripper": ("aperture", 1.0),
+    }
+
     def __init__(self):
         super().__init__('stretch_driver')
         self.get_logger().info("For use with S T R E T C H (TM) RESEARCH EDITION from Hello Robot Inc.")
@@ -87,8 +102,13 @@ class StretchDriver(Stretch4ROSDriver):
         # Velocity Control
         self.set_vel_functions = {}
 
-        self._gripper_conversion = GripperConversion(self.robot.robot_params["stretch_gripper"])
-        
+        # Unit conversions for the attached tool (gripper); None if there is no tool.
+        try:
+            self._tool_metadata = get_tool_metadata()
+        except Exception as e:
+            self._tool_metadata = None
+            self.get_logger().warn(f"No tool metadata ({e}); tool joints can't be commanded.")
+
         accel_params = []
         if hasattr(self.robot, 'lift'):
             self.set_vel_functions['lift_joint'] = lambda v, a:  self.robot.lift.set_velocity(v, a_m=a)
@@ -104,10 +124,19 @@ class StretchDriver(Stretch4ROSDriver):
                 # `joint` is a backend name here; ros_joint is how ROS addresses it.
                 ros_joint = "gripper_joint" if joint == "stretch_gripper" else f"{joint}_joint"
                 eoa_deadband = self.get_parameter("eoa_velocity_deadband").value
+                # each velocity command moves the joint by 0.05 s worth of its max speed
                 vel_increment = self.robot.robot_params[joint]["motion"]["max"]["vel"]*0.05
-                if joint == "stretch_gripper":
-                    vel_increment = degrees(vel_increment)
-                self.set_vel_functions[ros_joint]= lambda v, a, j=joint, eps=eoa_deadband: self.robot.end_of_arm.quick_stop(j) if abs(v) < eps else self.robot.end_of_arm.move_by(j, copysign(vel_increment,v), v_r=v, a_r = a)
+                if self.TOOL_COMMAND_GROUPS.get(joint) and is_tool_joint(joint):
+                    if self._tool_metadata is None:
+                        continue
+                    vel_increment = self._tool_actuator_to_command_delta(vel_increment)
+                    to_actuator_vel = self._tool_velocity_to_actuator
+                else:
+                    to_actuator_vel = lambda v: v
+                self.set_vel_functions[ros_joint] = (
+                    lambda v, a, j=joint, eps=eoa_deadband, step=vel_increment, to_act=to_actuator_vel:
+                        self.robot.end_of_arm.quick_stop(j) if abs(v) < eps
+                        else self.robot.end_of_arm.move_by(j, copysign(step, v), v_r=to_act(v), a_r=a))
                 accel_params.append(Parameter(f"joint_acceleration.{ros_joint}",Parameter.Type.DOUBLE,self.robot.robot_params[joint]['motion']['default']['accel']))
                 accel_params.append(Parameter(f"joint_limit.{ros_joint}.acceleration",Parameter.Type.DOUBLE,self.robot.robot_params[joint]['motion']['max']['accel']))
                 
@@ -161,8 +190,22 @@ class StretchDriver(Stretch4ROSDriver):
             self.joint_command_groups.append(cg)
             self.command_joints.append(cg.name)
             self.get_logger().debug(f"Discovered {class_name}")
-        self.velocity_joints = ["arm_joint", "lift_joint", "wrist_yaw_joint",
-                                "wrist_roll_joint", "wrist_pitch_joint", "gripper_joint"]
+
+        # stretch4_body no longer lists the tool in robot_params['ros']['joints'], so
+        # add the command group for whichever gripper is attached.
+        for joint in getattr(getattr(self.robot, 'end_of_arm', None), 'joints', []):
+            class_name = self.TOOL_COMMAND_GROUPS.get(joint)
+            if class_name is None or not is_tool_joint(joint):
+                continue
+            cg = getattr(importlib.import_module('stretch_core.command_groups'), class_name)()
+            if cg.name not in self.command_joints:
+                self.joint_command_groups.append(cg)
+                self.command_joints.append(cg.name)
+                self.get_logger().debug(f"Discovered {class_name}")
+
+        self.velocity_joints = [j for j in ["arm_joint", "lift_joint", "wrist_yaw_joint",
+                                            "wrist_roll_joint", "wrist_pitch_joint", "gripper_joint"]
+                                if j in self.command_joints]
             
     def _get_push_interval(self):
         return 0.2
@@ -356,8 +399,8 @@ class StretchDriver(Stretch4ROSDriver):
                     reason = f"Velocity mode may result in unsafe behavior and needs testing."
             case "sensitivity":
                 found = True
-                if parameter.value not in self.robot.get_guarded_modes():
-                    f"set_guarded_contact_sensitivity: Invalid mode name: {parameter.value}"
+                if parameter.value not in self.robot.get_guarded_contact_modes():
+                    reason = f"set_guarded_contact_sensitivity: Invalid mode name: {parameter.value}"
             case _:
                 reason=f"Parameter {parameter.name} not mutable or not found."
         return found,reason
@@ -417,17 +460,27 @@ class StretchDriver(Stretch4ROSDriver):
                 self.robot.arm.move_to(target,v_m = v, a_m = a)
             case "wrist_pitch_joint"|"wrist_roll_joint"|"wrist_yaw_joint":
                 self.robot.end_of_arm.move_to(self.backend_joint_name(joint), target, v, a)
-            case "gripper_joint":
-                self.logger.info(f"Moving gripper")
-                servo_angle_deg = self._gripper_conversion.finger_to_servo(target)
-                self.logger.info(f"Got servo angle degrees {servo_angle_deg}")
-                range_deg_closed = self.robot.robot_params["stretch_gripper"]["range_deg"][0]
-                self.logger.info(f"Got range for closed {range_deg_closed}")
-                pct = -100 * radians(servo_angle_deg) / radians(range_deg_closed)
-                self.logger.info(f"Got pct {pct} (v = {v} a={a})")
-                self.robot.end_of_arm.move_to(self.backend_joint_name(joint), pct, v, a)
+            case "gripper_joint" | "parallel_gripper_joint":
+                if self._tool_metadata is None:
+                    self.logger.warn(f"Unable to set position for {joint}: no tool metadata.")
+                    return
+                unit, scale = self.TOOL_ROS_UNITS[self._tool_metadata.tool_name]
+                command = getattr(self._tool_metadata, f"{unit}_to_command")(target * scale)
+                v_r = self._tool_velocity_to_actuator(v) if v is not None else None
+                self.robot.end_of_arm.move_to(self.backend_joint_name(joint), command, v_r, a)
             case _:
                 self.logger.warn(f"Unable to set position for unknown joint {joint}.")
+
+    def _tool_velocity_to_actuator(self, v):
+        """ROS gripper speed -> actuator speed (rad/s), for move_to/move_by's v_r."""
+        unit, scale = self.TOOL_ROS_UNITS[self._tool_metadata.tool_name]
+        low, high = self._tool_metadata.unit_type_range(unit)
+        return abs(self._tool_metadata.convert_velocity(v * scale, unit, "actuator", (low + high) / 2.0))
+
+    def _tool_actuator_to_command_delta(self, delta):
+        """Actuator displacement (rad) -> tool command units (percent on SG4, meters on PG4)."""
+        low, high = self._tool_metadata.actuator_range
+        return abs(self._tool_metadata.convert_delta(delta, "actuator", "command", (low + high) / 2.0))
         
     def publish_child_info(self):
         #real robot driver doesn't have additional publishers
