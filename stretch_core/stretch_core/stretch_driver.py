@@ -1,6 +1,5 @@
 #! /usr/bin/env python3
 from threading import Lock
-import importlib
 import copy
 import time
 from math import copysign
@@ -43,19 +42,22 @@ from tf_transformations import quaternion_from_euler
 
 class StretchDriver(Stretch4ROSDriver):
 
-    # end_of_arm tool joint -> its command group in stretch_core.command_groups
-    TOOL_COMMAND_GROUPS = {
-        "stretch_gripper": "GripperCommandGroup",
-        "parallel_gripper": "ParallelGripperCommandGroup",
-    }
+    # Command joints are discovered from stretch4_body rather than listed here: each
+    # joint's ROS name is its stretch4_body name + "_joint", with the two exceptions below.
 
-    # How each tool's ROS joint relates to stretch4_body's tool metadata units:
-    # (metadata unit type, ROS value -> metadata value scale). The ROS gripper_joint
-    # is the sum of the two finger joints, while metadata "urdf" is a single finger;
-    # parallel_gripper_joint is the fingertip aperture in meters.
-    TOOL_ROS_UNITS = {
-        "stretch_gripper": ("urdf", 0.5),
-        "parallel_gripper": ("aperture", 1.0),
+    # Whatever tool is attached (stretch4_body's end_of_arm.gripper) is commanded as
+    # this one joint; its value is the sum of the tool's URDF joints (ToolMetadata
+    # .tool_joints), e.g. the two finger angles of the Stretch gripper. To name tools
+    # differently, change how startup_robot names the tool joint, and update the sim
+    # driver's command_joints, hello_helpers' BACKEND_JOINT_NAMES / JOINT_NAME_ALIASES
+    # / gamepad mapping, the joint_jog_converter, and the tests, which all use this name.
+    # Assumes a single-DOF tool (ToolMetadata is scalar).
+    TOOL_JOINT = "gripper_joint"
+
+    # Command joints that /joint_states reports as several equal URDF joints, each
+    # carrying an equal share of the command joint's position and velocity.
+    SPLIT_JOINTS = {
+        "arm_joint": ["arm_l4_joint", "arm_l3_joint", "arm_l2_joint", "arm_l1_joint"],
     }
 
     def __init__(self):
@@ -102,44 +104,28 @@ class StretchDriver(Stretch4ROSDriver):
         # Velocity Control
         self.set_vel_functions = {}
 
-        # Unit conversions for the attached tool (gripper); None if there is no tool.
-        try:
-            self._tool_metadata = get_tool_metadata()
-        except Exception as e:
-            self._tool_metadata = None
-            self.get_logger().warn(f"No tool metadata ({e}); tool joints can't be commanded.")
-
         accel_params = []
-        if hasattr(self.robot, 'lift'):
-            self.set_vel_functions['lift_joint'] = lambda v, a:  self.robot.lift.set_velocity(v, a_m=a)
-            #snelf.set_vel_functions['lift_joint'] = lambda v, a: self.robot.lift.move_by(v*0.3, v_m = v, a_m = a)
-            accel_params.append(Parameter("joint_acceleration.lift_joint",Parameter.Type.DOUBLE,self.robot.robot_params['lift']['motion']['default']['accel_m']))
-            accel_params.append(Parameter("joint_limit.lift_joint.acceleration",Parameter.Type.DOUBLE,self.robot.robot_params['lift']['motion']['max']['accel_m']))
-        if hasattr(self.robot, 'arm'):
-            self.set_vel_functions['arm_joint'] = lambda v, a:  self.robot.arm.set_velocity(v, a_m=a)
-            accel_params.append(Parameter("joint_acceleration.arm_joint",Parameter.Type.DOUBLE, self.robot.robot_params['arm']['motion']['default']['accel_m']))
-            accel_params.append(Parameter("joint_limit.arm_joint.acceleration",Parameter.Type.DOUBLE, self.robot.robot_params['arm']['motion']['max']['accel_m']))
-        if hasattr(self.robot, 'end_of_arm') and hasattr(self.robot.end_of_arm, 'joints'):
-            for joint in self.robot.end_of_arm.joints:
-                # `joint` is a backend name here; ros_joint is how ROS addresses it.
-                ros_joint = "gripper_joint" if joint == "stretch_gripper" else f"{joint}_joint"
-                eoa_deadband = self.get_parameter("eoa_velocity_deadband").value
+        eoa_deadband = self.get_parameter("eoa_velocity_deadband").value
+        for joint, backend in self.joint_backends.items():
+            motion = self.robot.robot_params[backend]['motion']
+            if self._is_end_of_arm(backend):
                 # each velocity command moves the joint by 0.05 s worth of its max speed
-                vel_increment = self.robot.robot_params[joint]["motion"]["max"]["vel"]*0.05
-                if self.TOOL_COMMAND_GROUPS.get(joint) and is_tool_joint(joint):
-                    if self._tool_metadata is None:
-                        continue
+                vel_increment = motion["max"]["vel"]*0.05
+                if joint == self.TOOL_JOINT:
                     vel_increment = self._tool_actuator_to_command_delta(vel_increment)
                     to_actuator_vel = self._tool_velocity_to_actuator
                 else:
                     to_actuator_vel = lambda v: v
-                self.set_vel_functions[ros_joint] = (
-                    lambda v, a, j=joint, eps=eoa_deadband, step=vel_increment, to_act=to_actuator_vel:
+                self.set_vel_functions[joint] = (
+                    lambda v, a, j=backend, eps=eoa_deadband, step=vel_increment, to_act=to_actuator_vel:
                         self.robot.end_of_arm.quick_stop(j) if abs(v) < eps
                         else self.robot.end_of_arm.move_by(j, copysign(step, v), v_r=to_act(v), a_r=a))
-                accel_params.append(Parameter(f"joint_acceleration.{ros_joint}",Parameter.Type.DOUBLE,self.robot.robot_params[joint]['motion']['default']['accel']))
-                accel_params.append(Parameter(f"joint_limit.{ros_joint}.acceleration",Parameter.Type.DOUBLE,self.robot.robot_params[joint]['motion']['max']['accel']))
-                
+            else:
+                self.set_vel_functions[joint] = (
+                    lambda v, a, subsystem=getattr(self.robot, backend): subsystem.set_velocity(v, a_m=a))
+            accel_params.append(Parameter(f"joint_acceleration.{joint}", Parameter.Type.DOUBLE, self._accel(motion['default'])))
+            accel_params.append(Parameter(f"joint_limit.{joint}.acceleration", Parameter.Type.DOUBLE, self._accel(motion['max'])))
+
 
         accel_params.append(Parameter("joint_acceleration.omnibase.linear", Parameter.Type.DOUBLE,self.robot.robot_params['omnibase']['motion']['default']['accel_xy_m']))
         accel_params.append(Parameter("joint_acceleration.omnibase.angular", Parameter.Type.DOUBLE,self.robot.robot_params['omnibase']['motion']['default']['accel_w_r']))
@@ -179,33 +165,109 @@ class StretchDriver(Stretch4ROSDriver):
         if not self.robot.is_homed():
             self.robot.logger.warn('Robot is not homed.')
 
-        self.joint_command_groups: list[BaseCommandGroup] = []
-        self.command_joints = []
-        for joint_params in self.robot.robot_params['ros']['joints']:
-            module_name = joint_params['py_module_name']
-            class_name = joint_params['py_class_name']
-            module = importlib.import_module(module_name)
-            class_obj = getattr(module, class_name)
-            cg = class_obj()
-            self.joint_command_groups.append(cg)
-            self.command_joints.append(cg.name)
-            self.get_logger().debug(f"Discovered {class_name}")
+        # Unit conversions for the attached tool (gripper); None if there is no tool.
+        try:
+            self._tool_metadata = get_tool_metadata()
+        except Exception as e:
+            self._tool_metadata = None
+            self.get_logger().warn(f"No tool metadata ({e}); tool joints can't be commanded.")
 
-        # stretch4_body no longer lists the tool in robot_params['ros']['joints'], so
-        # add the command group for whichever gripper is attached.
-        for joint in getattr(getattr(self.robot, 'end_of_arm', None), 'joints', []):
-            class_name = self.TOOL_COMMAND_GROUPS.get(joint)
-            if class_name is None or not is_tool_joint(joint):
-                continue
-            cg = getattr(importlib.import_module('stretch_core.command_groups'), class_name)()
-            if cg.name not in self.command_joints:
-                self.joint_command_groups.append(cg)
-                self.command_joints.append(cg.name)
-                self.get_logger().debug(f"Discovered {class_name}")
+        # Discover the command joints, as {ROS command joint: stretch4_body joint name}:
+        # top-level subsystems whose status is a joint's (the lift and arm), then the
+        # end of arm's joints (wrists and tool).
+        self.robot.pull_status()
+        self._status_paths = {}
+        self.joint_backends = {}
+        for name, status in self.robot.status.items():
+            if self._is_joint_status(status) and hasattr(self.robot, name):
+                self.joint_backends[f"{name}_joint"] = name
+        for name in getattr(getattr(self.robot, 'end_of_arm', None), 'joints', []):
+            if not is_tool_joint(name):
+                self.joint_backends[f"{name}_joint"] = name
+            elif self._tool_metadata is not None:
+                self.joint_backends[self.TOOL_JOINT] = name
+        self.command_joints = list(self.joint_backends)
+        self.velocity_joints = list(self.joint_backends)
+        self.get_logger().info(f"Command joints: {self.joint_backends}")
 
-        self.velocity_joints = [j for j in ["arm_joint", "lift_joint", "wrist_yaw_joint",
-                                            "wrist_roll_joint", "wrist_pitch_joint", "gripper_joint"]
-                                if j in self.command_joints]
+    def backend_joint_name(self, name):
+        return self.joint_backends.get(name, name)
+
+    def _is_end_of_arm(self, backend):
+        return backend in getattr(getattr(self.robot, 'end_of_arm', None), 'joints', [])
+
+    @staticmethod
+    def _accel(motion_limits):
+        """A joint's acceleration from its stretch4_body motion params (m/s^2 or rad/s^2)."""
+        for key in ('accel_m', 'accel_r', 'accel'):
+            if key in motion_limits:
+                return motion_limits[key]
+        return None
+
+    # --- reading joints out of stretch4_body's status --------------------------
+
+    @staticmethod
+    def _is_joint_status(status):
+        return isinstance(status, dict) and 'pos' in status and 'vel' in status
+
+    def _find_status_path(self, robot_status, backend):
+        """Path to the shallowest dict keyed `backend` that is a joint's status (has its
+        own 'pos' and 'vel'). Searching shallowest-first matters: safety_layer data is
+        copied into each subsystem's status and contains deeper dicts keyed by joint
+        names (e.g. the self-collision sentry's per-joint state) that aren't joints."""
+        level = [((), robot_status)]
+        seen = set()
+        while level:
+            next_level = []
+            for path, d in level:
+                for key, value in d.items():
+                    if not isinstance(value, dict) or id(value) in seen:
+                        continue
+                    seen.add(id(value))
+                    if key == backend and self._is_joint_status(value):
+                        return path + (key,)
+                    next_level.append((path + (key,), value))
+            level = next_level
+        return None
+
+    def _joint_status(self, robot_status, backend):
+        """The status dict for stretch4_body joint `backend`, or None if it isn't there."""
+        path = self._status_paths.get(backend)
+        if path is None:
+            path = self._status_paths[backend] = self._find_status_path(robot_status, backend)
+            if path is None:
+                return None
+        status = robot_status
+        for key in path:
+            status = status[key]
+        return status
+
+    @staticmethod
+    def _status_field(status, *keys, default=None):
+        """First of `keys` found in a joint's status, or in its 'motor' sub-dict (where
+        stepper-driven joints such as the lift and arm keep their motor-level values)."""
+        for d in (status, status.get('motor', {})):
+            for key in keys:
+                if key in d:
+                    return d[key]
+        return default
+
+    def _ros_joint_states(self, joint, pos, vel):
+        """(name, position, velocity) for each /joint_states entry of a command joint."""
+        if joint == self.TOOL_JOINT:
+            meta = self._tool_metadata
+            return [(name, meta.actuator_to_urdf(pos), meta.actuator_to_urdf_velocity(vel, pos))
+                    for name in meta.tool_joints]
+        if joint in self.SPLIT_JOINTS:
+            links = self.SPLIT_JOINTS[joint]
+            return [(link, pos/len(links), vel/len(links)) for link in links]
+        return [(joint, pos, vel)]
+
+    def _state_joint_names(self, joint):
+        """The /joint_states names whose values sum to command joint `joint`."""
+        if joint == self.TOOL_JOINT and self._tool_metadata is not None:
+            return self._tool_metadata.tool_joints
+        return self.SPLIT_JOINTS.get(joint, [joint])
             
     def _get_push_interval(self):
         return 0.2
@@ -281,100 +343,45 @@ class StretchDriver(Stretch4ROSDriver):
         joint_state = JointState()
         joint_state.header.stamp = status_time
 
-        for cg in self.joint_command_groups:
-            pos, vel, eff = cg.joint_state(robot_status)
-
-            if cg.name == "arm_joint":
-                # the arm's extension is split evenly across its four telescoping links
-                # (arm_l1..arm_l4); command_joint_pose_from_joint_state sums them back up
-                for link in ['arm_l4_joint', 'arm_l3_joint', 'arm_l2_joint', 'arm_l1_joint']:
-                    joint_state.name.append(link)
-                    joint_state.position.append(pos/4.0)
-                    joint_state.velocity.append(vel/4.0)
-                    joint_state.effort.append(eff)
-                    
-            elif cg.name == "gripper_joint":
-                for link in ['gripper_finger_left_joint', 'gripper_finger_right_joint']:
-                    joint_state.name.append(link)
-                    joint_state.position.append(pos)
-                    joint_state.velocity.append(vel)
-                    joint_state.effort.append(eff)
-            elif cg.name == "parallel_gripper_joint":
-                finger_pos = -pos / 2.0
-                for link in ['finger_left_joint', 'finger_right_joint']:
-                    joint_state.name.append(link)
-                    joint_state.position.append(finger_pos)
-                    joint_state.velocity.append(vel)
-                    joint_state.effort.append(eff)
-            elif cg.name == "translate_mobile_base":
-                for w in ['wheel_0_joint', 'wheel_1_joint', 'wheel_2_joint']:
-                    joint_state.name.append(w)
-                    joint_state.position.append(0.0)
-                    joint_state.velocity.append(0.0)
-                    joint_state.effort.append(0.0)
-            else:
-                joint_state.name.append(cg.name)
+        for joint, backend in self.joint_backends.items():
+            status = self._joint_status(robot_status, backend)
+            if status is None:
+                continue
+            effort = self._status_field(status, 'effort', 'effort_pct')
+            for name, pos, vel in self._ros_joint_states(joint, status['pos'], status['vel']):
+                joint_state.name.append(name)
                 joint_state.position.append(pos)
                 joint_state.velocity.append(vel)
-                joint_state.effort.append(eff)
+                joint_state.effort.append(effort)
+
+        # The wheels aren't command joints, but the URDF needs them; their status is in
+        # motor units, so publish zeros until that is converted (see the to-do list).
+        for name, status in robot_status['omnibase'].items():
+            if self._is_joint_status(status):
+                joint_state.name.append(f"{name}_joint")
+                joint_state.position.append(0.0)
+                joint_state.velocity.append(0.0)
+                joint_state.effort.append(0.0)
 
         return joint_state
 
-
-    #this function is needed because the published joint state splits up the
-    #arm and uses different names than the joint names used to send commands
+    # /joint_states splits some command joints into several URDF joints (see
+    # _ros_joint_states); these sum them back up.
     def command_joint_pose_from_joint_state(self, command_joint, joint_state, default=None):
-        match command_joint:
-            case "arm_joint":
-                poses = []
-                # /joint_states splits the telescoping arm into its four links.
-                subjoints = [f"arm_l{i}_joint" for i in [1,2,3,4]]
-                for j in subjoints:
-                    try:
-                        poses.append(joint_state.position[joint_state.name.index(j)])
-                    except ValueError:
-                        pass
-                return sum(poses) if poses else default
-            case "gripper_joint":
-                try:
-                    left = joint_state.position[joint_state.name.index("gripper_finger_left_joint")]
-                    right = joint_state.position[joint_state.name.index("gripper_finger_right_joint")]
-                    return left + right
-                except ValueError:
-                    return default
-            case _:
-                try:
-                    return joint_state.position[joint_state.name.index(command_joint)]
-                except (ValueError, IndexError):
-                    return default
+        return self._sum_joint_state(joint_state.position, command_joint, joint_state, default)
 
-                
     def command_joint_vel_from_joint_state(self, command_joint, joint_state, default=None):
-        match command_joint:
-            case "arm_joint":
-                vels = []
-                # /joint_states splits the telescoping arm into its four links.
-                subjoints = [f"arm_l{i}_joint" for i in [1,2,3,4]]
-                for j in subjoints:
-                    try:
-                        vels.append(joint_state.velocity[joint_state.name.index(j)])
-                    except (ValueError, IndexError):
-                        pass
-                return sum(vels) if vels else default
-            case "gripper_joint":
-                try:
-                    left = joint_state.velocity[joint_state.name.index("gripper_finger_left_joint")]
-                    right = joint_state.velocity[joint_state.name.index("gripper_finger_right_joint")]
-                    return left + right
-                except (ValueError, IndexError):
-                    return default
-            case _:
-                try:
-                    return joint_state.velocity[joint_state.name.index(command_joint)]
-                except (ValueError, IndexError):
-                    return default
+        return self._sum_joint_state(joint_state.velocity, command_joint, joint_state, default)
 
-                
+    def _sum_joint_state(self, values, command_joint, joint_state, default):
+        found = []
+        for name in self._state_joint_names(command_joint):
+            try:
+                found.append(values[joint_state.name.index(name)])
+            except (ValueError, IndexError):
+                pass
+        return sum(found) if found else default
+
     def declare_node_params(self):
         # Below this magnitude, a wrist velocity-mode command is treated as an explicit stop
         # rather than forwarded to move_by(). Necessary because a tiny nonzero float velocity
@@ -391,12 +398,6 @@ class StretchDriver(Stretch4ROSDriver):
         found = False
      
         match parameter.name:
-            case "joint_mode.stretch_gripper":
-                found = True
-            case "joint_mode.parallel_gripper":
-                found = True
-                if parameter.value == "velocity":
-                    reason = f"Velocity mode may result in unsafe behavior and needs testing."
             case "sensitivity":
                 found = True
                 if parameter.value not in self.robot.get_guarded_contact_modes():
@@ -453,29 +454,25 @@ class StretchDriver(Stretch4ROSDriver):
         
         self.command_publishers[joint].publish(command)
             
-        match joint:
-            case "lift_joint":
-                self.robot.lift.move_to(target,v_m = v, a_m = a)
-            case "arm_joint":
-                self.robot.arm.move_to(target,v_m = v, a_m = a)
-            case "wrist_pitch_joint"|"wrist_roll_joint"|"wrist_yaw_joint":
-                self.robot.end_of_arm.move_to(self.backend_joint_name(joint), target, v, a)
-            case "gripper_joint" | "parallel_gripper_joint":
-                if self._tool_metadata is None:
-                    self.logger.warn(f"Unable to set position for {joint}: no tool metadata.")
-                    return
-                unit, scale = self.TOOL_ROS_UNITS[self._tool_metadata.tool_name]
-                command = getattr(self._tool_metadata, f"{unit}_to_command")(target * scale)
-                v_r = self._tool_velocity_to_actuator(v) if v is not None else None
-                self.robot.end_of_arm.move_to(self.backend_joint_name(joint), command, v_r, a)
-            case _:
-                self.logger.warn(f"Unable to set position for unknown joint {joint}.")
+        backend = self.joint_backends.get(joint)
+        if backend is None:
+            self.logger.warn(f"Unable to set position for unknown joint {joint}.")
+        elif joint == self.TOOL_JOINT:
+            command = self._tool_metadata.urdf_to_command(target / len(self._tool_metadata.tool_joints))
+            v_r = self._tool_velocity_to_actuator(v) if v is not None else None
+            self.robot.end_of_arm.move_to(backend, command, v_r, a)
+        elif self._is_end_of_arm(backend):
+            self.robot.end_of_arm.move_to(backend, target, v, a)
+        else:
+            getattr(self.robot, backend).move_to(target, v_m=v, a_m=a)
 
+    # The tool's command joint is the sum of its URDF joints (see TOOL_JOINT), while
+    # stretch4_body's ToolMetadata works in units of a single URDF joint.
     def _tool_velocity_to_actuator(self, v):
         """ROS gripper speed -> actuator speed (rad/s), for move_to/move_by's v_r."""
-        unit, scale = self.TOOL_ROS_UNITS[self._tool_metadata.tool_name]
-        low, high = self._tool_metadata.unit_type_range(unit)
-        return abs(self._tool_metadata.convert_velocity(v * scale, unit, "actuator", (low + high) / 2.0))
+        meta = self._tool_metadata
+        low, high = meta.urdf_range
+        return abs(meta.urdf_to_actuator_velocity(v / len(meta.tool_joints), (low + high) / 2.0))
 
     def _tool_actuator_to_command_delta(self, delta):
         """Actuator displacement (rad) -> tool command units (percent on SG4, meters on PG4)."""
@@ -490,16 +487,16 @@ class StretchDriver(Stretch4ROSDriver):
     def stop_the_robot_callback(self, request, response):
         with self.driver_mode_lock:
             self.robot.omnibase.rotate_by(0.0)
-            self.robot.lift.move_by(0.0)
+            for backend in self.joint_backends.values():
+                if self._is_end_of_arm(backend):
+                    self.robot.end_of_arm.move_by(backend, 0.0)
+                else:
+                    getattr(self.robot, backend).move_by(0.0)
+        response.success = True
+        response.message = "Stopped the robot."
+        return response
 
-            if hasattr(self.robot, 'arm'):
-                self.robot.arm.move_by(0.0)
 
-            if hasattr(self.robot, 'end_of_arm') and hasattr(self.robot.end_of_arm, 'joints'):
-                for joint in self.robot.end_of_arm.joints:
-                    self.robot.end_of_arm.move_by(joint, 0.0)
-
- 
     def home_the_robot_callback(self, request, response):
         self.robot.logger.debug('Received home_the_robot service call.')
         did_succeed, msg = self.home_the_robot()
@@ -661,37 +658,25 @@ class StretchDriver(Stretch4ROSDriver):
         in_collision_msg = DiagnosticStatus(name="in_collision")
 
 
-        for cg in self.joint_command_groups:
-            pos, vel, eff = cg.joint_state(robot_status)
-            if cg.name == "translate_mobile_base":
+        robot_runstopped = bool(robot_status['power_periph']['runstop_event'])
+        for joint, backend in self.joint_backends.items():
+            status = self._joint_status(robot_status, backend)
+            if status is None:
                 continue
+            is_homed = bool(self._status_field(status, 'pos_calibrated', default=False))
+            is_homing = bool(self._status_field(status, 'is_homing', default=False))
+            # stepper joints report their own runstop; servo joints only have the robot's
+            is_runstopped = bool(self._status_field(status, 'runstop_on', default=robot_runstopped))
+            current = self._status_field(status, 'current_mA', 'current')
 
-            joint_status_key = cg.name.replace("_joint","")
-            if joint_status_key == "gripper":
-                joint_status_key = "stretch_gripper"
-
-            if joint_status_key in ["wrist_roll", "wrist_pitch", "wrist_yaw", "stretch_gripper", "parallel_gripper"]:
-                status_dict = robot_status["end_of_arm"][joint_status_key]
-                is_homed = bool(status_dict.get('pos_calibrated', False))
-                is_homing = bool(status_dict.get('is_homing', False))
-            else: 
-                status_dict = robot_status[joint_status_key]
-                is_homed = bool(status_dict['motor'].get('pos_calibrated', False))
-                is_homing = bool(status_dict['motor'].get('is_homing', False))
-                is_runstopped = bool(status_dict['motor'].get('runstop_on', False))
-
-            at_limit_msg.values.append(KeyValue(key=cg.name, value=f"{status_dict['at_limit']}"))
-            soft_limits_msg.values.append(KeyValue(key=cg.name, value=f"{status_dict['soft_motion_limits']}"))
-            braking_distance_msg.values.append(KeyValue(key=cg.name, value=f"{status_dict['braking_distance']}"))
-            
-            if 'motor' in status_dict:
-                current_msg.values.append(KeyValue(key=cg.name, value=f"{status_dict['motor']['current']}"))
-            else:
-                current_msg.values.append(KeyValue(key=cg.name, value=f"{status_dict['current_mA']}"))
-            is_homed_msg.values.append(KeyValue(key=cg.name, value=f"{is_homed}"))
-            is_homing_msg.values.append(KeyValue(key=cg.name, value=f"{is_homing}"))
-            is_runstopped_msg.values.append(KeyValue(key=cg.name, value=f"{is_runstopped}"))
-            in_collision_msg.values.append(KeyValue(key=cg.name, value=f"{status_dict['in_collision_stop']}"))
+            at_limit_msg.values.append(KeyValue(key=joint, value=f"{status['at_limit']}"))
+            soft_limits_msg.values.append(KeyValue(key=joint, value=f"{status['soft_motion_limits']}"))
+            braking_distance_msg.values.append(KeyValue(key=joint, value=f"{status['braking_distance']}"))
+            current_msg.values.append(KeyValue(key=joint, value=f"{current}"))
+            is_homed_msg.values.append(KeyValue(key=joint, value=f"{is_homed}"))
+            is_homing_msg.values.append(KeyValue(key=joint, value=f"{is_homing}"))
+            is_runstopped_msg.values.append(KeyValue(key=joint, value=f"{is_runstopped}"))
+            in_collision_msg.values.append(KeyValue(key=joint, value=f"{status['in_collision_stop']}"))
 
         joint_state_diagnostics.status.append(is_runstopped_msg)
         joint_state_diagnostics.status.append(is_homed_msg)

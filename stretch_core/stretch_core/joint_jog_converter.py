@@ -71,7 +71,8 @@ DEFAULT_GRIPPER_LEGACY_SCALE = 300.0
 # parameter because it encodes a driver-side inconsistency rather than a physical value.
 DEFAULT_GRIPPER_STATE_TO_COMMAND = 2.0
 
-# joint_states names for the gripper, in preference order (see GripperCommandGroup).
+# joint_states names for the gripper, in preference order (the Stretch gripper's
+# ToolMetadata.tool_joints).
 GRIPPER_STATE_NAMES = ('gripper_finger_left_joint', 'gripper_finger_right_joint')
 
 # joint_vel carries a displacement rather than a velocity for these, so they are
