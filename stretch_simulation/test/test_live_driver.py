@@ -162,32 +162,32 @@ class StretchLiveDriverTester(Node):
         rclpy.spin_until_future_complete(self, future)
         print(f"{GREEN}✓ Restored parameter 'mode' back to 'active'{RESET}")
 
-        # Test C: Set joint_limit.lift.velocity to a valid value (0.05)
+        # Test C: Set joint_limit.lift_joint.velocity to a valid value (0.05)
         req_set_limit = SetParameters.Request()
         p_limit = ParameterMsg()
-        p_limit.name = 'joint_limit.lift.velocity'
+        p_limit.name = 'joint_limit.lift_joint.velocity'
         p_limit.value.type = ParameterType.PARAMETER_DOUBLE
         p_limit.value.double_value = 0.05
         req_set_limit.parameters = [p_limit]
         future_limit = self.param_set_cli.call_async(req_set_limit)
         rclpy.spin_until_future_complete(self, future_limit)
         res_limit = future_limit.result()
-        assert res_limit is not None and res_limit.results[0].successful, "Failed to set joint_limit.lift.velocity to a valid positive value"
-        print(f"{GREEN}✓ Successfully set parameter 'joint_limit.lift.velocity' to 0.05{RESET}")
+        assert res_limit is not None and res_limit.results[0].successful, "Failed to set joint_limit.lift_joint.velocity to a valid positive value"
+        print(f"{GREEN}✓ Successfully set parameter 'joint_limit.lift_joint.velocity' to 0.05{RESET}")
 
-        # Test D: Set joint_limit.lift.velocity to an invalid negative value (-0.05) -> should fail
+        # Test D: Set joint_limit.lift_joint.velocity to an invalid negative value (-0.05) -> should fail
         p_limit.value.double_value = -0.05
         future_limit_neg = self.param_set_cli.call_async(req_set_limit)
         rclpy.spin_until_future_complete(self, future_limit_neg)
         res_limit_neg = future_limit_neg.result()
         assert res_limit_neg is not None and not res_limit_neg.results[0].successful, "Unexpectedly allowed setting negative joint velocity limit"
-        print(f"{GREEN}✓ Successfully rejected negative value for 'joint_limit.lift.velocity'{RESET}")
+        print(f"{GREEN}✓ Successfully rejected negative value for 'joint_limit.lift_joint.velocity'{RESET}")
 
-        # Test E: Reset joint_limit.lift.velocity to None/large to not affect other tests
+        # Test E: Reset joint_limit.lift_joint.velocity to None/large to not affect other tests
         p_limit.value.double_value = 999.0
         future_limit_reset = self.param_set_cli.call_async(req_set_limit)
         rclpy.spin_until_future_complete(self, future_limit_reset)
-        print(f"{GREEN}✓ Reset parameter 'joint_limit.lift.velocity' back to default large value{RESET}")
+        print(f"{GREEN}✓ Reset parameter 'joint_limit.lift_joint.velocity' back to default large value{RESET}")
 
         # Test F: Set read-only 'control_loop_rate' -> should fail
         req_set_ro = SetParameters.Request()
@@ -223,39 +223,39 @@ class StretchLiveDriverTester(Node):
         assert res_gp_dt_neg is not None and not res_gp_dt_neg.results[0].successful, "Unexpectedly allowed negative gamepad.dt"
         print(f"{GREEN}✓ Successfully rejected negative value for 'gamepad.dt'{RESET}")
 
-        # Test I: Set valid gamepad.max_vel.lift (0.3)
+        # Test I: Set valid gamepad.max_vel.lift_joint (0.3)
         req_set_gp_vel = SetParameters.Request()
         p_gp_vel = ParameterMsg()
-        p_gp_vel.name = 'gamepad.max_vel.lift'
+        p_gp_vel.name = 'gamepad.max_vel.lift_joint'
         p_gp_vel.value.type = ParameterType.PARAMETER_DOUBLE
         p_gp_vel.value.double_value = 0.3
         req_set_gp_vel.parameters = [p_gp_vel]
         future_gp_vel = self.param_set_cli.call_async(req_set_gp_vel)
         rclpy.spin_until_future_complete(self, future_gp_vel)
         res_gp_vel = future_gp_vel.result()
-        assert res_gp_vel is not None and res_gp_vel.results[0].successful, "Failed to set valid gamepad.max_vel.lift"
-        print(f"{GREEN}✓ Successfully set parameter 'gamepad.max_vel.lift' to 0.3{RESET}")
+        assert res_gp_vel is not None and res_gp_vel.results[0].successful, "Failed to set valid gamepad.max_vel.lift_joint"
+        print(f"{GREEN}✓ Successfully set parameter 'gamepad.max_vel.lift_joint' to 0.3{RESET}")
 
-        # Test J: Set valid gamepad.deadzone.lift (0.02)
+        # Test J: Set valid gamepad.deadzone.lift_joint (0.02)
         req_set_gp_dz = SetParameters.Request()
         p_gp_dz = ParameterMsg()
-        p_gp_dz.name = 'gamepad.deadzone.lift'
+        p_gp_dz.name = 'gamepad.deadzone.lift_joint'
         p_gp_dz.value.type = ParameterType.PARAMETER_DOUBLE
         p_gp_dz.value.double_value = 0.02
         req_set_gp_dz.parameters = [p_gp_dz]
         future_gp_dz = self.param_set_cli.call_async(req_set_gp_dz)
         rclpy.spin_until_future_complete(self, future_gp_dz)
         res_gp_dz = future_gp_dz.result()
-        assert res_gp_dz is not None and res_gp_dz.results[0].successful, "Failed to set valid gamepad.deadzone.lift"
-        print(f"{GREEN}✓ Successfully set parameter 'gamepad.deadzone.lift' to 0.02{RESET}")
+        assert res_gp_dz is not None and res_gp_dz.results[0].successful, "Failed to set valid gamepad.deadzone.lift_joint"
+        print(f"{GREEN}✓ Successfully set parameter 'gamepad.deadzone.lift_joint' to 0.02{RESET}")
 
-        # Test K: Set invalid gamepad.deadzone.lift (1.5) -> should fail
+        # Test K: Set invalid gamepad.deadzone.lift_joint (1.5) -> should fail
         p_gp_dz.value.double_value = 1.5
         future_gp_dz_inv = self.param_set_cli.call_async(req_set_gp_dz)
         rclpy.spin_until_future_complete(self, future_gp_dz_inv)
         res_gp_dz_inv = future_gp_dz_inv.result()
-        assert res_gp_dz_inv is not None and not res_gp_dz_inv.results[0].successful, "Unexpectedly allowed invalid gamepad.deadzone.lift"
-        print(f"{GREEN}✓ Successfully rejected invalid value for 'gamepad.deadzone.lift'{RESET}")
+        assert res_gp_dz_inv is not None and not res_gp_dz_inv.results[0].successful, "Unexpectedly allowed invalid gamepad.deadzone.lift_joint"
+        print(f"{GREEN}✓ Successfully rejected invalid value for 'gamepad.deadzone.lift_joint'{RESET}")
 
     # =========================================================================
     # 2. HOMING & STOWING SERVICE INTERFACES
@@ -291,7 +291,7 @@ class StretchLiveDriverTester(Node):
 
         # Construct position command for the lift joint
         js = JointState()
-        js.name = ["lift"]
+        js.name = ["lift_joint"]
         js.position = [0.5]
         
         # Publish command multiple times to ensure subscriber receives it
@@ -324,7 +324,7 @@ class StretchLiveDriverTester(Node):
         print_robot_behavior("The simulated gripper should set to a few values, and we will verify the left and right finger joints sum up to the commanded value.")
         for target_gripper_val in [0.1, 0.25]:
             js = JointState()
-            js.name = ["stretch_gripper"]
+            js.name = ["gripper_joint"]
             js.position = [target_gripper_val]
             
             for _ in range(5):
@@ -396,26 +396,26 @@ class StretchLiveDriverTester(Node):
         assert self.latest_joint_state is not None, "No JointState received yet!"
 
         def get_joint_pos(joint_name):
-            if joint_name == "arm":
+            if joint_name == "arm_joint":
                 arm_positions = [self.latest_joint_state.position[self.latest_joint_state.name.index(link)] for link in ['arm_l1_joint', 'arm_l2_joint', 'arm_l3_joint', 'arm_l4_joint']]
                 return sum(arm_positions)
-            elif joint_name == "stretch_gripper":
+            elif joint_name == "gripper_joint":
                 idx_l = self.latest_joint_state.name.index("gripper_finger_left_joint")
                 idx_r = self.latest_joint_state.name.index("gripper_finger_right_joint")
                 return self.latest_joint_state.position[idx_l] + self.latest_joint_state.position[idx_r]
             else:
-                actual_name = "lift_joint" if joint_name == "lift" else f"{joint_name}_joint"
+                actual_name = joint_name
                 idx = self.latest_joint_state.name.index(actual_name)
                 return self.latest_joint_state.position[idx]
 
         joints_to_test = [
             # (joint_name, test_vel, duration, threshold, check_positive)
-            ("lift", 0.08, 2.0, 0.05, True),
-            ("arm", 0.05, 2.0, 0.03, True),
-            ("wrist_yaw", 0.15, 1.5, 0.05, False),
-            ("wrist_pitch", 0.15, 1.5, 0.05, False),
-            ("wrist_roll", 0.15, 1.5, 0.05, False),
-            ("stretch_gripper", 0.1, 1.5, 0.02, False),
+            ("lift_joint", 0.08, 2.0, 0.05, True),
+            ("arm_joint", 0.05, 2.0, 0.03, True),
+            ("wrist_yaw_joint", 0.15, 1.5, 0.05, False),
+            ("wrist_pitch_joint", 0.15, 1.5, 0.05, False),
+            ("wrist_roll_joint", 0.15, 1.5, 0.05, False),
+            ("gripper_joint", 0.1, 1.5, 0.02, False),
         ]
 
         for joint_name, test_vel, duration, threshold, check_positive in joints_to_test:
@@ -531,7 +531,7 @@ class StretchLiveDriverTester(Node):
 
         # Step 2: Attempt position command (should be blocked)
         js = JointState()
-        js.name = ["lift"]
+        js.name = ["lift_joint"]
         js.position = [0.9]  # Command lift to go high up
         for _ in range(5):
             self.position_cmd_pub.publish(js)
@@ -571,7 +571,7 @@ class StretchLiveDriverTester(Node):
         # Helper to construct a simple 1-waypoint trajectory goal for the lift joint
         def make_lift_goal(pos_target, time_from_start_sec):
             goal = FollowJointTrajectory.Goal()
-            goal.trajectory.joint_names = ["lift"]
+            goal.trajectory.joint_names = ["lift_joint"]
             
             point = JointTrajectoryPoint()
             point.positions = [float(pos_target)]
@@ -602,7 +602,7 @@ class StretchLiveDriverTester(Node):
         # Set joint_mode.lift to position
         req_set = SetParameters.Request()
         p_mode = ParameterMsg()
-        p_mode.name = 'joint_mode.lift'
+        p_mode.name = 'joint_mode.lift_joint'
         p_mode.value.type = ParameterType.PARAMETER_STRING
         p_mode.value.string_value = 'position'
         req_set.parameters = [p_mode]
@@ -614,7 +614,6 @@ class StretchLiveDriverTester(Node):
         # -------------------------------------------------------------
         print(f"\n{BOLD}{CYAN}Test A: 'time_priority' Mode{RESET}")
         assert set_traj_param("mode", "time_priority", ParameterType.PARAMETER_STRING), "Failed to set mode"
-        assert set_traj_param("offset", 0.0, ParameterType.PARAMETER_DOUBLE), "Failed to set offset"
         
         goal_a = make_lift_goal(0.3, 2.0)
         print(f"{YELLOW}Sending goal to move lift to 0.3m in 2.0s using time_priority...{RESET}")
@@ -637,11 +636,11 @@ class StretchLiveDriverTester(Node):
         # -------------------------------------------------------------
         print(f"\n{BOLD}{CYAN}Test B: 'target_priority' Mode{RESET}")
         assert set_traj_param("mode", "target_priority", ParameterType.PARAMETER_STRING), "Failed to set mode"
-        assert set_traj_param("threshold", 0.05, ParameterType.PARAMETER_DOUBLE), "Failed to set threshold"
+        assert set_traj_param("default_tolerance", 0.05, ParameterType.PARAMETER_DOUBLE), "Failed to set default_tolerance"
         assert set_traj_param("timeout", 5.0, ParameterType.PARAMETER_DOUBLE), "Failed to set timeout"
 
         goal_b = make_lift_goal(0.6, 2.0)
-        print(f"{YELLOW}Sending goal to move lift to 0.6m (threshold 0.05) using target_priority...{RESET}")
+        print(f"{YELLOW}Sending goal to move lift to 0.6m (default_tolerance 0.05) using target_priority...{RESET}")
         
         send_goal_future = self.trajectory_client.send_goal_async(goal_b)
         rclpy.spin_until_future_complete(self, send_goal_future)
@@ -664,21 +663,18 @@ class StretchLiveDriverTester(Node):
         self.ros_sleep(1.0)
 
         # -------------------------------------------------------------
-        # Test C: pid_normal mode (calculates and sends velocities)
+        # Test C: adaptive_velocity mode (follows an interpolated velocity profile)
         # -------------------------------------------------------------
-        print(f"\n{BOLD}{CYAN}Test C: 'pid_normal' Mode{RESET}")
-        assert set_traj_param("mode", "pid_normal", ParameterType.PARAMETER_STRING), "Failed to set mode"
-        assert set_traj_param("kp", 2.0, ParameterType.PARAMETER_DOUBLE), "Failed to set kp"
-        assert set_traj_param("ki", 0.05, ParameterType.PARAMETER_DOUBLE), "Failed to set ki"
-        assert set_traj_param("kd", 0.1, ParameterType.PARAMETER_DOUBLE), "Failed to set kd"
+        print(f"\n{BOLD}{CYAN}Test C: 'adaptive_velocity' Mode{RESET}")
+        assert set_traj_param("mode", "adaptive_velocity", ParameterType.PARAMETER_STRING), "Failed to set mode"
 
-        # Change joint mode of lift to velocity first because pid_normal outputs velocities
+        # Change joint mode of lift to velocity first because adaptive_velocity outputs velocities
         p_mode.value.string_value = 'velocity'
         future = self.param_set_cli.call_async(req_set)
         rclpy.spin_until_future_complete(self, future)
 
         goal_c = make_lift_goal(0.4, 2.0)
-        print(f"{YELLOW}Sending goal to move lift to 0.4m using pid_normal PID control...{RESET}")
+        print(f"{YELLOW}Sending goal to move lift to 0.4m using adaptive_velocity...{RESET}")
         
         send_goal_future = self.trajectory_client.send_goal_async(goal_c)
         rclpy.spin_until_future_complete(self, send_goal_future)
@@ -697,36 +693,9 @@ class StretchLiveDriverTester(Node):
             idx = self.latest_joint_state.name.index("lift_joint")
             pos = self.latest_joint_state.position[idx]
             print(f"  Final position: {pos:.3f} m")
-            assert abs(pos - 0.4) < 0.1, f"PID failed to regulate to target position! Expected 0.4, got {pos}"
-        print(f"{GREEN}✓ pid_normal test passed successfully!{RESET}")
+            assert abs(pos - 0.4) < 0.1, f"adaptive_velocity failed to reach target position! Expected 0.4, got {pos}"
+        print(f"{GREEN}✓ adaptive_velocity test passed successfully!{RESET}")
         self.ros_sleep(1.0)
-
-        # -------------------------------------------------------------
-        # Test D: pid_correction mode (REMOVED)
-        # -------------------------------------------------------------
-        # print(f"\n{BOLD}{CYAN}Test D: 'pid_correction' Mode{RESET}")
-        # assert set_traj_param("mode", "pid_correction", ParameterType.PARAMETER_STRING), "Failed to set mode"
-        # 
-        # # Restore lift joint mode to position since pid_correction adds correction on top of position commands
-        # p_mode.value.string_value = 'position'
-        # future = self.param_set_cli.call_async(req_set)
-        # rclpy.spin_until_future_complete(self, future)
-        # 
-        # goal_d = make_lift_goal(0.5, 2.0)
-        # print(f"{YELLOW}Sending goal to move lift to 0.5m using pid_correction...{RESET}")
-        # 
-        # send_goal_future = self.trajectory_client.send_goal_async(goal_d)
-        # rclpy.spin_until_future_complete(self, send_goal_future)
-        # goal_handle = send_goal_future.result()
-        # assert goal_handle.accepted, "Goal was rejected!"
-        # 
-        # get_result_future = goal_handle.get_result_async()
-        # rclpy.spin_until_future_complete(self, get_result_future)
-        # result = get_result_future.result()
-        # 
-        # assert result.result.error_code == FollowJointTrajectory.Result.SUCCESSFUL, f"Goal failed: {result.result.error_code}"
-        # print(f"{GREEN}✓ pid_correction test passed successfully!{RESET}")
-        # self.ros_sleep(2.0)
 
         # -------------------------------------------------------------
         # Test E: Interruption via direct joint commands (preemption)
@@ -752,9 +721,9 @@ class StretchLiveDriverTester(Node):
         self.ros_sleep(0.8)
         
         # Send a direct position command to the lift joint to preempt it
-        print(f"{YELLOW}Publishing direct joint command to 'lift' joint to preempt the active goal...{RESET}")
+        print(f"{YELLOW}Publishing direct joint command to 'lift_joint' to preempt the active goal...{RESET}")
         js = JointState()
-        js.name = ["lift"]
+        js.name = ["lift_joint"]
         js.position = [0.45]
         self.position_cmd_pub.publish(js)
         
@@ -816,7 +785,7 @@ class StretchLiveDriverTester(Node):
         assert set_traj_param("mode", "time_priority", ParameterType.PARAMETER_STRING), "Failed to set mode"
         
         # Set relevant joints to position mode
-        for joint in ["wrist_pitch", "wrist_roll", "stretch_gripper", "wrist_yaw"]:
+        for joint in ["wrist_pitch_joint", "wrist_roll_joint", "gripper_joint", "wrist_yaw_joint"]:
             req_set_joint = SetParameters.Request()
             p_joint_mode = ParameterMsg()
             p_joint_mode.name = f'joint_mode.{joint}'
@@ -828,7 +797,7 @@ class StretchLiveDriverTester(Node):
 
         # Build trajectory goal
         goal_g = FollowJointTrajectory.Goal()
-        goal_g.trajectory.joint_names = ["wrist_pitch", "wrist_yaw", "wrist_roll", "stretch_gripper"]
+        goal_g.trajectory.joint_names = ["wrist_pitch_joint", "wrist_yaw_joint", "wrist_roll_joint", "gripper_joint"]
         
         # Create 40 waypoints over 8.0 seconds to trace a circle
         num_points = 40
@@ -887,7 +856,7 @@ class StretchLiveDriverTester(Node):
         # Restore lift joint mode to position
         req_set = SetParameters.Request()
         p_mode = ParameterMsg()
-        p_mode.name = 'joint_mode.lift'
+        p_mode.name = 'joint_mode.lift_joint'
         p_mode.value.type = ParameterType.PARAMETER_STRING
         p_mode.value.string_value = 'position'
         req_set.parameters = [p_mode]
@@ -895,14 +864,14 @@ class StretchLiveDriverTester(Node):
         rclpy.spin_until_future_complete(self, future)
 
         tests = [
-            ("lift", 0.4),
-            ("lift", 0.6),
-            ("lift", 0.8),
-            ("wrist_yaw", 1.0),
-            ("wrist_pitch", 0.2),
-            ("wrist_roll", 0.5),
-            ("stretch_gripper", 0.5),
-            ("arm", 0.3)
+            ("lift_joint", 0.4),
+            ("lift_joint", 0.6),
+            ("lift_joint", 0.8),
+            ("wrist_yaw_joint", 1.0),
+            ("wrist_pitch_joint", 0.2),
+            ("wrist_roll_joint", 0.5),
+            ("gripper_joint", 0.5),
+            ("arm_joint", 0.3)
         ]
 
         for joint, target in tests:
@@ -916,14 +885,14 @@ class StretchLiveDriverTester(Node):
             self.ros_sleep(2.5)
                 
             # Get actual position from /joint_states
-            actual_joint_name = "lift_joint" if joint == "lift" else f"{joint}_joint"
-            if joint == "arm":
+            actual_joint_name = joint
+            if joint == "arm_joint":
                 actual_joint_name = "arm_l1_joint"  # or sum of arm_l1_joint..arm_l4_joint
-            elif joint == "stretch_gripper":
+            elif joint == "gripper_joint":
                 actual_joint_name = "gripper_finger_left_joint"
                 
             if self.latest_joint_state is not None:
-                if joint == "arm":
+                if joint == "arm_joint":
                     # Sum of arm_l1_joint to arm_l4_joint
                     arm_positions = [self.latest_joint_state.position[self.latest_joint_state.name.index(link)] for link in ['arm_l1_joint', 'arm_l2_joint', 'arm_l3_joint', 'arm_l4_joint']]
                     pos = sum(arm_positions)
@@ -975,13 +944,13 @@ class StretchLiveDriverTester(Node):
             return goal
 
         trajectory_tests = [
-            ("lift", 0.4),
-            ("lift", 0.6),
-            ("lift", 0.8),
-            ("wrist_yaw", 0.5),
-            ("wrist_pitch", 0.2),
-            ("wrist_roll", 0.4),
-            ("stretch_gripper", 0.1),
+            ("lift_joint", 0.4),
+            ("lift_joint", 0.6),
+            ("lift_joint", 0.8),
+            ("wrist_yaw_joint", 0.5),
+            ("wrist_pitch_joint", 0.2),
+            ("wrist_roll_joint", 0.4),
+            ("gripper_joint", 0.1),
         ]
 
         for joint, target in trajectory_tests:
@@ -998,8 +967,8 @@ class StretchLiveDriverTester(Node):
                 # Sleep and spin to let telemetry settle
                 self.ros_sleep(2.0)
                 
-                actual_joint_name = "lift_joint" if joint == "lift" else f"{joint}_joint"
-                if joint == "stretch_gripper":
+                actual_joint_name = joint
+                if joint == "gripper_joint":
                     actual_joint_name = "gripper_finger_left_joint"
                 if self.latest_joint_state is not None:
                     idx = self.latest_joint_state.name.index(actual_joint_name)
@@ -1060,7 +1029,7 @@ class StretchLiveDriverTester(Node):
         # Set joint_mode.lift to velocity mode before testing stop_the_robot
         req_set = SetParameters.Request()
         p_mode = ParameterMsg()
-        p_mode.name = 'joint_mode.lift'
+        p_mode.name = 'joint_mode.lift_joint'
         p_mode.value.type = ParameterType.PARAMETER_STRING
         p_mode.value.string_value = 'velocity'
         req_set.parameters = [p_mode]
@@ -1069,7 +1038,7 @@ class StretchLiveDriverTester(Node):
 
         # Command lift upward via velocity
         js_vel = JointState()
-        js_vel.name = ["lift"]
+        js_vel.name = ["lift_joint"]
         js_vel.velocity = [0.1]
         self.velocity_cmd_pub.publish(js_vel)
         self.ros_sleep(1.0) # Let it move a bit

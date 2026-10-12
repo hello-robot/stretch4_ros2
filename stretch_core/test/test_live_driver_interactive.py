@@ -78,12 +78,12 @@ class StretchLiveDriverTester(Node):
 
         # Setup standard home positions for Stretch 4 joints to avoid self-collisions
         self.HOME_POSITIONS = {
-            "lift": 0.4,
-            "arm": 0.2,
-            "wrist_yaw": 0.0,
-            "wrist_pitch": 0.5,
-            "wrist_roll": 0.0,
-            "stretch_gripper": 0.5
+            "lift_joint": 0.4,
+            "arm_joint": 0.2,
+            "wrist_yaw_joint": 0.0,
+            "wrist_pitch_joint": 0.5,
+            "wrist_roll_joint": 0.0,
+            "gripper_joint": 0.5
         }
 
         # Setup subscribers with relative and absolute fallbacks to handle namespaces gracefully
@@ -123,6 +123,7 @@ class StretchLiveDriverTester(Node):
 
         # Setup FollowJointTrajectory action client
         self._fjt_client = ActionClient(self, FollowJointTrajectory, 'follow_joint_trajectory')
+        self.latest_fjt_feedback = None
 
         # Active spinning in a separate thread so that we don't block CLI input
         self._spin_thread = threading.Thread(target=self._spin, daemon=True)
@@ -156,6 +157,38 @@ class StretchLiveDriverTester(Node):
 
     def mode_cb(self, msg):
         self.latest_mode = msg
+
+    def fjt_feedback_cb(self, feedback_msg):
+        self.latest_fjt_feedback = feedback_msg.feedback
+
+    def send_trajectory_goal(self, goal):
+        """Sends a FollowJointTrajectory goal, recording its feedback for report_trajectory_failure."""
+        self.latest_fjt_feedback = None
+        return self._fjt_client.send_goal_async(goal, feedback_callback=self.fjt_feedback_cb)
+
+    def report_trajectory_failure(self, result):
+        """Prints why a trajectory failed. On a timeout, also prints the remaining error for each
+        joint, using the trajectory server's last feedback (its target is the waypoint the server
+        was waiting on, which may not be the final one)."""
+        error_string = result.result.error_string
+        print(f"{RED}    Server reported: {error_string}{RESET}")
+
+        # These prefixes match the abort messages in StretchTrajectoryActionServer
+        timed_out = error_string.startswith("Timed out") or error_string.startswith("Joints did not settle")
+        if not timed_out:
+            return
+
+        feedback = self.latest_fjt_feedback
+        if feedback is None:
+            print(f"{YELLOW}    No feedback received from the trajectory server, so per-joint error is unavailable.{RESET}")
+            return
+
+        print(f"{RED}    Remaining error when the trajectory timed out:{RESET}")
+        print(f"{RED}      {'joint':<20} {'current':>9} {'target':>9} {'error':>9}{RESET}")
+        for i, j_name in enumerate(feedback.joint_names):
+            current = feedback.actual.positions[i]
+            target = feedback.desired.positions[i]
+            print(f"{RED}      {j_name:<20} {current:>9.4f} {target:>9.4f} {target - current:>9.4f}{RESET}")
 
     def auto_discover_driver(self):
         # Auto-detect driver node name
@@ -221,7 +254,7 @@ class StretchLiveDriverTester(Node):
         if state is None:
             return None, None
         
-        if joint_name == "arm":
+        if joint_name == "arm_joint":
             poses = []
             vels = []
             for link in ['arm_l1_joint', 'arm_l2_joint', 'arm_l3_joint', 'arm_l4_joint']:
@@ -233,7 +266,7 @@ class StretchLiveDriverTester(Node):
             if poses:
                 return sum(poses), (sum(vels) if len(vels) == len(poses) else 0.0)
             return None, None
-        elif joint_name == "stretch_gripper":
+        elif joint_name == "gripper_joint":
             left_pos, left_vel = None, None
             right_pos, right_vel = None, None
             if "gripper_finger_left_joint" in state.name:
@@ -252,10 +285,6 @@ class StretchLiveDriverTester(Node):
                 return total_pos, total_vel
             return None, None
         else:
-            actual_name = f"{joint_name}_joint"
-            if actual_name in state.name:
-                idx = state.name.index(actual_name)
-                return state.position[idx], (state.velocity[idx] if len(state.velocity) > idx else 0.0)
             if joint_name in state.name:
                 idx = state.name.index(joint_name)
                 return state.position[idx], (state.velocity[idx] if len(state.velocity) > idx else 0.0)
@@ -378,7 +407,7 @@ class StretchLiveDriverTester(Node):
         time.sleep(1.0)
 
         # Get current lift position
-        start_lift_pos, _ = self.get_joint_pose_and_vel("lift")
+        start_lift_pos, _ = self.get_joint_pose_and_vel("lift_joint")
         if start_lift_pos is None:
             # Fallback default
             start_lift_pos = 0.5
@@ -388,7 +417,7 @@ class StretchLiveDriverTester(Node):
         target_pos = min(0.9, start_lift_pos + 0.15)
         print(f"{YELLOW}Attempting to command lift to {target_pos}m (should be completely ignored by driver)...{RESET}")
         js = JointState()
-        js.name = ["lift"]
+        js.name = ["lift_joint"]
         js.position = [target_pos]
         for _ in range(self.pub_count):
             self.publish_position_cmd(js)
@@ -399,7 +428,7 @@ class StretchLiveDriverTester(Node):
         time.sleep(1.5)
         
         # Verify lift did not move
-        end_lift_pos, _ = self.get_joint_pose_and_vel("lift")
+        end_lift_pos, _ = self.get_joint_pose_and_vel("lift_joint")
         if end_lift_pos is not None:
             print(f"  Lift position before runstop command: {start_lift_pos:.4f}m | After: {end_lift_pos:.4f}m")
             assert abs(end_lift_pos - start_lift_pos) < 0.01, f"{RED}SAFETY FAILURE: Robot moved {abs(end_lift_pos - start_lift_pos):.4f}m while safety runstop was active!{RESET}"
@@ -536,7 +565,7 @@ class StretchLiveDriverTester(Node):
                 print(f"{YELLOW}Skipped position commands test.{RESET}")
                 return True
 
-        joints_to_test = ["lift", "arm", "wrist_yaw", "wrist_pitch", "wrist_roll", "stretch_gripper"]
+        joints_to_test = ["lift_joint", "arm_joint", "wrist_yaw_joint", "wrist_pitch_joint", "wrist_roll_joint", "gripper_joint"]
         
         # Check that we have joint states before continuing
         if self.latest_joint_state is None:
@@ -560,14 +589,14 @@ class StretchLiveDriverTester(Node):
                 continue
             
             # Decide on a safe, small relative movement offset based on current position
-            if joint == "lift":
+            if joint == "lift_joint":
                 # Move slightly up or down depending on height
                 target = current_pos + 0.05 if current_pos < 0.6 else current_pos - 0.05
                 desc = "moves lift joint vertically by 5cm"
-            elif joint == "arm":
+            elif joint == "arm_joint":
                 target = current_pos + 0.05 if current_pos < 0.15 else current_pos - 0.05
                 desc = "extends/retracts arm slightly"
-            elif joint == "stretch_gripper":
+            elif joint == "gripper_joint":
                 # Gripper opening translation
                 target = 0.2 if current_pos < 0.15 else 0.0
                 desc = "opens/closes gripper finger joints"
@@ -633,7 +662,7 @@ class StretchLiveDriverTester(Node):
 
         # Dynamically discover which joints support velocity mode by attempting to set them to 'velocity'.
         # We query all 6 commandable joints.
-        all_joints = ["lift", "arm", "wrist_yaw", "wrist_pitch", "wrist_roll", "stretch_gripper"]
+        all_joints = ["lift_joint", "arm_joint", "wrist_yaw_joint", "wrist_pitch_joint", "wrist_roll_joint", "gripper_joint"]
         velocity_joints = []
         rejected_velocity_joints = []
 
@@ -684,17 +713,17 @@ class StretchLiveDriverTester(Node):
                 continue
 
             # Set safe command velocity and direction based on current joint limit margins
-            if joint == "lift":
+            if joint == "lift_joint":
                 vel_command = -0.04 if current_pos > 0.5 else 0.04
                 desc = "moves lift joint continuously"
-            elif joint == "arm":
+            elif joint == "arm_joint":
                 vel_command = -0.04 if current_pos > 0.15 else 0.04
                 desc = "extends/retracts arm continuously"
-            elif joint in ["wrist_yaw", "wrist_pitch", "wrist_roll"]:
+            elif joint in ["wrist_yaw_joint", "wrist_pitch_joint", "wrist_roll_joint"]:
                 # Move wrist joints slowly biased toward center to stay in [-0.5, 0.5] range
                 vel_command = -0.06 if current_pos > 0.0 else 0.06
                 desc = f"rotates {joint} joint continuously"
-            elif joint == "stretch_gripper":
+            elif joint == "gripper_joint":
                 # Gripper translation speed
                 vel_command = -0.05 if current_pos > 0.2 else 0.05
                 desc = "opens/closes gripper finger joints continuously"
@@ -890,7 +919,7 @@ class StretchLiveDriverTester(Node):
     # =========================================================================
     def test_trajectory_server(self, interactive=False):
         print_header("TRAJECTORY SERVER MULTI-CIRCLE TRACING")
-        print_robot_behavior("The robot will execute trajectories in each of the three server modes: 'pid_normal', 'target_priority', and 'time_priority'.")
+        print_robot_behavior("The robot will execute trajectories in each of the three server modes: 'adaptive_velocity', 'target_priority', and 'time_priority'.")
 
         if interactive:
             confirm = input(f"{BOLD}{YELLOW}Confirm: This will physically test FollowJointTrajectory to trace circles simultaneously. Proceed? (y/n): {RESET}").lower()
@@ -906,9 +935,9 @@ class StretchLiveDriverTester(Node):
         print(f"{GREEN}✓ Connected to follow_joint_trajectory action server!{RESET}")
 
         # The three trajectory server modes implemented by StretchTrajectoryActionServer
-        modes = ["target_priority", "pid_normal", "time_priority"]
+        modes = ["target_priority", "adaptive_velocity", "time_priority"]
         modes_desc = {
-            "pid_normal": "PID Normal (requires kp, ki, kd; commanded joints must be in velocity mode)",
+            "adaptive_velocity": "Adaptive Velocity (follows a smooth interpolated velocity profile; commanded joints must be in velocity mode)",
             "target_priority": "Target Priority (guarantees hitting all positions within a threshold)",
             "time_priority": "Time Priority (interpolates and sends commands at target times regardless)"
         }
@@ -924,12 +953,12 @@ class StretchLiveDriverTester(Node):
 
             # Prepare joint modes based on the trajectory server mode
             allowed_velocity_joints = []
-            if mode_name == "pid_normal":
-                # In pid_normal mode, the trajectory server expects all commanded joints to be in velocity mode.
+            if mode_name == "adaptive_velocity":
+                # In adaptive_velocity mode, the trajectory server expects all commanded joints to be in velocity mode.
                 # Since the gripper typically rejects velocity mode (and wrists did in older driver configurations), we dynamically probe and use
                 # only the joints that allow velocity mode.
-                print(f"{YELLOW}Probing velocity mode capability for pid_normal joints...{RESET}")
-                probe_joints = ["lift", "arm", "wrist_yaw", "wrist_pitch", "wrist_roll", "stretch_gripper"]
+                print(f"{YELLOW}Probing velocity mode capability for adaptive_velocity joints...{RESET}")
+                probe_joints = ["lift_joint", "arm_joint", "wrist_yaw_joint", "wrist_pitch_joint", "wrist_roll_joint", "gripper_joint"]
                 
                 p_prob = ParameterMsg()
                 p_prob.value.type = ParameterType.PARAMETER_STRING
@@ -951,12 +980,12 @@ class StretchLiveDriverTester(Node):
                 print(f"{GREEN}✓ Dynamic discovery: joints supporting velocity mode = {active_joints}{RESET}")
                 
                 if not active_joints:
-                    print(f"{YELLOW}No joints support velocity mode. Skipping pid_normal trajectory server test.{RESET}")
+                    print(f"{YELLOW}No joints support velocity mode. Skipping adaptive_velocity trajectory server test.{RESET}")
                     continue
             else:
                 # For target_priority and time_priority, we can command any joints.
                 # We command lift, arm, wrist_yaw, wrist_pitch, wrist_roll simultaneously!
-                active_joints = ["lift", "arm", "wrist_yaw", "wrist_pitch", "wrist_roll"]
+                active_joints = ["lift_joint", "arm_joint", "wrist_yaw_joint", "wrist_pitch_joint", "wrist_roll_joint"]
 
             # Set trajectory_server.mode parameter on driver node
             print(f"{YELLOW}Setting trajectory_server.mode to '{mode_name}'...{RESET}")
@@ -990,9 +1019,9 @@ class StretchLiveDriverTester(Node):
                 print(f"{YELLOW}  Sending all joints to home posture for a safe trajectory start...{RESET}")
                 self.restore_all_to_home()
 
-                # Set discovered joints to velocity mode if in pid_normal
-                if mode_name == "pid_normal":
-                    print(f"{YELLOW}  Configuring joints to 'velocity' mode for pid_normal execution...{RESET}")
+                # Set discovered joints to velocity mode if in adaptive_velocity
+                if mode_name == "adaptive_velocity":
+                    print(f"{YELLOW}  Configuring joints to 'velocity' mode for adaptive_velocity execution...{RESET}")
                     for j_name in allowed_velocity_joints:
                         p_prob = ParameterMsg()
                         p_prob.name = f'joint_mode.{j_name}'
@@ -1005,7 +1034,13 @@ class StretchLiveDriverTester(Node):
                             time.sleep(0.05)
 
                 # Generate circle trajectory points
-                points = self.make_circle_trajectory(active_joints=active_joints, num_points=n_pts, total_duration=duration)
+                # adaptive_velocity follows point velocities through the waypoints; the position
+                # modes use them as each leg's speed limit, so they need per-leg max speeds instead
+                leg_max_velocities = (mode_name != "adaptive_velocity")
+                velocity_style = "per-leg max speeds" if leg_max_velocities else "signed waypoint velocities"
+                print(f"{YELLOW}  Sending target velocities as {velocity_style}{RESET}")
+                points = self.make_circle_trajectory(active_joints=active_joints, num_points=n_pts, total_duration=duration,
+                                                     leg_max_velocities=leg_max_velocities)
 
                 # Execute trajectory
                 goal = FollowJointTrajectory.Goal()
@@ -1014,7 +1049,7 @@ class StretchLiveDriverTester(Node):
                 goal.goal_time_tolerance = Duration(seconds=2.0).to_msg()
                 
                 print(f"{YELLOW}  Sending '{mode_name}' {traj_type} circle goal with {len(points)} points...{RESET}")
-                future = self._fjt_client.send_goal_async(goal)
+                future = self.send_trajectory_goal(goal)
                 
                 # Spin/wait until goal is accepted/rejected
                 while rclpy.ok() and not future.done():
@@ -1024,7 +1059,7 @@ class StretchLiveDriverTester(Node):
                 if not goal_handle.accepted:
                     print(f"{RED}  ERROR: Trajectory mode {mode_name} ({traj_type}) was rejected by the action server!{RESET}")
                     # Restore joint mode if needed before returning
-                    if mode_name == "pid_normal":
+                    if mode_name == "adaptive_velocity":
                         self.restore_joints_to_position(allowed_velocity_joints)
                     return False
                     
@@ -1043,12 +1078,13 @@ class StretchLiveDriverTester(Node):
                     print(f"{GREEN}  ✓ Mode '{mode_name}' ({traj_type}) circle trace completed successfully!{RESET}")
                 else:
                     print(f"{RED}  ERROR: Trajectory mode '{mode_name}' ({traj_type}) execution failed with status: {result.status}{RESET}")
-                    if mode_name == "pid_normal":
+                    self.report_trajectory_failure(result)
+                    if mode_name == "adaptive_velocity":
                         self.restore_joints_to_position(allowed_velocity_joints)
                     return False
 
-                # Restore joint modes to position mode if they were modified for pid_normal
-                if mode_name == "pid_normal":
+                # Restore joint modes to position mode if they were modified for adaptive_velocity
+                if mode_name == "adaptive_velocity":
                     self.restore_joints_to_position(allowed_velocity_joints)
 
                 time.sleep(1.0)
@@ -1068,7 +1104,7 @@ class StretchLiveDriverTester(Node):
         # Restore home posture at the end of the test
         print(f"{YELLOW}Homing all joints at the end of trajectory test...{RESET}")
         self.restore_all_to_home()
-        print(f"{GREEN}✓ All three trajectory server modes ('pid_normal', 'target_priority', 'time_priority') tested successfully!{RESET}")
+        print(f"{GREEN}✓ All three trajectory server modes ('adaptive_velocity', 'target_priority', 'time_priority') tested successfully!{RESET}")
         return True
 
     def restore_joints_to_position(self, joints):
@@ -1085,67 +1121,274 @@ class StretchLiveDriverTester(Node):
             while rclpy.ok() and not future_restore.done():
                 time.sleep(0.05)
 
-    def make_circle_trajectory(self, active_joints, num_points=8, total_duration=8.0):
+    def make_circle_trajectory(self, active_joints, num_points=8, total_duration=8.0, leg_max_velocities=False):
         """
         Creates a list of JointTrajectoryPoint for tracing synchronized circles
         on the specified active_joints.
         - arm and lift trace a circle in the sagittal plane.
         - wrist yaw, pitch, and roll trace a circle in orientation space.
+
+        Velocities are sent with every point, in one of two styles:
+        - leg_max_velocities=False: the signed instantaneous velocity at each point
+          (what adaptive_velocity mode follows through the waypoints).
+        - leg_max_velocities=True: the max speed over the leg ending at each point
+          (the position modes use point velocities as the leg's speed limit, so a
+          signed or zero velocity would be wrong there).
         """
         points = []
-        
-        # We define the circle parameters based on home positions
-        lift_center = self.HOME_POSITIONS["lift"]
-        arm_center = self.HOME_POSITIONS["arm"]
-        pitch_center = self.HOME_POSITIONS["wrist_pitch"]
-        yaw_center = self.HOME_POSITIONS["wrist_yaw"]
-        roll_center = self.HOME_POSITIONS["wrist_roll"]
-        
-        # Radii of circles
-        r_lift = 0.04
-        r_arm = 0.04
-        r_pitch = 0.15
-        r_yaw = 0.15
-        r_roll = 0.15
-        
+
+        # Each joint traces center + radius * sin(theta + phase) around its home position;
+        # a phase of pi/2 gives a cosine, so lift/arm (and pitch/yaw) trace circles together.
+        circles = {
+            "lift_joint": (self.HOME_POSITIONS["lift_joint"], 0.04, 0.0),
+            "arm_joint": (self.HOME_POSITIONS["arm_joint"], 0.04, math.pi / 2),
+            "wrist_pitch_joint": (self.HOME_POSITIONS["wrist_pitch_joint"], 0.15, 0.0),
+            "wrist_yaw_joint": (self.HOME_POSITIONS["wrist_yaw_joint"], 0.15, math.pi / 2),
+            "wrist_roll_joint": (self.HOME_POSITIONS["wrist_roll_joint"], 0.15, 0.0),
+            "gripper_joint": (0.5, 0.0, 0.0), # constant open gripper
+        }
+        joint_circles = [circles.get(j_name, (0.0, 0.0, 0.0)) for j_name in active_joints]
+
+        if leg_max_velocities:
+            # A joint that doesn't move would get a leg speed of 0, which the position
+            # modes would use as a speed limit of 0.
+            constant_joints = [j for j, (_, r, _) in zip(active_joints, joint_circles) if r == 0.0]
+            assert not constant_joints, f"Constant-position joints {constant_joints} aren't supported with leg_max_velocities"
+
         dt = total_duration / num_points
-        
+        d_theta = 2.0 * math.pi / num_points
+
+        # Angular rate of the circle parameter theta (rad/s); the velocity of
+        # center + r * sin(theta + phase) is r * omega * cos(theta + phase)
+        omega = 2.0 * math.pi / total_duration
+
+        def velocity(radius, phase, theta):
+            return radius * omega * math.cos(theta + phase)
+
+        def leg_max_speed(radius, phase, theta_end, n_samples=20):
+            # Sample the speed across the leg (theta_end - d_theta -> theta_end); for point 0 this
+            # is the leg wrapping around from the end of the circle, the same speed as any other leg.
+            thetas = [theta_end - d_theta * k / n_samples for k in range(n_samples + 1)]
+            return max(abs(velocity(radius, phase, t)) for t in thetas)
+
         for i in range(num_points + 1):
             point = JointTrajectoryPoint()
             point.time_from_start = Duration(seconds=i * dt).to_msg()
-            
+
             # Parametric angle theta from 0 to 2*pi
-            theta = 2.0 * math.pi * (i / num_points)
-            
-            # Tracing circles simultaneously
-            p_lift = lift_center + r_lift * math.sin(theta)
-            p_arm = arm_center + r_arm * math.cos(theta)
-            p_pitch = pitch_center + r_pitch * math.sin(theta)
-            p_yaw = yaw_center + r_yaw * math.cos(theta)
-            p_roll = roll_center + r_roll * math.sin(theta)
-            
-            # Map each active joint to its target position
+            theta = i * d_theta
+
             positions = []
-            for j_name in active_joints:
-                if j_name == "lift":
-                    positions.append(float(p_lift))
-                elif j_name == "arm":
-                    positions.append(float(p_arm))
-                elif j_name == "wrist_yaw":
-                    positions.append(float(p_yaw))
-                elif j_name == "wrist_pitch":
-                    positions.append(float(p_pitch))
-                elif j_name == "wrist_roll":
-                    positions.append(float(p_roll))
-                elif j_name == "stretch_gripper":
-                    positions.append(0.5) # constant open gripper
+            velocities = []
+            for center, radius, phase in joint_circles:
+                positions.append(float(center + radius * math.sin(theta + phase)))
+                if leg_max_velocities:
+                    velocities.append(float(leg_max_speed(radius, phase, theta)))
                 else:
-                    positions.append(0.0)
-            
+                    velocities.append(float(velocity(radius, phase, theta)))
+
             point.positions = positions
+            point.velocities = velocities
             points.append(point)
-            
+
         return points
+
+    # =========================================================================
+    # SAVED POSE PLAYBACK (mirrors stretch4_web_teleop)
+    # =========================================================================
+    # Per-joint playback speeds from stretch4_web_teleop: JOINT_VELOCITIES scaled by
+    # MOVE_TO_POSE_PLAYBACK_GAIN (1.25) in src/shared/util.tsx. Web teleop sends these as
+    # every point's velocities and uses them to size each segment's duration.
+    WEB_TELEOP_PLAYBACK_VELOCITIES = {
+        "lift_joint": 0.04 * 1.25,
+        "arm_joint": 0.04 * 1.25,
+        "wrist_yaw_joint": 1.0 * 1.25,
+        "wrist_pitch_joint": 0.5 * 1.25,
+        "wrist_roll_joint": 0.5 * 1.25,
+    }
+
+    # Single saved poses, each sent as its own one-waypoint goal (web teleop's
+    # executePoseGoal). The gripper is left out for now: the driver doesn't convert gripper
+    # speeds from gripper_joint units to servo units, so it moves ~8x slower than requested.
+    WEB_TELEOP_SAVED_POSES = [
+        ("Reach forward", {"lift_joint": 0.6, "arm_joint": 0.35, "wrist_yaw_joint": 0.0, "wrist_pitch_joint": 0.0, "wrist_roll_joint": 0.0}),
+        ("Low and tucked", {"lift_joint": 0.3, "arm_joint": 0.05, "wrist_yaw_joint": 0.0, "wrist_pitch_joint": 0.5, "wrist_roll_joint": 0.0}),
+        ("Wrist turned", {"lift_joint": 0.5, "arm_joint": 0.2, "wrist_yaw_joint": 0.8, "wrist_pitch_joint": 0.2, "wrist_roll_joint": 0.6}),
+    ]
+
+    # A saved recording, sent as one multi-waypoint goal (web teleop's executePoseGoals).
+    # The movement recorder stores a full pose each time a different joint starts moving
+    # (or a joint reverses), so each waypoint here changes one joint from the last.
+    WEB_TELEOP_RECORDING = [
+        {"lift_joint": 0.55, "arm_joint": 0.2, "wrist_yaw_joint": 0.0, "wrist_pitch_joint": 0.5, "wrist_roll_joint": 0.0},
+        {"lift_joint": 0.55, "arm_joint": 0.3, "wrist_yaw_joint": 0.0, "wrist_pitch_joint": 0.5, "wrist_roll_joint": 0.0},
+        {"lift_joint": 0.55, "arm_joint": 0.3, "wrist_yaw_joint": 0.6, "wrist_pitch_joint": 0.5, "wrist_roll_joint": 0.0},
+        {"lift_joint": 0.55, "arm_joint": 0.3, "wrist_yaw_joint": 0.6, "wrist_pitch_joint": 0.1, "wrist_roll_joint": 0.0},
+        {"lift_joint": 0.55, "arm_joint": 0.3, "wrist_yaw_joint": 0.6, "wrist_pitch_joint": 0.1, "wrist_roll_joint": -0.5},
+        {"lift_joint": 0.55, "arm_joint": 0.1, "wrist_yaw_joint": 0.6, "wrist_pitch_joint": 0.1, "wrist_roll_joint": -0.5},
+    ]
+
+    def make_web_teleop_pose_goal(self, poses, min_segment_duration=1.5):
+        """
+        Builds a FollowJointTrajectory goal the way stretch4_web_teleop's makePoseGoals does
+        (src/pages/robot/tsx/robot.tsx), with one waypoint per pose:
+        - joint names come from the first pose
+        - each segment lasts max(min_segment_duration, max over joints of distance / playback speed),
+          where the first segment's distance is measured from the live joint state
+        - every point's velocities are the constant per-joint playback speeds
+        A single saved pose is the one-pose case (makePoseGoal, called with the same 1.5 s minimum).
+        """
+        joint_names = list(poses[0].keys())
+        velocities = [float(self.WEB_TELEOP_PLAYBACK_VELOCITIES[j]) for j in joint_names]
+
+        points = []
+        cumulative_time = 0.0
+        prev_positions = [self.get_joint_pose_and_vel(j)[0] for j in joint_names]
+        for pose in poses:
+            positions = [float(pose[j]) for j in joint_names]
+
+            segment_duration = min_segment_duration
+            for j_name, prev_pos, target_pos, speed in zip(joint_names, prev_positions, positions, velocities):
+                if prev_pos is not None:
+                    segment_duration = max(segment_duration, abs(target_pos - prev_pos) / speed)
+            cumulative_time += segment_duration
+
+            point = JointTrajectoryPoint()
+            point.positions = positions
+            point.velocities = velocities
+            point.time_from_start = Duration(seconds=cumulative_time).to_msg()
+            points.append(point)
+            prev_positions = positions
+
+        goal = FollowJointTrajectory.Goal()
+        goal.trajectory.joint_names = joint_names
+        goal.trajectory.points = points
+        return goal
+
+    def measure_settle_time(self, joints, still_duration=0.3, max_wait=10.0, vel_threshold=0.005, pos_threshold=0.001):
+        """
+        Watches the joint state and returns how long (s) until the last motion of any of `joints`,
+        i.e. how long the robot kept moving after this is called. A joint counts as moving if its
+        reported velocity or its sample-to-sample position change exceeds the thresholds; the robot
+        is considered settled once nothing has moved for `still_duration`. Returns None if it is
+        still moving after `max_wait`.
+        """
+        start = time.time()
+        last_motion = start
+        prev = {j: self.get_joint_pose_and_vel(j)[0] for j in joints}
+        while time.time() - start < max_wait:
+            time.sleep(0.05)
+            now = time.time()
+            for j in joints:
+                pos, vel = self.get_joint_pose_and_vel(j)
+                moved = prev[j] is not None and pos is not None and abs(pos - prev[j]) > pos_threshold
+                if moved or (vel is not None and abs(vel) > vel_threshold):
+                    last_motion = now
+                prev[j] = pos
+            if now - last_motion >= still_duration:
+                return last_motion - start
+        return None
+
+    def send_web_teleop_pose_goal(self, label, poses, final_tolerance=0.1):
+        """Sends one web-teleop-style pose goal, waits for it, and checks the final pose was reached."""
+        goal = self.make_web_teleop_pose_goal(poses)
+        times = [p.time_from_start.sec + p.time_from_start.nanosec * 1e-9 for p in goal.trajectory.points]
+        print(f"{YELLOW}  Sending '{label}': {len(goal.trajectory.points)} waypoint(s) at t = "
+              f"{', '.join(f'{t:.2f}' for t in times)} s{RESET}")
+
+        future = self.send_trajectory_goal(goal)
+        while rclpy.ok() and not future.done():
+            time.sleep(0.05)
+        goal_handle = future.result()
+        if not goal_handle.accepted:
+            print(f"{RED}  ERROR: '{label}' goal was rejected by the action server!{RESET}")
+            return False
+
+        start_time = time.time()
+        result_future = goal_handle.get_result_async()
+        while rclpy.ok() and not result_future.done():
+            time.sleep(0.1)
+        result = result_future.result()
+        elapsed = time.time() - start_time
+
+        # STATUS_SUCCEEDED = 4 in action_msgs.msg.GoalStatus
+        if result.status != 4:
+            print(f"{RED}  ERROR: '{label}' failed with status {result.status}{RESET}")
+            self.report_trajectory_failure(result)
+            return False
+
+        # Report (but don't fail on) how long the joints kept moving after the action server returned
+        settle_time = self.measure_settle_time(list(poses[-1]))
+        if settle_time is None:
+            print(f"{YELLOW}  Robot was still moving 10 s after the action server returned.{RESET}")
+        else:
+            print(f"{CYAN}  Robot kept moving for {settle_time:.2f} s after the action server returned.{RESET}")
+
+        # Compare where the joints ended up with the final waypoint
+        reached = True
+        final_pose = poses[-1]
+        for j_name, target in final_pose.items():
+            pos, _ = self.get_joint_pose_and_vel(j_name)
+            error = abs(pos - target) if pos is not None else float('inf')
+            color = GREEN if error <= final_tolerance else RED
+            print(f"{color}    {j_name}: target {target:.3f}, actual {pos if pos is None else round(pos, 3)}, error {error:.3f}{RESET}")
+            reached = reached and error <= final_tolerance
+
+        if not reached:
+            print(f"{RED}  ERROR: '{label}' finished but some joints are more than {final_tolerance} from the final pose.{RESET}")
+            return False
+        print(f"{GREEN}  ✓ '{label}' completed in {elapsed:.2f} s (planned {times[-1]:.2f} s){RESET}")
+        return True
+
+    def test_saved_pose_playback(self, interactive=False):
+        print_header("SAVED POSE PLAYBACK (WEB TELEOP STYLE)")
+        print_robot_behavior("The robot will move to three saved poses one at a time, then play back a "
+                             "recording that moves one joint per waypoint, then return home.")
+
+        if interactive:
+            confirm = input(f"{BOLD}{YELLOW}Confirm: This will physically move the robot through saved poses. Proceed? (y/n): {RESET}").lower()
+            if confirm != 'y':
+                print(f"{YELLOW}Skipped saved pose playback test.{RESET}")
+                return True
+
+        print(f"{YELLOW}Waiting for follow_joint_trajectory action server...{RESET}")
+        if not self._fjt_client.wait_for_server(timeout_sec=5.0):
+            print(f"{RED}ERROR: Trajectory action server 'follow_joint_trajectory' is not available!{RESET}")
+            return False
+
+        # Web teleop runs these goals with every joint in position mode (it switches the driver
+        # to 'navigation') and leaves the trajectory server on its default 'target_priority' mode.
+        joints = list(self.WEB_TELEOP_PLAYBACK_VELOCITIES)
+        self.restore_joints_to_position(joints)
+        print(f"{YELLOW}Setting trajectory_server.mode to 'target_priority'...{RESET}")
+        p_srv_mode = ParameterMsg()
+        p_srv_mode.name = 'trajectory_server.mode'
+        p_srv_mode.value.type = ParameterType.PARAMETER_STRING
+        p_srv_mode.value.string_value = 'target_priority'
+        req_srv_mode = SetParameters.Request()
+        req_srv_mode.parameters = [p_srv_mode]
+        future_srv_mode = self.param_set_cli.call_async(req_srv_mode)
+        while rclpy.ok() and not future_srv_mode.done():
+            time.sleep(0.05)
+        assert future_srv_mode.result().results[0].successful, "Failed to set trajectory_server.mode to target_priority"
+
+        self.restore_all_to_home()
+
+        print(f"\n{BOLD}{CYAN}Single saved poses (one waypoint per goal){RESET}")
+        for name, pose in self.WEB_TELEOP_SAVED_POSES:
+            if not self.send_web_teleop_pose_goal(name, [pose]):
+                return False
+            time.sleep(1.0)
+
+        print(f"\n{BOLD}{CYAN}Saved recording ({len(self.WEB_TELEOP_RECORDING)} waypoints in one goal){RESET}")
+        self.restore_all_to_home()
+        if not self.send_web_teleop_pose_goal("Recording", self.WEB_TELEOP_RECORDING):
+            return False
+
+        print(f"{YELLOW}Homing all joints at the end of saved pose test...{RESET}")
+        self.restore_all_to_home()
+        print(f"{GREEN}✓ Saved pose playback test completed successfully!{RESET}")
+        return True
 
 def interactive_menu(tester):
     while rclpy.ok():
@@ -1161,13 +1404,14 @@ def interactive_menu(tester):
         print("  7. [Base velocity] Test mobile base twist velocity rotation (WARNING: moves robot!)")
         print("  8. [Joy simulation] Test Joystick Teleop transition and Joy subscriber")
         print("  9. [Trajectory Server] Test Trajectory Server multi-circle tracing (All styles) (WARNING: moves robot!)")
-        print("  10. [Posture Reset] Restore all joints to neutral/home posture")
-        print("  11. [Run All] Run all tests sequentially")
-        print("  12. Exit")
+        print("  10. [Saved Poses] Test web-teleop-style saved pose & recording playback (WARNING: moves robot!)")
+        print("  11. [Posture Reset] Restore all joints to neutral/home posture")
+        print("  12. [Run All] Run all tests sequentially")
+        print("  13. Exit")
         print(f"{BOLD}{CYAN}{'-'*80}{RESET}")
         
         try:
-            choice = input(f"{BOLD}{YELLOW}Select option (1-12): {RESET}").strip()
+            choice = input(f"{BOLD}{YELLOW}Select option (1-13): {RESET}").strip()
             if choice == '1':
                 tester.test_parameters(interactive=True)
             elif choice == '2':
@@ -1187,14 +1431,16 @@ def interactive_menu(tester):
             elif choice == '9':
                 tester.test_trajectory_server(interactive=True)
             elif choice == '10':
-                tester.restore_all_to_home()
+                tester.test_saved_pose_playback(interactive=True)
             elif choice == '11':
-                run_sequential_suite(tester)
+                tester.restore_all_to_home()
             elif choice == '12':
+                run_sequential_suite(tester)
+            elif choice == '13':
                 print(f"\n{BOLD}{GREEN}Exiting. Thank you!{RESET}\n")
                 break
             else:
-                print(f"{RED}Invalid option. Please input a number from 1 to 12.{RESET}")
+                print(f"{RED}Invalid option. Please input a number from 1 to 13.{RESET}")
         except KeyboardInterrupt:
             print(f"\n{YELLOW}Terminated by user.{RESET}")
             break
@@ -1219,6 +1465,7 @@ def run_sequential_suite(tester):
         tester.test_velocity_commands(interactive=False)
         tester.test_joy_commands(interactive=False)
         tester.test_trajectory_server(interactive=False)
+        tester.test_saved_pose_playback(interactive=False)
         print(f"\n{BOLD}{GREEN}================================================================================{RESET}")
         print(f"{BOLD}{GREEN}                  ALL SEQUENTIAL TESTS COMPLETED SUCCESSFULY!{RESET}")
         print(f"{BOLD}{GREEN}================================================================================{RESET}\n")
