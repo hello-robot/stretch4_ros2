@@ -160,8 +160,8 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "deprecated_interfaces",
-            default_value="false",
-            choices=["true", "false"],
+            default_value="True",
+            choices=["True", "False", "true", "false"],
             description="Launch joint_jog_converter to republish deprecated joint_vel (JointJog) commands as joint_velocity_cmd (JointState) commands.",
         ),
         DeclareLaunchArgument(
