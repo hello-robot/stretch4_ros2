@@ -388,7 +388,7 @@ class StretchMujocoDriver(Stretch4ROSDriver):
         self.sim.base.set_velocity(x, y, theta)
 
     def set_joint_position(self, joint, target, v=None, a=None):
-        self.logger.info(f"Driver setting joint {joint} to position {target}. current position is {self.cmd_joint_position(joint)}.") 
+        self.logger.debug(f"Driver setting joint {joint} to position {target}. current position is {self.cmd_joint_position(joint)}.")
         joint = self.backend_joint_name(joint)
         subsys = None
          
@@ -411,7 +411,7 @@ class StretchMujocoDriver(Stretch4ROSDriver):
         subsys.move_to(target, v_m=v, a_m=a)
 
     def set_joint_velocity(self, joint, target, a=None):
-        self.logger.info(f"Driver setting joint {joint} to velocity {target}")
+        self.logger.debug(f"Driver setting joint {joint} to velocity {target}")
         
         joint = self.backend_joint_name(joint)
         subsys = None

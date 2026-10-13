@@ -890,12 +890,28 @@ class Stretch4ROSDriver(Node, ABC):
             match self.get_parameter(f"joint_mode.{joint}").value:
                 case self.position_mode:
                     target = self.command_joint_pose_from_joint_state(joint, joint_state, default=None)
-                    if target is not None:
+                    if target is None:
+                        continue
+                    # A leader at (or reading slightly past) its own limit puts this joint at its limit.
+                    target = self._clamp_to_limits(joint, target)
+                    if abs(target - self.last_position_target.get(joint, float("inf"))) > self.PUPPET_DEADBAND:
                         self.check_and_set_pos(joint, target)
                 case self.velocity_mode:
                     target = self.command_joint_vel_from_joint_state(joint, joint_state, default=None)
                     if target is not None:
                         self.check_and_set_vel(joint, target)
+
+    # Puppet mode only re-commands a joint whose target moved by more than this (m or rad).
+    PUPPET_DEADBAND = 1e-4
+
+    def _clamp_to_limits(self, joint, target):
+        limits = self.get_parameters_by_prefix(f"joint_limit.{joint}")
+        lower, upper = limits["lower"].value, limits["upper"].value
+        if lower is not None:
+            target = max(target, lower)
+        if upper is not None:
+            target = min(target, upper)
+        return target
 
     def puppet_odom_callback(self, odom: Odometry):
         """In puppet mode with puppet.follow_base, drive the base at the odometry's velocity."""
