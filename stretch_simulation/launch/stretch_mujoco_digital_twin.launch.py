@@ -21,7 +21,7 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 # Sim launch arguments passed through unchanged.
-PASSTHROUGH_ARGS = ["use_rviz", "use_mujoco_viewer", "use_cameras", "use_robocasa", "scene_xml", "scene_name"]
+PASSTHROUGH_ARGS = ["use_rviz", "use_mujoco_viewer", "use_cameras", "use_robocasa", "scene_xml", "scene_name", "tool"]
 
 
 def launch(context):
@@ -87,5 +87,7 @@ def generate_launch_description():
         DeclareLaunchArgument("scene_xml", default_value="", description="The absolute path to a Mujoco scene xml"),
         DeclareLaunchArgument("scene_name", default_value="",
                               description="The name of a scene xml within stretch4_mujoco/models, e.g. some_rooms"),
+        DeclareLaunchArgument("tool", default_value="sg4",
+                              description="Tool to simulate, matching the primary's: 'sg4', 'pg4', or a full stretch4_urdf tool name"),
         OpaqueFunction(function=launch),
     ])

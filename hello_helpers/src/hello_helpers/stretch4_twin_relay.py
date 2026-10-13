@@ -7,8 +7,8 @@ watches what the primary does and repeats it on each mirror:
 - trajectories: each goal the primary accepts (published by its trajectory server on
   follow_joint_trajectory/accepted_goals) is sent to the mirror's own action server, and
   canceled there when the primary's goal is canceled or aborted
-- services: stop/home/stow_the_robot calls (seen through service introspection on
-  <service>/_service_event) are repeated on the mirror
+- services: stop/home/stow/freewheel_the_robot and seat_into_dock calls (seen through
+  service introspection on <service>/_service_event) are repeated on the mirror
 - runstop: the primary's is_runstopped state (which also covers the physical button)
 - parameters (optional, mirror_parameters): whitelisted parameter changes, plus an
   initial sync whenever a mirror (re)appears
@@ -38,10 +38,15 @@ from sensor_msgs.msg import JointState
 from std_msgs.msg import Bool
 from std_srvs.srv import SetBool, Trigger
 
-MIRRORED_SERVICES = ("stop_the_robot", "home_the_robot", "stow_the_robot")
+MIRRORED_SERVICES = ("stop_the_robot", "home_the_robot", "stow_the_robot",
+                     "freewheel_the_robot", "seat_into_dock")
 
-# Modes the driver switches into by itself (homing, stowing, runstopped) stay local to
-# each robot; only a user's switch between these is mirrored.
+# Services a mirror may not support (the simulator can't dock yet). The primary's result
+# is the one its client sees, so the mirror failing one is only worth an info message.
+UNSUPPORTED_ON_MIRROR_OK = ("seat_into_dock",)
+
+# Modes the driver switches into by itself (homing, stowing, seating, runstopped) stay
+# local to each robot; only a user's switch between these is mirrored.
 USER_MODES = ("active", "teleop")
 
 # Primary goal states after which the mirror's copy should stop too.
@@ -342,7 +347,8 @@ class TwinRelay(Node):
         response = future.result()
         if response is None or not response.success:
             message = response.message if response is not None else "no response"
-            self.get_logger().warn(f"{name} on {mirror.fqn} failed: {message}")
+            log = self.get_logger().info if name in UNSUPPORTED_ON_MIRROR_OK else self.get_logger().warn
+            log(f"{name} on {mirror.fqn} failed: {message}")
 
     # --- parameters -------------------------------------------------------------------
 

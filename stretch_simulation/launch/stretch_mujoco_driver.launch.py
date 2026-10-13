@@ -12,6 +12,7 @@ import launch_ros
 from launch.conditions import IfCondition
 from stretch4_urdf import get_urdf
 from stretch4_mujoco import Stretch4MujocoSimulator
+from stretch_mujoco_driver.sim_tools import resolve_sim_tool
 
 from hello_helpers.launch_utils import get_rviz_node, namespaced_rviz_config
 
@@ -41,6 +42,7 @@ stretch_driver_params = {
     "puppet.joint_states_topic": LaunchConfiguration("puppet_joint_states_topic"),
     "puppet.odom_topic": LaunchConfiguration("puppet_odom_topic"),
     "puppet.follow_base": LaunchConfiguration("follow_base"),
+    "tool": LaunchConfiguration("tool"),
 }
 
 
@@ -73,8 +75,15 @@ def launch(context):
             else LaunchConfiguration("robocasa_style")
         )
 
-    model_name, batch_name, tool_name = Stretch4MujocoSimulator.get_default_model_batch_tool_names()
+    model_name, batch_name, _ = Stretch4MujocoSimulator.get_default_model_batch_tool_names()
+    tool_name = resolve_sim_tool(context.perform_substitution(LaunchConfiguration("tool")))
     robot_description_content = get_urdf(model_name=model_name, batch_name=batch_name, tool_name=tool_name)
+
+    # As for the real driver: only passed when given, so the driver's default applies otherwise.
+    driver_params = [stretch_driver_params]
+    action_timeout = context.perform_substitution(LaunchConfiguration("action_timeout"))
+    if action_timeout:
+        driver_params.append({"action_timeout": float(action_timeout)})
 
     # Outputs (topics, TF frames) go in driver_namespace; command topics follow
     # command_namespace (see Stretch4ROSDriver).
@@ -102,7 +111,7 @@ def launch(context):
         namespace=ns,
         emulate_tty=True,
         output="screen",
-        parameters=[stretch_driver_params],
+        parameters=driver_params,
         # arguments=["--ros-args", "--log-level", "debug"],
         on_exit=Shutdown(),
     )
@@ -186,6 +195,14 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "action_server_rate", default_value='30.0', description="Action server update rate",
+        ),
+        DeclareLaunchArgument(
+            "action_timeout", default_value="",
+            description="If set, the trajectory server's timeout (sec), trajectory_server.timeout. Unset keeps the driver's default.",
+        ),
+        DeclareLaunchArgument(
+            "tool", default_value="sg4",
+            description="Tool to simulate: 'sg4' (Stretch gripper), 'pg4' (parallel gripper), or a full stretch4_urdf tool name",
         ),
         DeclareLaunchArgument(
             "deprecated_interfaces",

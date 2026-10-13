@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from enum import Enum
 from typing import Any
 import threading
-from threading import Lock
+from threading import RLock
 import time
 import copy
 import numpy as np
@@ -28,7 +28,7 @@ from rclpy.exceptions import ParameterNotDeclaredException
 
 from std_srvs.srv import Trigger, SetBool
 
-from geometry_msgs.msg import Twist, TransformStamped
+from geometry_msgs.msg import Twist, TwistWithCovarianceStamped, TransformStamped
 from nav_msgs.msg import Odometry
 from rcl_interfaces.msg import ParameterDescriptor, ParameterType, SetParametersResult
 from sensor_msgs.msg import BatteryState, JointState, Joy
@@ -60,6 +60,7 @@ class DriverMode(str, Enum):
     PUPPET = "puppet"
     HOMING = "homing"
     STOWING = "stowing"
+    SEATING = "seating"
     RUNSTOPPED = "runstopped"
 
     def __str__(self):
@@ -80,10 +81,12 @@ class Stretch4ROSDriver(Node, ABC):
     puppet_mode = DriverMode.PUPPET
     homing_mode = DriverMode.HOMING
     stowing_mode = DriverMode.STOWING
+    seating_mode = DriverMode.SEATING
     runstopped_mode = DriverMode.RUNSTOPPED
 
     control_modes = [DriverMode.ACTIVE.value, DriverMode.TELEOP.value, DriverMode.PUPPET.value]
-    priority_modes = [DriverMode.HOMING.value, DriverMode.STOWING.value, DriverMode.RUNSTOPPED.value]
+    priority_modes = [DriverMode.HOMING.value, DriverMode.STOWING.value, DriverMode.SEATING.value,
+                      DriverMode.RUNSTOPPED.value]
     default_mode = DriverMode.ACTIVE
 
     DEPRECATED_CONTROL_MODES = {
@@ -93,10 +96,23 @@ class Stretch4ROSDriver(Node, ABC):
     }
 
     # Extra spellings accepted for a command joint on command messages and trajectory
-    # goals. Parameters are never aliased -- a parameter name cannot be.
+    # goals. Parameters are never aliased -- a parameter name cannot be. The attached
+    # tool's own names (its backend name, with and without '_joint', and its URDF
+    # joints) are added at startup; see _declare_robot_info_params.
     JOINT_NAME_ALIASES = {
         "stretch_gripper_joint": "gripper_joint",
         "gripper_aperture": "gripper_joint",
+    }
+
+    # The command joint for whatever tool is attached. In /joint_states it carries one
+    # of the tool's URDF joints (e.g. one finger's angle), in the same units it is
+    # commanded in, alongside the tool's own URDF joints.
+    TOOL_JOINT = "gripper_joint"
+
+    # Command joints that /joint_states reports as several equal URDF joints, each
+    # carrying an equal share of the command joint's position and velocity.
+    SPLIT_JOINTS = {
+        "arm_joint": ["arm_l4_joint", "arm_l3_joint", "arm_l2_joint", "arm_l1_joint"],
     }
 
     # Command joints whose stretch_body / stretch_mujoco name is not the command joint
@@ -130,10 +146,14 @@ class Stretch4ROSDriver(Node, ABC):
         
         self._declare_common_params()
         self.declare_node_params()
+        self._declare_robot_info_params()
 
         # Runstop management
         self.prev_runstop_state = None
         self.prerunstop_mode = None
+
+        # Held while checking and changing the driver mode for a routine or runstop.
+        self.driver_mode_lock = RLock()
 
         # Callback groups
         self.main_group = ReentrantCallbackGroup()
@@ -176,6 +196,7 @@ class Stretch4ROSDriver(Node, ABC):
 
         action_timeout = self.get_parameter('action_timeout').value
         self.logger.info(f"action timeout = {action_timeout} s")
+        self._apply_launch_action_timeout()
         
         velocity_timeout = self.get_parameter('velocity_timeout').value
         #self.velocity_timeout_duration = Duration(seconds=velocity_timeout)
@@ -246,7 +267,9 @@ class Stretch4ROSDriver(Node, ABC):
         
         self.declare_parameter('action_timeout', 3.0, ParameterDescriptor(
             type=ParameterType.PARAMETER_DOUBLE,
-            description='Default timeout (sec) for execution of joint traj action',
+            description="Kept for launch files written for the old driver. If set at launch, "
+                        "or changed later, it sets trajectory_server.timeout (unless that is "
+                        "also set at launch).",
         ))
         self.declare_parameter('velocity_timeout', 0.5, ParameterDescriptor(
             type=ParameterType.PARAMETER_DOUBLE,
@@ -299,6 +322,59 @@ class Stretch4ROSDriver(Node, ABC):
 
     
 
+    def _declare_robot_info_params(self):
+        """Declare the parameters that describe this robot, from what the concrete driver
+        reports: the read-only tool_info.*, the default speeds joint_velocity.*, and the
+        joint_limit.<joint>.velocity limits. Also accepts the tool's own names for
+        TOOL_JOINT and seeds its trajectory tolerance from the tool."""
+        read_only = ParameterDescriptor(read_only=True, description="Attached tool (read-only)")
+        info = self.get_tool_info()
+        self.tool_is_actuated = bool(info.get("is_actuated", False))
+        tool_joints = list(info.get("tool_joints", []))
+        self.declare_parameter("tool_info.name", info.get("name") or "unknown", read_only)
+        self.declare_parameter("tool_info.is_actuated", self.tool_is_actuated, read_only)
+        self.declare_parameter("tool_info.tool_joints", tool_joints, read_only)
+        # Ranges in URDF units, so a client can size jog increments and sliders from the tool.
+        if self.tool_is_actuated:
+            for key in ("urdf_range", "aperture_range"):
+                self.declare_parameter(f"tool_info.{key}", [float(v) for v in info[key]], read_only)
+            self.declare_parameter("tool_info.position_tolerance", float(info["position_tolerance"]), read_only)
+
+        self.joint_name_aliases = dict(self.JOINT_NAME_ALIASES)
+        if self.TOOL_JOINT in self.command_joints:
+            backend = self.backend_joint_name(self.TOOL_JOINT)
+            for alias in [backend, f"{backend}_joint", *tool_joints]:
+                self.joint_name_aliases.setdefault(alias, self.TOOL_JOINT)
+            tolerance = f"trajectory_server.trajectory_tolerance.{self.TOOL_JOINT}"
+            if self.tool_is_actuated and self.get_parameter(tolerance).value is None:
+                self.set_parameters([Parameter(tolerance, Parameter.Type.DOUBLE,
+                                               float(info["position_tolerance"]))])
+
+        # Speed used for a position command that doesn't give one; see set_joint_position.
+        speed = ParameterDescriptor(description="Default speed (m/s or rad/s) of a position "
+                                                "command that doesn't give one")
+        for name, vel in self.default_joint_velocity().items():
+            self.declare_parameter(f"joint_velocity.{name}", float(vel), speed)
+
+        limits = [
+            Parameter(f"joint_limit.{joint}.velocity", Parameter.Type.DOUBLE, float(vel))
+            for joint, vel in self.max_joint_velocity().items()
+            if self.get_parameter(f"joint_limit.{joint}.velocity").value is None
+        ]
+        self.set_parameters(limits)
+
+    def _apply_launch_action_timeout(self):
+        """Launch files written for the old driver (e.g. navigation's, which sets 30) give
+        the trajectory timeout as action_timeout; if it was set at launch and
+        trajectory_server.timeout wasn't, it becomes trajectory_server.timeout."""
+        overrides = getattr(self, "_parameter_overrides", {})
+        if "action_timeout" in overrides and "trajectory_server.timeout" not in overrides:
+            self._set_trajectory_timeout(self.get_parameter("action_timeout").value)
+
+    def _set_trajectory_timeout(self, timeout):
+        self.set_parameters([Parameter("trajectory_server.timeout", Parameter.Type.DOUBLE, float(timeout))])
+        self.logger.info(f"trajectory_server.timeout = {timeout} s (from action_timeout)")
+
     def _setup_common_pubs(self):
         latching_qos = QoSProfile(
             depth=1,
@@ -315,7 +391,7 @@ class Stretch4ROSDriver(Node, ABC):
         self.latched_publishers.append((self.homed_pub, self.get_homed))
 
         self.mode_pub = self.create_publisher(String, 'mode', latching_qos)
-        # handle mode separately; do not add to arrays of regular publishers
+        self.latched_publishers.append((self.mode_pub, lambda robot_status, status_time: str(self.robot_mode())))
         
         self.tool_pub = self.create_publisher(String, 'tool', latching_qos)
         self.latched_publishers.append((self.tool_pub, self.get_tool))
@@ -349,6 +425,8 @@ class Stretch4ROSDriver(Node, ABC):
         # Command topics follow command_namespace; services and the action stay in the
         # node's namespace, since a service or action name can have only one server.
         self.create_subscription(Twist, self._command_topic("cmd_vel"), self.base_twist_callback, 1, callback_group=self.main_group)
+
+        self.create_subscription(TwistWithCovarianceStamped, self._command_topic("cmd_vel_stiff"), self.stiff_twist_callback, 1, callback_group=self.main_group)
         
         self.create_subscription(JointState, self._command_topic("joint_velocity_cmd"), self.velocity_cmd_callback, 1, callback_group=self.main_group)
         
@@ -401,6 +479,18 @@ class Stretch4ROSDriver(Node, ABC):
             self.stow_the_robot_callback,
             callback_group=self.main_group
         )
+        self.seat_into_dock_service = self.create_service(
+            Trigger,
+            'seat_into_dock',
+            self.seat_into_dock_callback,
+            callback_group=self.main_group
+        )
+        self.freewheel_the_robot_service = self.create_service(
+            Trigger,
+            'freewheel_the_robot',
+            self.freewheel_the_robot_callback,
+            callback_group=self.main_group
+        )
         self.runstop_service = self.create_service(
             SetBool,
             'runstop_the_robot',
@@ -411,7 +501,8 @@ class Stretch4ROSDriver(Node, ABC):
         # Publish each call on <service>/_service_event, so another node (e.g. the digital
         # twin relay) can follow this robot's service calls without being their server.
         for service in (self.stop_the_robot_service, self.home_the_robot_service,
-                        self.stow_the_robot_service, self.runstop_service):
+                        self.stow_the_robot_service, self.seat_into_dock_service,
+                        self.freewheel_the_robot_service, self.runstop_service):
             service.configure_introspection(self.get_clock(), qos_profile_system_default,
                                             ServiceIntrospectionState.CONTENTS)
 
@@ -462,7 +553,7 @@ class Stretch4ROSDriver(Node, ABC):
         """
         if self.command_joints and name in self.command_joints:
             return name
-        joint = self.JOINT_NAME_ALIASES.get(name)
+        joint = self.joint_name_aliases.get(name)
         if joint is not None and self.command_joints and joint in self.command_joints:
             return joint
         return name
@@ -532,6 +623,8 @@ class Stretch4ROSDriver(Node, ABC):
             case "velocity_timeout":
                 velocity_timeout = parameter.value
                 self.logger.info(f"Changed to velocity timeout = {velocity_timeout} s")
+            case "action_timeout":
+                self._set_trajectory_timeout(parameter.value)
             case n if n in [f"joint_mode.{joint}" for joint in self.command_joints]:
                 self.change_joint_mode(n.split(".")[1], parameter.value)
 
@@ -684,8 +777,13 @@ class Stretch4ROSDriver(Node, ABC):
                     reason = "Joint velocity limit cannot be less than 0.0."
             case n if "trajectory_server." in n:
                 found = True
+            case n if n.startswith("joint_velocity."):
+                found = True
+                if not isinstance(parameter.value, (int, float)) or parameter.value <= 0.0:
+                    reason = f"{n} must be a positive speed."
             # --- Read-Only/Static Parameters ---
-            case "control_loop_rate" | "broadcast_odom_tf" | "sensitivity" | "command_namespace":
+            # (sensitivity is changeable at runtime; the concrete driver checks it.)
+            case n if n in ("control_loop_rate", "broadcast_odom_tf", "command_namespace") or n.startswith("tool_info."):
                 found = True
                 reason = f"Parameter '{parameter.name}' is read-only after startup."
             case n if n in [f"joint_acceleration.{joint}" for joint in self.command_joints] or \
@@ -729,8 +827,27 @@ class Stretch4ROSDriver(Node, ABC):
 
         self.set_base_velocity(twist.linear.x, twist.linear.y, twist.angular.z)
 
+    def stiff_twist_callback(self, stiff_twist: TwistWithCovarianceStamped):
+        """cmd_vel_stiff: a base velocity together with how stiffly to hold it (the
+        docking server drives in compliantly)."""
+        mode = self.robot_mode()
+        if mode != self.active_mode:
+            self.logger.warn(
+                f"Cannot send base commands while robot is in mode {mode}.  Must be in mode '{self.active_mode}'"
+            )
+            return
+        twist = stiff_twist.twist.twist
+        self.set_base_velocity(twist.linear.x, twist.linear.y, twist.angular.z,
+                               stiffness=self.stiffness_from_covariance(stiff_twist.twist.covariance))
+
+    @staticmethod
+    def stiffness_from_covariance(covariance):
+        """cmd_vel_stiff carries the base's stiffness (0 to 1) in covariance[0]. A
+        covariance whose last element is 0 (e.g. left unset) means full stiffness."""
+        return 1.0 if covariance[-1] == 0.0 else float(covariance[0])
+
     @abstractmethod
-    def set_base_velocity(self, x, y, theta):
+    def set_base_velocity(self, x, y, theta, stiffness=1.0):
         pass
 
     def velocity_cmd_callback(self, target: JointState):
@@ -783,10 +900,14 @@ class Stretch4ROSDriver(Node, ABC):
                     vel_limit = None
                 
                 if vel_limit is not None and abs(goal) > vel_limit:
-                    self.logger.warn(f"Cannot send velocity command to joint {joint_name}: goal velocity {goal} exceeds limit ({vel_limit}).")
-                else:
-                    self.set_joint_velocity(joint_name, goal, a = a)
-                    succeeded = True
+                    self.logger.warn(
+                        f"Velocity command {goal} for joint {joint_name} exceeds its limit "
+                        f"joint_limit.{joint_name}.velocity ({vel_limit}); limiting it.",
+                        throttle_duration_sec=self.MODE_WARNING_PERIOD_S,
+                    )
+                    goal = float(np.clip(goal, -vel_limit, vel_limit))
+                self.set_joint_velocity(joint_name, goal, a = a)
+                succeeded = True
                     
         return succeeded
         
@@ -1041,13 +1162,90 @@ class Stretch4ROSDriver(Node, ABC):
     def stop_the_robot_callback(self, request, response):
         pass
 
-    @abstractmethod
     def home_the_robot_callback(self, request, response):
+        response.success, response.message = self._run_priority_routine(self.homing_mode, "home", self.home_robot)
+        return response
+
+    def stow_the_robot_callback(self, request, response):
+        response.success, response.message = self._run_priority_routine(self.stowing_mode, "stow", self.stow_robot)
+        return response
+
+    def seat_into_dock_callback(self, request, response):
+        response.success, response.message = self._run_priority_routine(self.seating_mode, "seat_into_dock", self.seat_robot)
+        return response
+
+    def freewheel_the_robot_callback(self, request, response):
+        response.success, response.message = self.freewheel_base()
+        self.logger.info(f"freewheel_the_robot: {response.message}")
+        return response
+
+    def _run_priority_routine(self, mode, action, routine):
+        """Run `routine` (a driver hook returning (success, message)) in priority mode
+        `mode`, then return to the previous control mode. Refused unless the robot is
+        in a control mode."""
+        with self.driver_mode_lock:
+            last_mode = self.robot_mode()
+            if last_mode not in self.control_modes:
+                message = f"Cannot {action} while in mode={last_mode}."
+                self.logger.error(message)
+                return False, message
+            self.change_mode(mode)
+        self.logger.info(f"Received {action} request; mode = {mode}.")
+        try:
+            success, message = routine()
+        except Exception as e:
+            self.logger.error(f"{action} failed: {e}\n{traceback.format_exc()}")
+            success, message = False, f"{action} failed: {e}"
+        finally:
+            with self.driver_mode_lock:
+                if self.robot_mode() == mode:
+                    self.change_mode(last_mode)
+                elif self.prerunstop_mode == mode:
+                    # Runstopped during the routine: clearing the runstop returns to the
+                    # mode from before the routine, not to the routine's.
+                    self.prerunstop_mode = last_mode
+        (self.logger.info if success else self.logger.warn)(f"{action}: {message}")
+        return success, message
+
+    @abstractmethod
+    def home_robot(self) -> tuple[bool, str]:
+        """Home the robot, blocking until done. Returns (success, message)."""
         pass
 
     @abstractmethod
-    def stow_the_robot_callback(self, request, response):
+    def stow_robot(self) -> tuple[bool, str]:
+        """Stow the robot, blocking until done. Returns (success, message)."""
         pass
+
+    @abstractmethod
+    def seat_robot(self) -> tuple[bool, str]:
+        """Seat the robot into the dock it is lined up with, blocking until done. Returns
+        (success, message)."""
+        pass
+
+    @abstractmethod
+    def freewheel_base(self) -> tuple[bool, str]:
+        """Let the base's wheels turn freely. Returns (success, message)."""
+        pass
+
+    @abstractmethod
+    def get_tool_info(self) -> dict:
+        """The attached tool, as a dict with 'name', 'is_actuated' and 'tool_joints'
+        (its URDF joints) and, for an actuated tool, 'urdf_range', 'aperture_range' and
+        'position_tolerance' in TOOL_JOINT's units. Called during __init__, after
+        startup_robot and declare_node_params."""
+        pass
+
+    @abstractmethod
+    def default_joint_velocity(self) -> dict:
+        """Default speed of each command joint ('lift_joint': 0.3, ...) and of the base
+        ('omnibase.linear', 'omnibase.angular'); becomes joint_velocity.<name>."""
+        pass
+
+    def max_joint_velocity(self) -> dict:
+        """Maximum speed of each command joint; becomes joint_limit.<joint>.velocity
+        unless that was set at launch. None known by default."""
+        return {}
 
     @abstractmethod
     def runstop_service_callback(self, request, response):
@@ -1094,7 +1292,6 @@ class Stretch4ROSDriver(Node, ABC):
             # so the driver will crash rather than running with the mode
             # parameter not matching the true robot mode
             self.change_mode(mode, require_success=True)
-            self.mode_pub.publish(mode)
         
         for (pub, msg_cb) in self.latched_publishers:
             message = msg_cb(status, current_time)
@@ -1150,16 +1347,23 @@ class Stretch4ROSDriver(Node, ABC):
     def get_joint_state(self, robot_status, status_time) -> JointState:
         pass
 
-    #this function is needed because the published joint state splits up the
-    #arm and uses different names than the joint names used to send commands
-        
-    @abstractmethod
+    # A command joint's position or velocity in a /joint_states message (this robot's,
+    # or another's in puppet mode): its own entry, or the sum of the URDF joints it is
+    # split into (SPLIT_JOINTS).
     def command_joint_pose_from_joint_state(self, command_joint, joint_state, default=None):
-        pass
+        return self._joint_state_value(joint_state.position, command_joint, joint_state, default)
 
-    @abstractmethod
     def command_joint_vel_from_joint_state(self, command_joint, joint_state, default=None):
-        pass
+        return self._joint_state_value(joint_state.velocity, command_joint, joint_state, default)
+
+    def _joint_state_value(self, values, command_joint, joint_state, default):
+        found = []
+        for name in self.SPLIT_JOINTS.get(command_joint, [command_joint]):
+            try:
+                found.append(values[joint_state.name.index(name)])
+            except (ValueError, IndexError):
+                pass
+        return sum(found) if found else default
 
     @abstractmethod                                    
     def get_battery(self, robot_status, status_time) -> BatteryState:

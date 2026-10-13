@@ -138,8 +138,9 @@ def generate_launch_description():
     # Action timeout arg
     action_timeout_arg = DeclareLaunchArgument(
         'action_timeout',
-        default_value='3.0',
-        description='Default timeout (sec) for execution of joint traj action'
+        default_value='',
+        description="If set, the trajectory server's timeout (sec), trajectory_server.timeout "
+                    "(e.g. navigation sets 30). Unset keeps the driver's default."
     )
     ld.add_action(action_timeout_arg)
 
@@ -157,6 +158,9 @@ def generate_launch_description():
         prefix = LaunchConfiguration('driver_namespace').perform(context)
         ns = prefix if prefix != 'UNSET' else ''
         mode = resolve_mode(context)
+        # only passed when given, so that the driver's own default applies otherwise
+        action_timeout = LaunchConfiguration('action_timeout').perform(context)
+        optional_params = [{'action_timeout': float(action_timeout)}] if action_timeout else []
         stretch_driver = Node(package='stretch_core',
                               executable='stretch_driver',
                               name='stretch_driver',
@@ -165,7 +169,7 @@ def generate_launch_description():
                               output='screen',
                               parameters=[{'broadcast_odom_tf': LaunchConfiguration('broadcast_odom_tf')},
                                           {'mode': mode},
-                                          {'action_timeout': LaunchConfiguration('action_timeout')},
+                                          *optional_params,
                                           {'command_namespace': LaunchConfiguration('command_namespace')},
                                           {'puppet.joint_states_topic': LaunchConfiguration('puppet_joint_states_topic')},
                                           {'puppet.odom_topic': LaunchConfiguration('puppet_odom_topic')},

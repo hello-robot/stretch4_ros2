@@ -7,7 +7,7 @@ import pprint
 import sys
 
 import stretch4_body.robot.robot_client as rc
-from stretch4_body.utils.tool_metadata import get_tool_metadata, is_tool_joint
+from stretch4_body.utils.tool_metadata import ToolConfigurationError, get_tool_metadata, is_tool_joint
 import rclpy
 from rclpy.duration import Duration
 from rclpy.executors import MultiThreadedExecutor
@@ -43,22 +43,11 @@ from tf_transformations import quaternion_from_euler
 class StretchDriver(Stretch4ROSDriver):
 
     # Command joints are discovered from stretch4_body rather than listed here: each
-    # joint's ROS name is its stretch4_body name + "_joint", with the two exceptions below.
-
-    # Whatever tool is attached (stretch4_body's end_of_arm.gripper) is commanded as
-    # this one joint; its value is the sum of the tool's URDF joints (ToolMetadata
-    # .tool_joints), e.g. the two finger angles of the Stretch gripper. To name tools
-    # differently, change how startup_robot names the tool joint, and update the sim
-    # driver's command_joints, hello_helpers' BACKEND_JOINT_NAMES / JOINT_NAME_ALIASES
-    # / gamepad mapping, the joint_jog_converter, and the tests, which all use this name.
-    # Assumes a single-DOF tool (ToolMetadata is scalar).
-    TOOL_JOINT = "gripper_joint"
-
-    # Command joints that /joint_states reports as several equal URDF joints, each
-    # carrying an equal share of the command joint's position and velocity.
-    SPLIT_JOINTS = {
-        "arm_joint": ["arm_l4_joint", "arm_l3_joint", "arm_l2_joint", "arm_l1_joint"],
-    }
+    # joint's ROS name is its stretch4_body name + "_joint", except the attached tool,
+    # which is commanded as TOOL_JOINT ("gripper_joint") when it is actuated. Its
+    # value is one of the tool's URDF joints (ToolMetadata.tool_joints, e.g. one finger
+    # of the Stretch gripper), in URDF units, reported and commanded alike. Assumes a
+    # single-DOF tool (ToolMetadata is scalar).
 
     def __init__(self):
         super().__init__('stretch_driver')
@@ -113,7 +102,7 @@ class StretchDriver(Stretch4ROSDriver):
                 vel_increment = motion["max"]["vel"]*0.05
                 if joint == self.TOOL_JOINT:
                     vel_increment = self._tool_actuator_to_command_delta(vel_increment)
-                    to_actuator_vel = self._tool_velocity_to_actuator
+                    to_actuator_vel = lambda v: self._tool_velocity_to_actuator(v, self._tool_urdf_position())
                 else:
                     to_actuator_vel = lambda v: v
                 self.set_vel_functions[joint] = (
@@ -133,23 +122,22 @@ class StretchDriver(Stretch4ROSDriver):
         accel_params.append(Parameter("joint_limit.omnibase.linear.acceleration", Parameter.Type.DOUBLE,self.robot.robot_params['omnibase']['motion']['max']['accel_xy_m']))
         accel_params.append(Parameter("joint_limit.omnibase.angular.acceleration", Parameter.Type.DOUBLE,self.robot.robot_params['omnibase']['motion']['max']['accel_w_r']))
 
+        if self.TOOL_JOINT in self.joint_backends:
+            low, high = self._tool_metadata.urdf_range
+            accel_params.append(Parameter(f"joint_limit.{self.TOOL_JOINT}.lower", Parameter.Type.DOUBLE, float(min(low, high))))
+            accel_params.append(Parameter(f"joint_limit.{self.TOOL_JOINT}.upper", Parameter.Type.DOUBLE, float(max(low, high))))
+
         
         #succeeded = self.set_parameters(accel_params)
         
         results = self.set_parameters(accel_params)
-        for i in range(len(results)):
-            param = accel_params[i]
-            result = results[0]
-            reason = result.reason
-            check = result.successful
-            
-            if not check:
-                self.logger.warning(f"Unable to set parameter {param.name}.  Reason: {reason}")
+        for param, result in zip(accel_params, results):
+            if not result.successful:
+                self.logger.warning(f"Unable to set parameter {param.name}.  Reason: {result.reason}")
 
         
         self.robot.set_guarded_contact_sensitivity(self.get_parameter("sensitivity").value)
 
-        self.driver_mode_lock = Lock()
         self.start()
 
     def startup_robot(self):
@@ -165,12 +153,15 @@ class StretchDriver(Stretch4ROSDriver):
         if not self.robot.is_homed():
             self.robot.logger.warn('Robot is not homed.')
 
-        # Unit conversions for the attached tool (gripper); None if there is no tool.
+        # Unit conversions for the attached tool (gripper); None if there is no tool, or
+        # it is passive (e.g. a tablet) and so has no ToolMetadata.
+        self._tool_name = self.robot.params.get('tool')
         try:
-            self._tool_metadata = get_tool_metadata()
-        except Exception as e:
+            self._tool_metadata = get_tool_metadata(self._tool_name)
+        except ToolConfigurationError as e:
             self._tool_metadata = None
-            self.get_logger().warn(f"No tool metadata ({e}); tool joints can't be commanded.")
+            self.get_logger().info(f"No actuated tool ({e}).")
+        self._tool_is_actuated = bool(self._tool_metadata and self._tool_metadata.actuated_joints)
 
         # Discover the command joints, as {ROS command joint: stretch4_body joint name}:
         # top-level subsystems whose status is a joint's (the lift and arm), then the
@@ -184,7 +175,7 @@ class StretchDriver(Stretch4ROSDriver):
         for name in getattr(getattr(self.robot, 'end_of_arm', None), 'joints', []):
             if not is_tool_joint(name):
                 self.joint_backends[f"{name}_joint"] = name
-            elif self._tool_metadata is not None:
+            elif self._tool_is_actuated:
                 self.joint_backends[self.TOOL_JOINT] = name
         self.command_joints = list(self.joint_backends)
         self.velocity_joints = list(self.joint_backends)
@@ -255,19 +246,14 @@ class StretchDriver(Stretch4ROSDriver):
     def _ros_joint_states(self, joint, pos, vel):
         """(name, position, velocity) for each /joint_states entry of a command joint."""
         if joint == self.TOOL_JOINT:
+            # The tool's URDF joints, and the command joint itself in the same units.
             meta = self._tool_metadata
-            return [(name, meta.actuator_to_urdf(pos), meta.actuator_to_urdf_velocity(vel, pos))
-                    for name in meta.tool_joints]
+            urdf_pos, urdf_vel = meta.actuator_to_urdf(pos), meta.actuator_to_urdf_velocity(vel, pos)
+            return [(name, urdf_pos, urdf_vel) for name in [*meta.tool_joints, joint]]
         if joint in self.SPLIT_JOINTS:
             links = self.SPLIT_JOINTS[joint]
             return [(link, pos/len(links), vel/len(links)) for link in links]
         return [(joint, pos, vel)]
-
-    def _state_joint_names(self, joint):
-        """The /joint_states names whose values sum to command joint `joint`."""
-        if joint == self.TOOL_JOINT and self._tool_metadata is not None:
-            return self._tool_metadata.tool_joints
-        return self.SPLIT_JOINTS.get(joint, [joint])
             
     def _get_push_interval(self):
         return 0.2
@@ -365,23 +351,6 @@ class StretchDriver(Stretch4ROSDriver):
 
         return joint_state
 
-    # /joint_states splits some command joints into several URDF joints (see
-    # _ros_joint_states); these sum them back up.
-    def command_joint_pose_from_joint_state(self, command_joint, joint_state, default=None):
-        return self._sum_joint_state(joint_state.position, command_joint, joint_state, default)
-
-    def command_joint_vel_from_joint_state(self, command_joint, joint_state, default=None):
-        return self._sum_joint_state(joint_state.velocity, command_joint, joint_state, default)
-
-    def _sum_joint_state(self, values, command_joint, joint_state, default):
-        found = []
-        for name in self._state_joint_names(command_joint):
-            try:
-                found.append(values[joint_state.name.index(name)])
-            except (ValueError, IndexError):
-                pass
-        return sum(found) if found else default
-
     def declare_node_params(self):
         # Below this magnitude, a wrist velocity-mode command is treated as an explicit stop
         # rather than forwarded to move_by(). Necessary because a tiny nonzero float velocity
@@ -414,14 +383,15 @@ class StretchDriver(Stretch4ROSDriver):
     def handle_mode_change(self, mode):
         pass
 
-    def set_base_velocity(self, x, y, theta):
+    def set_base_velocity(self, x, y, theta, stiffness=1.0):
         linear_acc = self.get_parameter_or("joint_acceleration.omnibase.linear",None).value
         angular_acc = self.get_parameter_or("joint_acceleration.omnibase.angular",None).value
         self.robot.omnibase.set_velocity(vx_m = x, 
                                          vy_m = y, 
                                          w_r = theta, 
                                          a_m = linear_acc, 
-                                         a_r = angular_acc
+                                         a_r = angular_acc,
+                                         stiffness = stiffness,
                                         )
 
     def set_joint_velocity(self, joint, target, a=None):
@@ -444,7 +414,7 @@ class StretchDriver(Stretch4ROSDriver):
         if a is None:
             a = self.get_parameter_or(f"joint_acceleration.{joint}",None).value
         if v is None:
-            v = self.get_parameter_or(f"joint_default_velocity.{joint}",None).value
+            v = self.get_parameter_or(f"joint_velocity.{joint}",None).value
 
         command = JointState()
         command.name = [joint]
@@ -458,21 +428,28 @@ class StretchDriver(Stretch4ROSDriver):
         if backend is None:
             self.logger.warn(f"Unable to set position for unknown joint {joint}.")
         elif joint == self.TOOL_JOINT:
-            command = self._tool_metadata.urdf_to_command(target / len(self._tool_metadata.tool_joints))
-            v_r = self._tool_velocity_to_actuator(v) if v is not None else None
+            command = self._tool_metadata.urdf_to_command(target)
+            v_r = self._tool_velocity_to_actuator(v, target) if v is not None else None
             self.robot.end_of_arm.move_to(backend, command, v_r, a)
         elif self._is_end_of_arm(backend):
             self.robot.end_of_arm.move_to(backend, target, v, a)
         else:
             getattr(self.robot, backend).move_to(target, v_m=v, a_m=a)
 
-    # The tool's command joint is the sum of its URDF joints (see TOOL_JOINT), while
-    # stretch4_body's ToolMetadata works in units of a single URDF joint.
-    def _tool_velocity_to_actuator(self, v):
-        """ROS gripper speed -> actuator speed (rad/s), for move_to/move_by's v_r."""
-        meta = self._tool_metadata
-        low, high = meta.urdf_range
-        return abs(meta.urdf_to_actuator_velocity(v / len(meta.tool_joints), (low + high) / 2.0))
+    def _tool_velocity_to_actuator(self, v, at_urdf):
+        """Tool speed in URDF units at URDF position `at_urdf` -> actuator speed (rad/s),
+        for move_to/move_by's v_r."""
+        return abs(self._tool_metadata.urdf_to_actuator_velocity(v, at_urdf))
+
+    def _tool_urdf_position(self):
+        """The tool's current position in URDF units, or mid-range if not known yet."""
+        pos = None
+        if self.last_known_state is not None:
+            pos = self.command_joint_pose_from_joint_state(self.TOOL_JOINT, self.last_known_state)
+        if pos is None:
+            low, high = self._tool_metadata.urdf_range
+            pos = (low + high) / 2.0
+        return pos
 
     def _tool_actuator_to_command_delta(self, delta):
         """Actuator displacement (rad) -> tool command units (percent on SG4, meters on PG4)."""
@@ -497,22 +474,6 @@ class StretchDriver(Stretch4ROSDriver):
         return response
 
 
-    def home_the_robot_callback(self, request, response):
-        self.robot.logger.debug('Received home_the_robot service call.')
-        did_succeed, msg = self.home_the_robot()
-        response.success = did_succeed
-        response.message = msg
-        return response
-
-
-    def stow_the_robot_callback(self, request, response):
-        self.robot.logger.debug('Received stow_the_robot service call.')
-        did_succeed, msg = self.stow_the_robot()
-        response.success = did_succeed
-        response.message = msg
-        return response
-
-
     def runstop_service_callback(self, request, response):
         self.runstop_the_robot(request.data)
         response.success = True
@@ -520,31 +481,62 @@ class StretchDriver(Stretch4ROSDriver):
         return response
 
     
-    def home_the_robot(self):
-        with self.driver_mode_lock:
-            can_home = self.robot_mode() in self.control_modes
-            last_driver_mode = copy.copy(self.robot_mode())
-        if not can_home:
-            errmsg = f'Cannot home while in mode={last_driver_mode}.'
-            self.robot.logger.error(errmsg)
-            return False, errmsg
-        self.change_mode('homing')
-        self.robot.home(do_push=False, do_pull=False)
-        self.change_mode(last_driver_mode)
-        return True, 'Homed.'
+    # Routines run with do_pull=False: the control loop keeps pulling status meanwhile.
+    # A routine that times out keeps running on the robot; the call just reports failure.
+    def home_robot(self):
+        finished, _rid = self.robot.routines.routine_robot_home(
+            do_push=False, wait_on_completion=True, timeout=60, do_pull=False)
+        return (True, 'Homed.') if finished else (False, 'Homing routine did not complete.')
 
-    def stow_the_robot(self):
+    def stow_robot(self):
+        finished, _rid = self.robot.routines.routine_robot_stow(
+            do_push=False, wait_on_completion=True, timeout=30, do_pull=False)
+        return (True, 'Stowed.') if finished else (False, 'Stowing routine did not complete.')
+
+    def seat_robot(self):
+        succeeded, _rid = self.robot.routines.routine_blind_dock(
+            do_push=False, wait_on_completion=True, do_pull=False)
+        return (True, 'Seated into dock.') if succeeded else (False, 'Seating into dock failed.')
+
+    def freewheel_base(self):
         with self.driver_mode_lock:
-            can_stow = self.robot_mode() in self.control_modes
-            last_driver_mode = copy.copy(self.robot_mode())
-        if not can_stow:
-            errmsg = f'Cannot stow while in mode={last_driver_mode}.'
-            self.robot.logger.error(errmsg)
-            return False, errmsg
-        self.change_mode('stowing')
-        self.robot.stow(do_push=False, do_pull=False)
-        self.change_mode(last_driver_mode)
-        return True, 'Stowed.'
+            self.robot.omnibase.enable_freewheel_mode()
+        return True, 'Freewheeled the robot.'
+
+    def get_tool_info(self):
+        info = {"name": self._tool_name, "is_actuated": self._tool_is_actuated,
+                "tool_joints": list(self._tool_metadata.tool_joints) if self._tool_metadata else []}
+        if self._tool_is_actuated:
+            meta = self._tool_metadata
+            info.update(urdf_range=meta.urdf_range, aperture_range=meta.aperture_range,
+                        position_tolerance=meta.position_tolerance)
+        return info
+
+    def default_joint_velocity(self):
+        return self._joint_velocities('default')
+
+    def max_joint_velocity(self):
+        velocities = self._joint_velocities('max')
+        velocities.pop("omnibase.linear", None)
+        velocities.pop("omnibase.angular", None)
+        return velocities
+
+    def _joint_velocities(self, profile):
+        """Each command joint's and the base's speed in stretch4_body motion `profile`."""
+        velocities = {}
+        for joint, backend in self.joint_backends.items():
+            if joint == self.TOOL_JOINT:
+                try:
+                    velocities[joint] = self._tool_metadata.position_independent_velocity_limit("urdf", profile)
+                except ToolConfigurationError as e:
+                    self.get_logger().warn(f"No {profile} speed for {joint}: {e}")
+                continue
+            motion = self.robot.robot_params[backend]['motion'][profile]
+            velocities[joint] = motion['vel_m'] if 'vel_m' in motion else motion['vel']
+        base = self.robot.robot_params['omnibase']['motion'][profile]
+        velocities["omnibase.linear"] = base['vel_xy_m']
+        velocities["omnibase.angular"] = base['vel_w_r']
+        return velocities
 
     def runstop_the_robot(self, runstopped, just_change_mode=False):
         if runstopped:

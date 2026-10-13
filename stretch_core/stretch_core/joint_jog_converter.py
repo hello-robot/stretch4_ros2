@@ -9,7 +9,8 @@ Stretch4ROSDriver.velocity_cmd_callback.
 Four differences between the old and new paradigms are handled here:
 
   * Joint names. joint_vel shares the driver's joint names apart from the gripper,
-    which it calls 'stretch_gripper_joint' rather than 'gripper_joint'.
+    which it may also call by the tool's names ('stretch_gripper_joint', or a finger
+    joint such as 'gripper_finger_left_joint') rather than 'gripper_joint'.
   * Control mode. Velocity used to be a global driver mode. It is now per joint,
     so this node sets joint_mode.<joint> before forwarding a command: 'velocity' for
     the ranged joints, and 'position' for the wrists and gripper, whose legacy
@@ -23,11 +24,10 @@ Four differences between the old and new paradigms are handled here:
     after which the robot stops. The new driver is designed to command velocities
     indefinitely, so this node runs its own watchdog and publishes a zero velocity
     when the duration expires to mimic the old expected behavior.
-  * End-of-arm joint velocity commands. The deprecated drived handled velocity commands with
-    EndOfArm.move_by commands. It estimated displacement by multiplying commanded velocity
-    by JointJog.duration (wrists) or 300 (gripper). This node reproduces the expected velocity
-    command behavior by sending joint_position_cmds: move_to(pos + duration*v) for wrists and
-    move_to(pos_pct + 300*v) for the gripper.
+  * End-of-arm joint velocity commands. The deprecated driver handled velocity commands with
+    EndOfArm.move_by commands, moving by the commanded velocity times JointJog.duration (for
+    the gripper, in URDF units, i.e. one finger's). This node reproduces that by sending
+    joint_position_cmds: move_to(pos + duration*v), the gripper's bounded by its joint limits.
 
 """
 
@@ -41,39 +41,28 @@ from rcl_interfaces.msg import (
     ParameterType,
     ParameterValue,
 )
-from rcl_interfaces.srv import SetParameters
+from rcl_interfaces.srv import GetParameters, SetParameters
 from rclpy.duration import Duration
 from rclpy.node import Node
 from rclpy.qos import qos_profile_parameter_events
 from sensor_msgs.msg import JointState
 
-try:
-    # Only needed to reproduce legacy gripper commands. Absent on machines that run
-    # the simulator without stretch4_body; the rest of the shim works without it.
-    from stretch4_body.utils.tool_metadata import get_tool_metadata
-except Exception:
-    get_tool_metadata = None
+GRIPPER_JOINT = "gripper_joint"
 
+# Other names the gripper went by: the tools' stretch4_body names and their URDF joints
+# (the Stretch gripper's and the parallel gripper's).
 JOINT_NAME_ALIASES = {
-    "stretch_gripper_joint": "gripper_joint",
-    "gripper": "gripper_joint",
-    "gripper_aperture": "gripper_joint",
+    name: GRIPPER_JOINT
+    for name in (
+        "gripper", "gripper_aperture",
+        "stretch_gripper", "stretch_gripper_joint",
+        "parallel_gripper", "parallel_gripper_joint",
+        "gripper_finger_left_joint", "gripper_finger_right_joint",
+        "finger_left_joint", "finger_right_joint",
+    )
 }
 
-# The deprecated velocity_callback multiplied gripper commands by this before handing
-# them to EndOfArm.move_by as an aperture-percentage displacement. Reproducing the old
-# motion means reproducing that displacement, so the factor is kept exactly.
-DEFAULT_GRIPPER_LEGACY_SCALE = 300.0
-
-# joint_states reports each gripper finger's angle, which is half the aperture angle,
-# while joint_position_cmd's gripper_joint is the full aperture angle (the sum of the
-# two fingers). Both maps are affine, so the two differ by a constant. Exposed as a
-# parameter because it encodes a driver-side inconsistency rather than a physical value.
-DEFAULT_GRIPPER_STATE_TO_COMMAND = 2.0
-
-# joint_states names for the gripper, in preference order (the Stretch gripper's
-# ToolMetadata.tool_joints).
-GRIPPER_STATE_NAMES = ('gripper_finger_left_joint', 'gripper_finger_right_joint')
+GRIPPER_LIMIT_PARAMS = (f"joint_limit.{GRIPPER_JOINT}.lower", f"joint_limit.{GRIPPER_JOINT}.upper")
 
 # joint_vel carries a displacement rather than a velocity for these, so they are
 # forwarded as absolute positions. See forward_wrist.
@@ -98,20 +87,12 @@ class JointJogConverter(Node):
         self.declare_parameter("max_duration", 2.0)
         self.declare_parameter("position_topic", "joint_position_cmd")
         self.declare_parameter("joint_states_topic", "joint_states")
-        self.declare_parameter("gripper_legacy_scale", DEFAULT_GRIPPER_LEGACY_SCALE)
-        self.declare_parameter(
-            "gripper_state_to_command_scale", DEFAULT_GRIPPER_STATE_TO_COMMAND
-        )
         self.declare_parameter("warn_period", 30.0)
 
         self.input_topic = self._command_topic(self.get_parameter("input_topic").value)
         self.output_topic = self._command_topic(self.get_parameter("output_topic").value)
         self.position_topic = self._command_topic(self.get_parameter("position_topic").value)
         self.warn_period = self.get_parameter("warn_period").value
-        self.gripper_legacy_scale = self.get_parameter("gripper_legacy_scale").value
-        self.gripper_state_to_command = self.get_parameter(
-            "gripper_state_to_command_scale"
-        ).value
 
         # Deprecation warnings: loud on first use, throttled afterwards.
         self._warned = {}
@@ -130,12 +111,13 @@ class JointJogConverter(Node):
         self._rejected = {}
 
         # Track EOA joint states.
-        self._gripper_state = None
-        self._gripper_state_lock = threading.Lock()
         self._wrist_states = {}
         self._wrist_state_lock = threading.Lock()
 
-        self._setup_gripper_conversion()
+        # The driver's joint_limit.gripper_joint.lower/upper, once known.
+        self._gripper_limits = {}
+        self._gripper_limits_lock = threading.Lock()
+        self._get_param_client = None
 
         # Driver discovery: the same shim serves stretch_driver and
         # stretch_mujoco_driver, so the node name is found rather than assumed.
@@ -174,50 +156,16 @@ class JointJogConverter(Node):
 
         self.get_logger().warn(
             f"Deprecation shim active: forwarding {self.input_topic} "
-            f"(control_msgs/JointJog) to {self.output_topic}, and legacy gripper "
+            f"(control_msgs/JointJog) to {self.output_topic}, and wrist and gripper "
             f"commands to {self.position_topic} (both sensor_msgs/JointState). "
             f"Publishers should migrate to {self.output_topic}; this node will be "
             "removed in a future release."
         )
 
-    # --- legacy gripper reproduction -----------------------------------------
-
-    def _setup_gripper_conversion(self):
-        """Load the conversion needed to invert the driver's gripper position path.
-
-        set_joint_position turns a joint_position_cmd value into a gripper percentage
-        with stretch4_body's tool metadata. To land the gripper on the same percentage
-        the deprecated move_by would have reached, this node runs that conversion
-        backwards, so it needs the same metadata the driver uses.
-        """
-        self._gripper_metadata = None
-
-        if get_tool_metadata is None:
-            self.get_logger().warn(
-                "stretch4_body is unavailable, so legacy gripper commands on "
-                f"{self.input_topic} cannot be reproduced. Every other joint is "
-                "forwarded normally."
-            )
-            return
-
-        try:
-            self._gripper_metadata = get_tool_metadata("stretch_gripper")
-        except Exception as e:
-            self.get_logger().warn(
-                f"Could not load the gripper conversion ({e}); legacy gripper "
-                f"commands on {self.input_topic} will not be reproduced."
-            )
-
-    def _command_rad_to_pct(self, command_rad):
-        """joint_position_cmd value -> gripper percentage, as set_joint_position does."""
-        return self._gripper_metadata.urdf_to_command(command_rad / 2.0)
-
-    def _pct_to_command_rad(self, pct):
-        """Gripper percentage -> joint_position_cmd value (the inverse of the above)."""
-        return 2.0 * self._gripper_metadata.command_to_urdf(pct)
+    # --- end of arm joints (moved by a bounded displacement) -----------------
 
     def joint_states_callback(self, msg: JointState):
-        for joint in WRIST_JOINTS:
+        for joint in (*WRIST_JOINTS, GRIPPER_JOINT):
             try:
                 index = msg.name.index(joint)
             except ValueError:
@@ -226,25 +174,17 @@ class JointJogConverter(Node):
                 with self._wrist_state_lock:
                     self._wrist_states[joint] = msg.position[index]
 
-        for name in GRIPPER_STATE_NAMES:
-            try:
-                index = msg.name.index(name)
-            except ValueError:
-                continue
-            if index < len(msg.position):
-                with self._gripper_state_lock:
-                    self._gripper_state = msg.position[index]
-            return
-
     def forward_wrist(self, joint, velocity, duration, original_name):
         """Reproduce move_by(joint, v * duration) as an absolute position command.
 
         `velocity` is the raw JointJog value and `duration` the message's (clamped)
-        duration in seconds; their product is the displacement in radians. Publishes a
-        target rather than a velocity and arms no watchdog, because move_by moved a
-        bounded amount and stopped. A zero command holds the current position, standing
-        in for the quick_stop the deprecated callback issued. Joint limits are left to
-        the driver, which enforces joint_limit.<joint>.upper/lower on this topic.
+        duration in seconds; their product is the displacement (in radians, or the
+        gripper's URDF units). Publishes a target rather than a velocity and arms no
+        watchdog, because move_by moved a bounded amount and stopped. A zero command
+        holds the current position, standing in for the quick_stop the deprecated
+        callback issued. The wrists' joint limits are left to the driver, which
+        enforces joint_limit.<joint>.upper/lower on this topic; the gripper's target is
+        bounded by them instead, as move_by stopped at the end of its range.
         """
         if not self.request_joint_mode(joint, "position", original_name):
             with self._pending_lock:
@@ -267,60 +207,49 @@ class JointJogConverter(Node):
             )
             return
 
+        target = current + velocity * duration
+        if joint == GRIPPER_JOINT:
+            target = self._bound_gripper_target(target)
+
         command = JointState()
         command.header.stamp = self.get_clock().now().to_msg()
         command.name = [joint]
-        command.position = [float(current + velocity * duration)]
+        command.position = [float(target)]
         self.pos_pub.publish(command)
 
-    def forward_gripper(self, velocity, original_name):
-        """Reproduce move_by(stretch_gripper, 300 * v) as an absolute position command.
+    def _bound_gripper_target(self, target):
+        """Bound a gripper target by the driver's joint limits, if known yet."""
+        with self._gripper_limits_lock:
+            lower = self._gripper_limits.get(GRIPPER_LIMIT_PARAMS[0])
+            upper = self._gripper_limits.get(GRIPPER_LIMIT_PARAMS[1])
+        if lower is None or upper is None:
+            self._request_gripper_limits()
+            return target
+        return min(max(target, lower), upper)
 
-        The deprecated path moved a bounded percentage and stopped, so this publishes a
-        target rather than a velocity and arms no watchdog. A zero command stands in for
-        the quick_stop the old callback issued: it holds the current position.
-        """
-        if self._gripper_metadata is None:
-            self.log_throttled(
-                "gripper_unavailable",
-                f"{self.input_topic}: dropping the command for '{original_name}' "
-                "because the gripper conversion could not be loaded.",
-                level="error",
-            )
+    def _request_gripper_limits(self):
+        """Ask the driver for its gripper joint limits (answered asynchronously)."""
+        with self._discovery_lock:
+            client = self._get_param_client
+        if client is None or not client.service_is_ready():
             return
+        request = GetParameters.Request(names=list(GRIPPER_LIMIT_PARAMS))
+        client.call_async(request).add_done_callback(self._gripper_limits_response)
 
-        with self._gripper_state_lock:
-            state = self._gripper_state
-
-        if not self.request_joint_mode("gripper_joint", "position", original_name):
-            with self._pending_lock:
-                self._pending["gripper_joint"] = (
-                    lambda v=velocity, o=original_name: self.forward_gripper(v, o)
-                )
+    def _gripper_limits_response(self, future):
+        try:
+            values = future.result().values
+        except Exception as e:
+            self.get_logger().warn(f"Could not read the driver's gripper limits: {e}")
             return
+        for name, value in zip(GRIPPER_LIMIT_PARAMS, values):
+            self._store_gripper_limit(name, value)
 
-        if state is None:
-            self.log_throttled(
-                "gripper_no_state",
-                f"{self.input_topic}: dropping the command for '{original_name}' "
-                "because no gripper position has been seen on joint_states yet. The "
-                "old callback moved by a delta, so an absolute target needs one.",
-                level="error",
-            )
+    def _store_gripper_limit(self, name, value):
+        if value.type != ParameterType.PARAMETER_DOUBLE:
             return
-
-        current_pct = self._command_rad_to_pct(state * self.gripper_state_to_command)
-        target_pct = current_pct + self.gripper_legacy_scale * velocity
-        # StretchGripper.move_to would drive past the mechanism's range; the driver's
-        # own joint limits are in finger units, so bound the percentage here instead.
-        pct_closed, pct_open = self._gripper_metadata.command_range
-        target_pct = min(max(target_pct, pct_closed), pct_open)
-
-        command = JointState()
-        command.header.stamp = self.get_clock().now().to_msg()
-        command.name = ["gripper_joint"]
-        command.position = [float(self._pct_to_command_rad(target_pct))]
-        self.pos_pub.publish(command)
+        with self._gripper_limits_lock:
+            self._gripper_limits[name] = value.double_value
 
     # --- deprecation warnings -------------------------------------------------
 
@@ -404,10 +333,14 @@ class JointJogConverter(Node):
         )
         if self._param_client is not None:
             self.destroy_client(self._param_client)
+            self.destroy_client(self._get_param_client)
         self._driver_node = name
         self._driver_namespace = namespace
         self._driver_fqn = fqn
         self._param_client = self.create_client(SetParameters, service)
+        self._get_param_client = self.create_client(GetParameters, f"{prefix}/{name}/get_parameters")
+        with self._gripper_limits_lock:
+            self._gripper_limits.clear()
         # A restarted driver has forgotten whatever modes we set previously, and any
         # request that was in flight died with it.
         with self._mode_lock:
@@ -514,6 +447,9 @@ class JointJogConverter(Node):
             return
 
         for parameter in list(msg.changed_parameters) + list(msg.new_parameters):
+            if parameter.name in GRIPPER_LIMIT_PARAMS:
+                self._store_gripper_limit(parameter.name, parameter.value)
+                continue
             if not parameter.name.startswith("joint_mode."):
                 continue
             if parameter.value.type != ParameterType.PARAMETER_STRING:
@@ -582,13 +518,8 @@ class JointJogConverter(Node):
             joint = self.resolve_joint_name(name)
             velocity = float(msg.velocities[i])
 
-            if joint == "gripper_joint":
-                # Not a velocity on the wire; reproduced as a bounded position move.
-                self.forward_gripper(velocity, name)
-                continue
-
-            if joint in WRIST_JOINTS:
-                # Also a displacement rather than a velocity; see forward_wrist.
+            if joint in WRIST_JOINTS or joint == GRIPPER_JOINT:
+                # A displacement rather than a velocity; see forward_wrist.
                 self.forward_wrist(joint, velocity, duration, name)
                 continue
 

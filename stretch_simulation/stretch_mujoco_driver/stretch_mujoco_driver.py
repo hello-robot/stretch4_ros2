@@ -10,10 +10,11 @@ import threading
 
 from sensor_msgs.msg._compressed_image import CompressedImage
 from stretch4_mujoco import Stretch4MujocoSimulator
+from stretch4_mujoco import config as sim_config
 from stretch4_mujoco.enums.actuators import Actuators
 from stretch4_mujoco.enums.stretch_sensors import StretchSensors
 from stretch4_mujoco.enums.stretch_cameras import CameraSettings, StretchCameras
-from stretch4_mujoco.utils import get_absolute_path_stretch_xml, models_path
+from stretch4_mujoco.utils import get_absolute_path_stretch_xml, map_between_ranges, models_path
 from stretch4_mujoco.pointcloud_utils import depth_to_points
 
 from rclpy.qos import QoSProfile, ReliabilityPolicy
@@ -72,9 +73,11 @@ from builtin_interfaces.msg import Time as TimeMsg
 from rclpy import time as rclpyTime
 
 from hello_helpers.stretch4_ros_api import Stretch4ROSDriver
+from stretch_mujoco_driver.sim_tools import DEFAULT_SIM_TOOL, SIM_TOOLS, resolve_sim_tool  # noqa: F401 (DEFAULT_SIM_TOOL is re-exported)
 
-
-DEFAULT_SIM_TOOL = "eoa_wrist_dw4_tool_sg4"
+# stretch4_body's ToolMetadata takes this fraction of a tool's URDF range as its
+# position tolerance; mirrored for tool_info.position_tolerance.
+TOOL_POSITION_TOLERANCE_FRACTION = 0.02
 
 
 class StretchMujocoDriver(Stretch4ROSDriver):
@@ -162,6 +165,7 @@ class StretchMujocoDriver(Stretch4ROSDriver):
             cameras_to_use=(
                 StretchCameras.all_stretch4() if use_cameras else StretchCameras.none()
             ),
+            tool_name=self.tool_name,
         )
 
         self.robot_stop_lock = threading.Lock()
@@ -174,24 +178,10 @@ class StretchMujocoDriver(Stretch4ROSDriver):
 
         limits = self.sim.pull_joint_limits()
 
-        # hacky workaround for mismatched representations in sim vs real
-        if "gripper_joint" in self.command_joints and Actuators["gripper"] not in limits:
-            if Actuators["gripper_right_finger"] in limits and Actuators["gripper_left_finger"] in limits:
-                 (rll, rul) = limits[Actuators["gripper_right_finger"]]
-                 (lll, lul) = limits[Actuators["gripper_left_finger"]]
-                 limits[Actuators["gripper"]] = (np.float64(rll+lll), np.float64(rul+lul))
-            
         for joint in self.command_joints:
-            if joint == "gripper_joint": #stretch gripper has its fingers modeled separately in sim
-                if Actuators["gripper_right_finger"] in limits and Actuators["gripper_left_finger"] in limits:
-                    (rll, rul) = limits[Actuators["gripper_right_finger"]]
-                    (lll, lul) = limits[Actuators["gripper_left_finger"]]
-                    (ll,ul) = (np.float64(rll+lll), np.float64(rul+lul))
-                else:
-                    (ll,ul)=(None,None)
-            elif joint == "parallel_gripper_joint": #parallel gripper not actually implemented in sim:
-                self.logger.warning("Parallel gripper not available in simulation")
-                (ll,ul)=(None,None)
+            if joint == self.TOOL_JOINT:
+                # one finger's URDF range
+                (ll, ul) = sorted(self._finger_range)
             else:
                 (ll,ul) = limits[Actuators[self.backend_joint_name(joint)]]
             if ll is not None and ul is not None:
@@ -284,6 +274,40 @@ class StretchMujocoDriver(Stretch4ROSDriver):
         self.declare_parameter("action_server_rate", rclpy.Parameter.Type.DOUBLE)
         self.declare_parameter("timeout", rclpy.Parameter.Type.DOUBLE)
         self.declare_parameter("default_goal_timeout_s", rclpy.Parameter.Type.DOUBLE)
+        self.declare_parameter("tool", "sg4", ParameterDescriptor(
+            type=ParameterType.PARAMETER_STRING, read_only=True,
+            description="Tool to simulate: 'sg4' (Stretch gripper), 'pg4' (parallel gripper), or a full stretch4_urdf tool name",
+        ))
+        # get_tool_info (called next by Stretch4ROSDriver) needs the tool.
+        self._setup_tool()
+
+    def _setup_tool(self):
+        """Resolve the `tool` parameter, and how the simulated gripper's fingers relate
+        to the aperture angle its actuator is commanded in."""
+        self.tool_name = resolve_sim_tool(self.get_parameter("tool").value)
+        self.tool = SIM_TOOLS[self.tool_name]
+        self.sim_settings = (sim_config.robot_settings_se4_pg4
+                             if self.tool_name == Stretch4MujocoSimulator.PARALLEL_GRIPPER_TOOL_NAME
+                             else sim_config.robot_settings_se4)
+        conversion = self.sim_settings["gripper_conversion"]
+
+        def chord_angle(chord_m):
+            return 2 * math.asin(chord_m / (2 * conversion["finger_length_m"]))
+
+        # The gripper actuator takes the aperture angle, and each finger follows it
+        # linearly (MujocoServer.aperture_angle_radians_to_urdf_angle_radians). Rebuilt
+        # here since stretch4_mujoco doesn't expose it; both ranges are (closed, open).
+        self._aperture_range = (chord_angle(conversion["aperture_closed_m"]),
+                                chord_angle(conversion["aperture_open_m"]))
+        self._finger_range = (conversion["urdf_closed_rad"], conversion["urdf_open_rad"])
+        # d(finger)/d(aperture); negative for the parallel gripper, whose fingers open
+        # towards negative positions.
+        self._finger_per_aperture = ((self._finger_range[1] - self._finger_range[0])
+                                     / (self._aperture_range[1] - self._aperture_range[0]))
+        self.logger.info(f"tool = {self.tool_name}")
+
+    def _finger_to_aperture(self, finger):
+        return map_between_ranges(finger, self._finger_range, self._aperture_range)
 
 
          
@@ -312,6 +336,51 @@ class StretchMujocoDriver(Stretch4ROSDriver):
 
     def startup_robot(self):
         pass
+
+    def backend_joint_name(self, name):
+        if name == self.TOOL_JOINT:
+            return self.tool["backend"]
+        return super().backend_joint_name(name)
+
+    def get_tool_info(self):
+        closed, opened = self._finger_range
+        if self.tool["backend"] == "parallel_gripper":
+            # prismatic fingers: the aperture is twice one finger's travel
+            aperture_range = (2 * abs(closed), 2 * abs(opened))
+        else:
+            conversion = self.sim_settings["gripper_conversion"]
+            aperture_range = (conversion["aperture_closed_m"], conversion["aperture_open_m"])
+        return {
+            "name": self.tool_name,
+            "is_actuated": True,
+            "tool_joints": list(self.tool["tool_joints"]),
+            "urdf_range": self._finger_range,
+            "aperture_range": aperture_range,
+            "position_tolerance": TOOL_POSITION_TOLERANCE_FRACTION * abs(opened - closed),
+        }
+
+    def default_joint_velocity(self):
+        return self._joint_velocities("default")
+
+    def max_joint_velocity(self):
+        velocities = self._joint_velocities("max")
+        velocities.pop("omnibase.linear")
+        velocities.pop("omnibase.angular")
+        return velocities
+
+    def _joint_velocities(self, profile):
+        """Each command joint's and the base's speed in the sim's motion `profile`."""
+        velocities = {}
+        for joint in self.command_joints:
+            # the gripper_joint is one finger, whose actuator has its own (URDF-unit) limits
+            actuator = "gripper_left_finger" if joint == self.TOOL_JOINT else self.backend_joint_name(joint)
+            limits = sim_config.get_actuator_motion_limits(actuator, profile, self.sim_settings)
+            if limits is not None:
+                velocities[joint] = limits[0]
+        (linear, _), (angular, _) = sim_config.get_base_motion_limits(profile, self.sim_settings)
+        velocities["omnibase.linear"] = linear
+        velocities["omnibase.angular"] = angular
+        return velocities
     
     def robocasa_setup(self):
 
@@ -384,11 +453,20 @@ class StretchMujocoDriver(Stretch4ROSDriver):
         self.logger.info(f"goal: {goal}")
         return goal
         
-    def set_base_velocity(self, x, y, theta):
+    def set_base_velocity(self, x, y, theta, stiffness=1.0):
+        if stiffness != 1.0:
+            self.logger.info("Base stiffness (cmd_vel_stiff) is not simulated; the base is driven at full stiffness.", once=True)
         self.sim.base.set_velocity(x, y, theta)
 
     def set_joint_position(self, joint, target, v=None, a=None):
         self.logger.debug(f"Driver setting joint {joint} to position {target}. current position is {self.cmd_joint_position(joint)}.")
+        if v is None:
+            v = self.get_parameter_or(f"joint_velocity.{joint}", None).value
+        if joint == self.TOOL_JOINT:
+            # one finger's URDF position -> the aperture the gripper actuator takes
+            target = self._finger_to_aperture(target)
+            v = None if v is None else abs(v / self._finger_per_aperture)
+            a = None if a is None else abs(a / self._finger_per_aperture)
         joint = self.backend_joint_name(joint)
         subsys = None
          
@@ -407,12 +485,14 @@ class StretchMujocoDriver(Stretch4ROSDriver):
             self.logger.error(f"Joint {joint} not found.  Do you have the name correct? Available joints to command are {self.command_joints}.  If joint is in this list, check that the interface to the Mujoco simulator hasn't changed.")
             return
 
-        # The sim accepts v/a for API parity with the real driver; it does not currently apply them.
+        # The sim limits v and a to the joint's maximums.
         subsys.move_to(target, v_m=v, a_m=a)
 
     def set_joint_velocity(self, joint, target, a=None):
         self.logger.debug(f"Driver setting joint {joint} to velocity {target}")
-        
+        if joint == self.TOOL_JOINT:
+            target = target / self._finger_per_aperture
+            a = None if a is None else abs(a / self._finger_per_aperture)
         joint = self.backend_joint_name(joint)
         subsys = None
         
@@ -584,20 +664,6 @@ class StretchMujocoDriver(Stretch4ROSDriver):
         
         return response
 
-    def home_the_robot_callback(self, request, response):
-        self.logger.info("Received home_the_robot service call.")
-        success, message = self.home_the_robot()
-        response.success = success
-        response.message = message
-        return response
-
-    def stow_the_robot_callback(self, request, response):
-        self.logger.info("Received stow_the_robot service call.")
-        success, message = self.stow_the_robot()
-        response.success = success
-        response.message = message
-        return response
-
     def runstop_service_callback(self, request, response):
         self.logger.info("Received runstop_the_robot service call.")
         self.runstop_the_robot(request.data)
@@ -605,35 +671,35 @@ class StretchMujocoDriver(Stretch4ROSDriver):
         response.message = f"is_runstopped: {request.data}"
         return response
 
-    def home_the_robot(self):
-        mode = self.robot_mode()
-        can_home = mode in self.control_modes
-        last_robot_mode = copy.copy(mode)
-        
-        if not can_home:
-            errmsg = f"Cannot home while in mode={last_robot_mode}."
-            self.logger.error(errmsg)
-            return False, errmsg
-
-        self.change_mode(self.homing_mode)
+    # sim.home()/stow() wait for the motion but discard whether it finished; asking
+    # again returns at once if it did.
+    def home_robot(self):
         self.sim.home()
-        self.change_mode(last_robot_mode)
-        return True, "Homed."
+        if self.sim.wait_command():
+            return True, "Homed."
+        return False, "Homing did not complete."
 
-    def stow_the_robot(self):
-        mode = self.robot_mode()
-        
-        can_stow = mode in self.control_modes
-        last_robot_mode = copy.copy(mode)
-
-        if not can_stow:
-            errmsg = f"Cannot stow while in mode={last_robot_mode}."
-            self.logger.error(errmsg)
-            return False, errmsg
-        self.change_mode(self.stowing_mode)
+    def stow_robot(self):
         self.sim.stow()
-        self.change_mode(last_robot_mode)
-        return True, "Stowed."
+        if self.sim.wait_command():
+            return True, "Stowed."
+        return False, "Stowing did not complete."
+
+    def seat_robot(self):
+        seat_into_dock = getattr(self.sim, "seat_into_dock", None)
+        if seat_into_dock is None:
+            return False, "seat_into_dock is not supported in simulation"
+        succeeded = bool(seat_into_dock())
+        return (True, "Seated into dock.") if succeeded else (False, "Seating into dock failed.")
+
+    def freewheel_base(self):
+        enable_freewheel_mode = getattr(self.sim.base, "enable_freewheel_mode", None)
+        if enable_freewheel_mode is not None:
+            enable_freewheel_mode()
+            return True, "Freewheeled the robot."
+        self.set_base_velocity(0.0, 0.0, 0.0)
+        self.logger.warn("Freewheeling is not simulated; stopping the base instead.", once=True)
+        return True, "Freewheeling is not simulated; stopped the base instead."
 
     def is_runstopped(self):
         return self.robot_mode() == self.runstopped_mode
@@ -745,14 +811,18 @@ class StretchMujocoDriver(Stretch4ROSDriver):
 
     def update_child_parameter(self, parameter:Parameter) -> bool:
         match parameter.name:
-            case _:
-                pass
+            case "sensitivity":
+                self.logger.info(f"sensitivity = {parameter.value} (guarded-contact sensitivity is not simulated)")
             
     def check_child_param(self, parameter: Parameter) -> tuple[bool, str]:
         reason = None
         found = False
         
         match parameter.name:
+            case "sensitivity":
+                found = True
+                if not isinstance(parameter.value, str):
+                    reason = "sensitivity must be a mode name (string)."
             case "gamepad.dt":
                 found = True
                 if parameter.value <= 0.0:
@@ -796,60 +866,6 @@ class StretchMujocoDriver(Stretch4ROSDriver):
         self.logger.debug(robot_status.sim_to_real_time_ratio_msg)
         return robot_status
 
-    def command_joint_pose_from_joint_state(self, command_joint, joint_state, default=None):
-
-        match command_joint:
-            case "arm_joint":
-                poses = []
-                # /joint_states splits the telescoping arm into its four links.
-                subjoints = [f"arm_l{i}_joint" for i in [1,2,3,4]]
-                for j in subjoints:
-                    try:
-                        poses.append(joint_state.position[joint_state.name.index(j)])
-                    except ValueError:
-                        pass
-                return sum(poses) if poses else default
-            case "gripper_joint":
-                try:
-                    left = joint_state.position[joint_state.name.index("gripper_finger_left_joint")]
-                    right = joint_state.position[joint_state.name.index("gripper_finger_right_joint")]
-                    return left + right
-                except ValueError:
-                    return default
-            case _:
-                try:
-                    return joint_state.position[joint_state.name.index(command_joint)]
-                except (ValueError, IndexError):
-                    return default
-            
-
-                
-    def command_joint_vel_from_joint_state(self, command_joint, joint_state, default=None):
-        match command_joint:
-            case "arm_joint":
-                vels = []
-                # /joint_states splits the telescoping arm into its four links.
-                subjoints = [f"arm_l{i}_joint" for i in [1,2,3,4]]
-                for j in subjoints:
-                    try:
-                        vels.append(joint_state.velocity[joint_state.name.index(j)])
-                    except (ValueError, IndexError):
-                        pass
-                return sum(vels) if vels else default
-            case "gripper_joint":
-                try:
-                    left = joint_state.velocity[joint_state.name.index("gripper_finger_left_joint")]
-                    right = joint_state.velocity[joint_state.name.index("gripper_finger_right_joint")]
-                    return left + right
-                except (ValueError, IndexError):
-                    return default
-            case _:
-                try:
-                    return joint_state.velocity[joint_state.name.index(command_joint)]
-                except (ValueError, IndexError):
-                    return default
-
-                
     def get_odom(self, robot_status, status_time) -> Odometry:
         # obtain odometry
         # assign relevant base status to variables
@@ -889,12 +905,12 @@ class StretchMujocoDriver(Stretch4ROSDriver):
 
                                   
     def get_tool(self, robot_status, status_time) -> String:
-        return DEFAULT_SIM_TOOL
+        return self.tool_name
 
                                    
     def get_sensitivity(self, robot_status, status_time) -> String:
-        #TODO: return a real value for this (original driver doesn't do anything)
-        return "simulation"
+        # accepted and reported like the real driver's, but not simulated
+        return self.get_parameter("sensitivity").value
               
     def get_runstop(self, robot_status, status_time) -> Bool:
         runstop_status = self.is_runstopped()
@@ -921,7 +937,7 @@ class StretchMujocoDriver(Stretch4ROSDriver):
         joint_state.velocity.append(robot_status.lift.vel)
         joint_state.effort.append(robot_status.lift.effort)
 
-        for link in ['arm_l4_joint', 'arm_l3_joint', 'arm_l2_joint', 'arm_l1_joint']:
+        for link in self.SPLIT_JOINTS["arm_joint"]:
             joint_state.name.append(link)
             joint_state.position.append(robot_status.arm.pos/4)
             joint_state.velocity.append(robot_status.arm.vel/4)
@@ -942,15 +958,15 @@ class StretchMujocoDriver(Stretch4ROSDriver):
         joint_state.velocity.append(robot_status.wrist_roll.vel)
         joint_state.effort.append(robot_status.wrist_roll.effort)
         
-        # for link in ['gripper_finger_left_joint', 'gripper_finger_right_joint']:
-        joint_state.name.append("gripper_finger_left_joint")
-        joint_state.position.append(robot_status.gripper_left_finger.pos)
-        joint_state.velocity.append(robot_status.gripper_left_finger.vel)
-        joint_state.effort.append(robot_status.gripper_left_finger.effort)
-        joint_state.name.append("gripper_finger_right_joint")
-        joint_state.position.append(robot_status.gripper_right_finger.pos)
-        joint_state.velocity.append(robot_status.gripper_right_finger.vel)
-        joint_state.effort.append(robot_status.gripper_right_finger.effort)
+        # The tool's fingers, then gripper_joint: the primary (left) finger again.
+        left_joint, right_joint = self.tool["tool_joints"]
+        for name, finger in ((left_joint, robot_status.gripper_left_finger),
+                             (right_joint, robot_status.gripper_right_finger),
+                             (self.TOOL_JOINT, robot_status.gripper_left_finger)):
+            joint_state.name.append(name)
+            joint_state.position.append(finger.pos)
+            joint_state.velocity.append(finger.vel)
+            joint_state.effort.append(finger.effort)
         for w in ['wheel_0_joint', 'wheel_1_joint', 'wheel_2_joint']:
             joint_state.name.append(w)
             joint_state.position.append(0.0)
