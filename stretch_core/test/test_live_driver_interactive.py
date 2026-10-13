@@ -1166,10 +1166,16 @@ class StretchLiveDriverTester(Node):
             return radius * omega * math.cos(theta + phase)
 
         def leg_max_speed(radius, phase, theta_end, n_samples=20):
-            # Sample the speed across the leg (theta_end - d_theta -> theta_end); for point 0 this
-            # is the leg wrapping around from the end of the circle, the same speed as any other leg.
+            # Sample the speed across the leg (theta_end - d_theta -> theta_end).
             thetas = [theta_end - d_theta * k / n_samples for k in range(n_samples + 1)]
             return max(abs(velocity(radius, phase, t)) for t in thetas)
+
+        # Point 0's leg is the approach from the home posture (each circle's center) onto
+        # the circle, up to a radius away, so give it the circle's top speed. The leg
+        # wrapping around from the end of the circle can be nearly stationary for joints
+        # starting at the top of their sine (e.g. the arm), which would crawl there.
+        def first_leg_speed(radius):
+            return radius * omega
 
         for i in range(num_points + 1):
             point = JointTrajectoryPoint()
@@ -1183,7 +1189,8 @@ class StretchLiveDriverTester(Node):
             for center, radius, phase in joint_circles:
                 positions.append(float(center + radius * math.sin(theta + phase)))
                 if leg_max_velocities:
-                    velocities.append(float(leg_max_speed(radius, phase, theta)))
+                    speed = first_leg_speed(radius) if i == 0 else leg_max_speed(radius, phase, theta)
+                    velocities.append(float(speed))
                 else:
                     velocities.append(float(velocity(radius, phase, theta)))
 
