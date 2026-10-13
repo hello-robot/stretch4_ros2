@@ -1204,7 +1204,11 @@ class Stretch4ROSDriver(Node, ABC):
                     # Runstopped during the routine: clearing the runstop returns to the
                     # mode from before the routine, not to the routine's.
                     self.prerunstop_mode = last_mode
-        (self.logger.info if success else self.logger.warn)(f"{action}: {message}")
+        # One call site per severity: rclpy raises if a call site changes severity.
+        if success:
+            self.logger.info(f"{action}: {message}")
+        else:
+            self.logger.warn(f"{action}: {message}")
         return success, message
 
     @abstractmethod

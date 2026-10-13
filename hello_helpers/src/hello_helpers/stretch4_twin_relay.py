@@ -290,7 +290,11 @@ class TwinRelay(Node):
         message = f"Mirrored trajectory on {mirror.fqn} {outcome}"
         if result.error_string:
             message += f": {result.error_string}"
-        (self.get_logger().info if response.status == GoalStatus.STATUS_SUCCEEDED else self.get_logger().warn)(message)
+        # One call site per severity: rclpy raises if a call site changes severity.
+        if response.status == GoalStatus.STATUS_SUCCEEDED:
+            self.get_logger().info(message)
+        else:
+            self.get_logger().warn(message)
 
     def on_primary_status(self, msg):
         for status in msg.status_list:
@@ -347,8 +351,11 @@ class TwinRelay(Node):
         response = future.result()
         if response is None or not response.success:
             message = response.message if response is not None else "no response"
-            log = self.get_logger().info if name in UNSUPPORTED_ON_MIRROR_OK else self.get_logger().warn
-            log(f"{name} on {mirror.fqn} failed: {message}")
+            # One call site per severity: rclpy raises if a call site changes severity.
+            if name in UNSUPPORTED_ON_MIRROR_OK:
+                self.get_logger().info(f"{name} on {mirror.fqn} failed: {message}")
+            else:
+                self.get_logger().warn(f"{name} on {mirror.fqn} failed: {message}")
 
     # --- parameters -------------------------------------------------------------------
 
