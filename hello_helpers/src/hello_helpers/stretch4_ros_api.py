@@ -21,7 +21,8 @@ from rclpy.duration import Duration
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
 from rclpy.node import Node
 from rclpy.parameter import Parameter
-from rclpy.qos import QoSProfile, QoSDurabilityPolicy
+from rclpy.qos import QoSProfile, QoSDurabilityPolicy, qos_profile_system_default
+from rclpy.service_introspection import ServiceIntrospectionState
 from rclpy.publisher import Publisher
 from rclpy.exceptions import ParameterNotDeclaredException
 
@@ -112,6 +113,11 @@ class Stretch4ROSDriver(Node, ABC):
 
     def __init__(self,name):
         super().__init__(name)
+
+        # Outputs (topics, frames) follow the node's namespace; frame ids get this prefix.
+        ns = self.get_namespace().strip('/')
+        self.prefix = ns + '/' if ns else ''
+
         self.startup_robot()
         
         self.node_name = self.get_name()
@@ -144,11 +150,9 @@ class Stretch4ROSDriver(Node, ABC):
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
         
-        # Namespace
-        ns = self.get_namespace().strip('/')
-        self.prefix = ns + '/' if ns else ''
-        if ns:
+        if self.prefix:
             self.logger.info(f"namespace = {self.prefix}")
+        self.logger.info(f"command namespace = {self._command_namespace() or '(same as node)'}")
 
         # Get param values
         mode=self.get_parameter('mode').value
@@ -206,6 +210,13 @@ class Stretch4ROSDriver(Node, ABC):
         self.declare_parameter("mode", self.default_mode.value)
         self.declare_parameter('sensitivity','default')
         self.declare_parameter('broadcast_odom_tf', False) # based on wheel odometry
+        self.declare_parameter('command_namespace', '', ParameterDescriptor(
+            type=ParameterType.PARAMETER_STRING,
+            description="Namespace of the command topics (cmd_vel, joint_position_cmd, "
+                        "joint_velocity_cmd, joy): '' = the node's namespace, '/' = root, "
+                        "'foo' = /foo. Lets several drivers share commands (e.g. a digital "
+                        "twin) while their outputs stay in their own namespaces.",
+        ))
 
 
         desc = ParameterDescriptor(
@@ -317,13 +328,34 @@ class Stretch4ROSDriver(Node, ABC):
 
     def _setup_common_subs(self):
         # Subscribers
-        self.create_subscription(Twist, "cmd_vel", self.base_twist_callback, 1, callback_group=self.main_group)
+        # Command topics follow command_namespace; services and the action stay in the
+        # node's namespace, since a service or action name can have only one server.
+        self.create_subscription(Twist, self._command_topic("cmd_vel"), self.base_twist_callback, 1, callback_group=self.main_group)
         
-        self.create_subscription(JointState, "joint_velocity_cmd", self.velocity_cmd_callback, 1, callback_group=self.main_group)
+        self.create_subscription(JointState, self._command_topic("joint_velocity_cmd"), self.velocity_cmd_callback, 1, callback_group=self.main_group)
         
-        self.create_subscription(JointState, "joint_position_cmd", self.position_cmd_callback, 1, callback_group=self.main_group)
+        self.create_subscription(JointState, self._command_topic("joint_position_cmd"), self.position_cmd_callback, 1, callback_group=self.main_group)
         
-        self.create_subscription(Joy, "joy", self.joy_callback, 1, callback_group=self.main_group)
+        self.create_subscription(Joy, self._command_topic("joy"), self.joy_callback, 1, callback_group=self.main_group)
+
+    def _command_namespace(self):
+        """command_namespace as an absolute namespace ('/' or '/foo'), or '' for the node's own."""
+        ns = self.get_parameter('command_namespace').value.strip()
+        if not ns:
+            return ''
+        return '/' + ns.strip('/')
+
+    def _command_topic(self, name):
+        """Name of command topic `name` in the command namespace (relative if unset)."""
+        ns = self._command_namespace()
+        if not ns:
+            return name
+        return f"{ns.rstrip('/')}/{name}"
+
+    def frame_id(self, name):
+        """TF frame `name` for this robot, prefixed with its namespace (matching the
+        frame_prefix given to robot_state_publisher)."""
+        return self.prefix + name
 
     def _setup_common_srvs(self):
         # Services
@@ -350,7 +382,14 @@ class Stretch4ROSDriver(Node, ABC):
             'runstop_the_robot',
             self.runstop_service_callback,
             callback_group=self.main_group
-        )    
+        )
+
+        # Publish each call on <service>/_service_event, so another node (e.g. the digital
+        # twin relay) can follow this robot's service calls without being their server.
+        for service in (self.stop_the_robot_service, self.home_the_robot_service,
+                        self.stow_the_robot_service, self.runstop_service):
+            service.configure_introspection(self.get_clock(), qos_profile_system_default,
+                                            ServiceIntrospectionState.CONTENTS)
 
     def _setup_common_actions(self):
         self.trajectory_server = StretchTrajectoryActionServer(self)
@@ -607,7 +646,7 @@ class Stretch4ROSDriver(Node, ABC):
             case n if "trajectory_server." in n:
                 found = True
             # --- Read-Only/Static Parameters ---
-            case "control_loop_rate" | "broadcast_odom_tf" | "sensitivity":
+            case "control_loop_rate" | "broadcast_odom_tf" | "sensitivity" | "command_namespace":
                 found = True
                 reason = f"Parameter '{parameter.name}' is read-only after startup."
             case n if n in [f"joint_acceleration.{joint}" for joint in self.command_joints] or \
@@ -1064,27 +1103,40 @@ class StretchTrajectoryActionServer:
             'follow_joint_trajectory',
             execute_callback=self.execute_callback,
             goal_callback=self.goal_callback,
+            handle_accepted_callback=self.handle_accepted_callback,
             cancel_callback=self.cancel_callback,
             callback_group=self.driver.main_group
         )
 
         qos_profile = 10
+
+        # Each accepted goal (with its id), so another node (e.g. the digital twin relay)
+        # can follow this robot's trajectories; actions have no introspection in Jazzy.
+        self.pub_accepted_goals = self.driver.create_publisher(
+            FollowJointTrajectory.Impl.SendGoalService.Request,
+            "follow_joint_trajectory/accepted_goals", qos_profile
+        )
         
         self.pub_actual_state = self.driver.create_publisher(
-            JointState, "/trajectory_server_diagnostics/actual", qos_profile
+            JointState, "trajectory_server_diagnostics/actual", qos_profile
         )
 
         # Publisher for desired joint state diagnostics
         self.pub_desired_state = self.driver.create_publisher(
-            JointState, "/trajectory_server_diagnostics/desired", qos_profile
+            JointState, "trajectory_server_diagnostics/desired", qos_profile
         )
 
         self.pub_commands = self.driver.create_publisher(
-            JointState, "/trajectory_server_diagnostics/commands", qos_profile
+            JointState, "trajectory_server_diagnostics/commands", qos_profile
         )
 
         
         self.driver.get_logger().info('FollowJointTrajectory Action Server has been initialized.')
+
+    def handle_accepted_callback(self, goal_handle):
+        self.pub_accepted_goals.publish(FollowJointTrajectory.Impl.SendGoalService.Request(
+            goal_id=goal_handle.goal_id, goal=goal_handle.request))
+        goal_handle.execute()
 
     def declare_params(self):
         def add_param(name,value):

@@ -10,6 +10,7 @@
 
   <!-- CORE DEPENDENCIES: Needed for building, exporting, and running the package. -->
   <!-- For this Python package, these are the ROS 2 modules directly imported in the code. -->
+  <depend>action_msgs</depend>
   <depend>control_msgs</depend>
   <depend>diagnostic_msgs</depend>
   <depend>geometry_msgs</depend>
@@ -20,6 +21,7 @@
   <depend>rclpy</depend>
   <depend>ros2_numpy</depend>
   <depend>sensor_msgs</depend>
+  <depend>service_msgs</depend>
   <depend>std_msgs</depend>
   <depend>std_srvs</depend>
   <depend>tf2_ros</depend>

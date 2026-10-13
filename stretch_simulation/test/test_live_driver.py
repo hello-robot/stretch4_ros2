@@ -84,7 +84,7 @@ class StretchLiveDriverTester(Node):
 
         # Setup subscribers to verify outgoing telemetry
         self.js_sub = self.create_subscription(JointState, '/joint_states', self.joint_state_cb, 10)
-        self.odom_sub = self.create_subscription(Odometry, '/odom', self.odom_cb, 10)
+        self.odom_sub = self.create_subscription(Odometry, '/wheel_odom', self.odom_cb, 10)
 
     def joint_state_cb(self, msg):
         self.latest_joint_state = msg

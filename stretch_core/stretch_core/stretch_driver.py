@@ -96,7 +96,7 @@ class StretchDriver(Stretch4ROSDriver):
         
         for joint in self.command_joints:
             self.command_publishers[joint] = self.create_publisher(
-                JointState, f"/joint_command_diagnostics/{joint}/command", qos_profile
+                JointState, f"joint_command_diagnostics/{joint}/command", qos_profile
         )
 
         #pprint.pprint(self.robot.robot_params)
@@ -308,8 +308,8 @@ class StretchDriver(Stretch4ROSDriver):
         
         odom = Odometry()
         odom.header.stamp = status_time
-        odom.header.frame_id = self.prefix + 'wheel_odom'
-        odom.child_frame_id = self.prefix + 'base_footprint'
+        odom.header.frame_id = self.frame_id('wheel_odom')
+        odom.child_frame_id = self.frame_id('base_footprint')
         odom.pose.pose.position.x = x
         odom.pose.pose.position.y = y
         odom.pose.pose.orientation.x = q[0]

@@ -82,6 +82,13 @@ def generate_launch_description():
     )
     ld.add_action(declare_driver_namespace_arg)
 
+    declare_command_namespace_arg = DeclareLaunchArgument(
+        'command_namespace',
+        default_value='',
+        description="Namespace of the command topics: '' = same as driver_namespace, '/' = root"
+    )
+    ld.add_action(declare_command_namespace_arg)
+
     declare_uncalibrated_urdf_arg = DeclareLaunchArgument(
         'uncalibrated_urdf',
         default_value='False', choices=['True', 'False', 'true', 'false'],
@@ -147,7 +154,8 @@ def generate_launch_description():
                               output='screen',
                               parameters=[{'broadcast_odom_tf': LaunchConfiguration('broadcast_odom_tf')},
                                           {'mode': mode},
-                                          {'action_timeout': LaunchConfiguration('action_timeout')}],
+                                          {'action_timeout': LaunchConfiguration('action_timeout')},
+                                          {'command_namespace': LaunchConfiguration('command_namespace')}],
                               ros_arguments=['--log-level', ['stretch_driver:=', LaunchConfiguration('log_level')]],
         )
         return [stretch_driver]
@@ -170,6 +178,7 @@ def generate_launch_description():
             namespace=ns,
             emulate_tty=True,
             output="screen",
+            parameters=[{"command_namespace": LaunchConfiguration("command_namespace")}],
         )
         return [joint_jog_converter]
 

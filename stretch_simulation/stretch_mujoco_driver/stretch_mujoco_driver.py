@@ -107,7 +107,7 @@ class StretchMujocoDriver(Stretch4ROSDriver):
 
         # Setup sim-only publishers
         self.clock_pub = self.create_publisher(
-            msg_type=Clock, topic="/clock", qos_profile=5
+            msg_type=Clock, topic="clock", qos_profile=5
         )
 
         self.imu_mobile_base_pub = self.create_publisher(Imu, "imu_mobile_base", 1)
@@ -120,9 +120,9 @@ class StretchMujocoDriver(Stretch4ROSDriver):
             Joy, "stretch_gamepad_state", 1
         )  # decode using gamepad_conversion.unpack_joy_to_gamepad_state() on client side
 
-        self.base_frame_id = "base_footprint"
+        self.base_frame_id = self.frame_id("base_footprint")
         self.logger.info(f"base_frame_id = {self.base_frame_id}")
-        self.odom_frame_id = "odom"
+        self.odom_frame_id = self.frame_id("wheel_odom")
         self.logger.info(f"odom_frame_id = {self.odom_frame_id}")
 
         #self.joint_limits_pub = self.create_publisher(JointState, "joint_limits", 1) #needed?
@@ -207,18 +207,18 @@ class StretchMujocoDriver(Stretch4ROSDriver):
     def setup_cam_pubs(self):
         self.laser_scan_pub = self.create_publisher(
             LaserScan,
-            "/scan_filtered",
+            "scan_filtered",
             qos_profile=QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT),
         )
 
         self.lidar_left_pub = self.create_publisher(
             PointCloud2,
-            "/lidar_points_left",
+            "lidar_points_left",
             qos_profile=QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT),
         )
         self.lidar_right_pub = self.create_publisher(
             PointCloud2,
-            "/lidar_points_right",
+            "lidar_points_right",
             qos_profile=QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT),
         )
 
@@ -472,7 +472,7 @@ class StretchMujocoDriver(Stretch4ROSDriver):
 
         i = Imu()
         i.header.stamp = current_time
-        i.header.frame_id = "imu_mobile_base"
+        i.header.frame_id = self.frame_id("imu_mobile_base")
         i.angular_velocity.x = gx
         i.angular_velocity.y = gy
         i.angular_velocity.z = gz
@@ -489,7 +489,7 @@ class StretchMujocoDriver(Stretch4ROSDriver):
 
         m = MagneticField()
         m.header.stamp = current_time
-        m.header.frame_id = "imu_mobile_base"
+        m.header.frame_id = self.frame_id("imu_mobile_base")
         self.magnetometer_mobile_base_pub.publish(m)
 
         # accel_status = robot_status.wacc
@@ -500,7 +500,7 @@ class StretchMujocoDriver(Stretch4ROSDriver):
 
         i = Imu()
         i.header.stamp = current_time
-        i.header.frame_id = "accel_wrist"
+        i.header.frame_id = self.frame_id("accel_wrist")
         i.linear_acceleration.x = ax
         i.linear_acceleration.y = ay
         i.linear_acceleration.z = az
@@ -664,7 +664,7 @@ class StretchMujocoDriver(Stretch4ROSDriver):
 
             self.laser_scan_pub.publish(
                 create_laser_scan_msg(
-                    lidar_data, timestamp=current_time, frame_id="laser"
+                    lidar_data, timestamp=current_time, frame_id=self.frame_id("laser")
                 )
             )
         except ValueError:
@@ -680,7 +680,7 @@ class StretchMujocoDriver(Stretch4ROSDriver):
                 
             
             header = Header()
-            header.frame_id = get_camera_frame(camera)
+            header.frame_id = self.frame_id(get_camera_frame(camera))
             header.stamp = current_time
 
             ros_image = numpy_to_image(
@@ -728,14 +728,14 @@ class StretchMujocoDriver(Stretch4ROSDriver):
             
             if left_pts is not None and len(left_pts) > 0:
                 header = Header()
-                header.frame_id = "base_footprint"
+                header.frame_id = self.frame_id("base_footprint")
                 header.stamp = current_time
                 cloud_msg_left = pc2.create_cloud_xyz32(header, left_pts)
                 self.lidar_left_pub.publish(cloud_msg_left)
 
             if right_pts is not None and len(right_pts) > 0:
                 header = Header()
-                header.frame_id = "base_footprint"
+                header.frame_id = self.frame_id("base_footprint")
                 header.stamp = current_time
                 cloud_msg_right = pc2.create_cloud_xyz32(header, right_pts)
                 self.lidar_right_pub.publish(cloud_msg_right)
@@ -1286,19 +1286,19 @@ def get_camera_topic_name(camera: StretchCameras):
     Topic names to match the camera topics published by the real Stretch robot.
     """
     if camera == StretchCameras.cam_gripper_se4_left_rgb:
-        return "/gripper_camera/left/image_raw"
+        return "gripper_camera/left/image_raw"
     if camera == StretchCameras.cam_gripper_se4_right_rgb:
-        return "/gripper_camera/right/image_raw"
+        return "gripper_camera/right/image_raw"
     if camera == StretchCameras.cam_gripper_se4_stereo_depth:
-        return "/gripper_camera/depth/image_rect_raw"
+        return "gripper_camera/depth/image_rect_raw"
     if camera == StretchCameras.cam_nav_rgb_se4_left:
-        return "/cameras_head/left/image_raw"
+        return "cameras_head/left/image_raw"
     if camera == StretchCameras.cam_nav_rgb_se4_right:
-        return "/cameras_head/right/image_raw"
+        return "cameras_head/right/image_raw"
     if camera == StretchCameras.cam_nav_rgb_se4_center:
-        return "/camera_head/center/image_raw"
+        return "camera_head/center/image_raw"
     if camera == StretchCameras.cam_nav_rgb_se4_center_low_rez:
-        return "/camera_head/center/low_res"
+        return "camera_head/center/low_res"
     raise NotImplementedError(f"Camera {camera} image topic mapping is not implemented")
 
 
@@ -1308,19 +1308,19 @@ def get_camera_info_topic_name(camera: StretchCameras):
     Topic names to match the camera_info topics published by the real Stretch robot.
     """
     if camera == StretchCameras.cam_gripper_se4_left_rgb:
-        return "/gripper_camera/left/camera_info"
+        return "gripper_camera/left/camera_info"
     if camera == StretchCameras.cam_gripper_se4_right_rgb:
-        return "/gripper_camera/right/camera_info"
+        return "gripper_camera/right/camera_info"
     if camera == StretchCameras.cam_gripper_se4_stereo_depth:
-        return "/gripper_camera/depth/camera_info"
+        return "gripper_camera/depth/camera_info"
     if camera == StretchCameras.cam_nav_rgb_se4_left:
-        return "/cameras_head/left/camera_info"
+        return "cameras_head/left/camera_info"
     if camera == StretchCameras.cam_nav_rgb_se4_right:
-        return "/cameras_head/right/camera_info"
+        return "cameras_head/right/camera_info"
     if camera == StretchCameras.cam_nav_rgb_se4_center:
-        return "/camera_head/center/camera_info"
+        return "camera_head/center/camera_info"
     if camera == StretchCameras.cam_nav_rgb_se4_center_low_rez:
-        return "/camera_head/center/low_res/camera_info"
+        return "camera_head/center/low_res/camera_info"
 
     raise NotImplementedError(f"Camera {camera} camera_info topic mapping is not implemented")
 
@@ -1331,7 +1331,7 @@ def get_camera_pointcloud_topic_name(camera: StretchCameras):
     Topic names to match the pointcloud2 topics published by the real Stretch robot.
     """
     if camera == StretchCameras.cam_gripper_se4_stereo_depth:
-        return "/gripper_camera/depth/color/points"
+        return "gripper_camera/depth/color/points"
     raise NotImplementedError(f"Camera {camera} pointcloud topic mapping is not implemented")
 
 

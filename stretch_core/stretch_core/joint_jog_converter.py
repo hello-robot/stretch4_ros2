@@ -86,8 +86,12 @@ class JointJogConverter(Node):
 
         self.declare_parameter("input_topic", "joint_vel")
         self.declare_parameter("output_topic", "joint_velocity_cmd")
-        # Empty means "find the driver on the graph"; set it to skip the search.
+        # Empty means "find the driver in this node's namespace"; set it to a node name
+        # (in this namespace) or a fully qualified name ('/sim/stretch_mujoco_driver').
         self.declare_parameter("driver_node", "")
+        # Namespace of the command topics, as for the driver's command_namespace:
+        # '' = this node's namespace, '/' = root, 'foo' = /foo.
+        self.declare_parameter("command_namespace", "")
         self.declare_parameter("discovery_period", 1.0)
         self.declare_parameter("watchdog_rate", 50.0)
         self.declare_parameter("default_duration", 0.5)
@@ -100,9 +104,9 @@ class JointJogConverter(Node):
         )
         self.declare_parameter("warn_period", 30.0)
 
-        self.input_topic = self.get_parameter("input_topic").value
-        self.output_topic = self.get_parameter("output_topic").value
-        self.position_topic = self.get_parameter("position_topic").value
+        self.input_topic = self._command_topic(self.get_parameter("input_topic").value)
+        self.output_topic = self._command_topic(self.get_parameter("output_topic").value)
+        self.position_topic = self._command_topic(self.get_parameter("position_topic").value)
         self.warn_period = self.get_parameter("warn_period").value
         self.gripper_legacy_scale = self.get_parameter("gripper_legacy_scale").value
         self.gripper_state_to_command = self.get_parameter(
@@ -341,21 +345,35 @@ class JointJogConverter(Node):
     def warn_deprecated(self, key, message):
         self.log_throttled(key, message)
 
+    def _command_topic(self, name):
+        """`name` in the command namespace (unchanged if it is unset or `name` is absolute)."""
+        ns = self.get_parameter("command_namespace").value.strip()
+        if not ns or name.startswith("/"):
+            return name
+        ns = ns.strip("/")
+        return f"/{ns}/{name}" if ns else f"/{name}"
+
     # --- driver discovery -----------------------------------------------------
 
     def discover_driver_node(self):
         """Locate the driver by the home_the_robot service it advertises.
 
-        Set the driver_node parameter to skip the graph search when the node name
-        is known (for example under a namespace with more than one driver).
+        Only a driver in this node's namespace is considered, unless driver_node is a
+        fully qualified name, so that with several robots on one graph each converter
+        controls its own driver.
         """
         with self._discovery_lock:
             configured = self.get_parameter("driver_node").value
+            own_namespace = self.get_namespace()
             try:
                 for name, namespace in self.get_node_names_and_namespaces():
-                    if name == self.get_name():
+                    if name == self.get_name() and namespace == own_namespace:
                         continue
-                    if configured and name != configured:
+                    fqn = f"{namespace.rstrip('/')}/{name}"
+                    if configured.startswith("/"):
+                        if fqn != configured:
+                            continue
+                    elif namespace != own_namespace or (configured and name != configured):
                         continue
                     try:
                         services = self.get_service_names_and_types_by_node(
