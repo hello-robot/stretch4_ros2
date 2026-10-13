@@ -7,7 +7,7 @@ follows the primary (real) driver depends on `follow`:
   and the stretch4_twin_relay makes it follow what command topics can't share:
   trajectory goals, stop/home/stow and runstop, and parameter changes. Clients keep
   talking to the primary driver and get its results.
-- joint_states: the sim runs in puppet mode, following the primary's joint states (and,
+- puppet: the sim runs in puppet mode, following the primary's joint states (and,
   with follow_base, its base velocity), whatever moved the primary.
 
 Start the primary driver (e.g. stretch_core stretch_driver.launch.py on the robot) with
@@ -30,7 +30,7 @@ def launch(context):
     primary_node = LaunchConfiguration("primary_node").perform(context)
     primary_ns = primary_node.rstrip("/").rsplit("/", 1)[0]
 
-    if follow == "joint_states":
+    if follow == "puppet":
         follow_args = {
             "mode": "puppet",
             "puppet_joint_states_topic": f"{primary_ns}/joint_states",
@@ -51,7 +51,7 @@ def launch(context):
             **{arg: LaunchConfiguration(arg) for arg in PASSTHROUGH_ARGS},
         }.items(),
     )
-    if follow == "joint_states":
+    if follow == "puppet":
         return [sim]
 
     relay = Node(
@@ -76,10 +76,10 @@ def generate_launch_description():
                               description="Namespace for the twin's outputs"),
         DeclareLaunchArgument("primary_node", default_value="/stretch_driver",
                               description="Fully qualified name of the driver the twin follows"),
-        DeclareLaunchArgument("follow", default_value="commands", choices=["commands", "joint_states"],
-                              description="Follow the primary's commands (with the relay) or its joint states (puppet mode)"),
+        DeclareLaunchArgument("follow", default_value="commands", choices=["commands", "puppet"],
+                              description="Follow the primary's commands (with the relay), or its joint states in puppet mode"),
         DeclareLaunchArgument("follow_base", default_value="true", choices=["true", "false"],
-                              description="With follow:=joint_states, also follow the primary's base velocity"),
+                              description="With follow:=puppet, also follow the primary's base velocity"),
         DeclareLaunchArgument("use_rviz", default_value="true", choices=["true", "false"]),
         DeclareLaunchArgument("use_mujoco_viewer", default_value="true", choices=["true", "false"]),
         DeclareLaunchArgument("use_cameras", default_value="false", choices=["true", "false"]),
