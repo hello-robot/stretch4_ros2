@@ -858,8 +858,8 @@ class StretchMujocoDriver(Stretch4ROSDriver):
         y = base_status.y
         theta = base_status.theta
         x_vel = base_status.x_vel
-        # y_vel = base_status.y_vel #TODO: implement y_vel in base_status
-        y_vel = 0.0
+        # stretch4_mujoco's server sets y_vel, though BaseStatus doesn't declare it
+        y_vel = getattr(base_status, "y_vel", 0.0)
         theta_vel = base_status.theta_vel
 
         q = quaternion_from_euler(0.0, 0.0, theta)
