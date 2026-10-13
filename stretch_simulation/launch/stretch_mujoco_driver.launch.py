@@ -38,6 +38,9 @@ stretch_driver_params = {
     "timeout": LaunchConfiguration("timeout"),
     "default_goal_timeout_s": LaunchConfiguration("default_goal_timeout_s"),
     "command_namespace": LaunchConfiguration("command_namespace"),
+    "puppet.joint_states_topic": LaunchConfiguration("puppet_joint_states_topic"),
+    "puppet.odom_topic": LaunchConfiguration("puppet_odom_topic"),
+    "puppet.follow_base": LaunchConfiguration("follow_base"),
 }
 
 
@@ -166,8 +169,20 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "mode",
             default_value="active",
-            choices=["active", "teleop"],
+            choices=["active", "teleop", "puppet"],
             description="The mode in which the ROS driver commands the robot",
+        ),
+        DeclareLaunchArgument(
+            "puppet_joint_states_topic", default_value="",
+            description="JointState topic the robot follows in puppet mode (e.g. another robot's /joint_states)",
+        ),
+        DeclareLaunchArgument(
+            "puppet_odom_topic", default_value="",
+            description="Odometry topic whose base velocity the robot follows in puppet mode when follow_base is set",
+        ),
+        DeclareLaunchArgument(
+            "follow_base", default_value="false", choices=["true", "false"],
+            description="In puppet mode, also follow the base velocity on puppet_odom_topic",
         ),
         DeclareLaunchArgument(
             "action_server_rate", default_value='30.0', description="Action server update rate",

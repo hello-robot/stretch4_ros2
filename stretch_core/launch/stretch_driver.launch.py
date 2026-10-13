@@ -15,7 +15,7 @@ DEPRECATED_DRIVER_MODES = {
     "velocity": "active",
 }
 
-CONTROL_MODES = ["active", "teleop"]
+CONTROL_MODES = ["active", "teleop", "puppet"]
 DEFAULT_MODE = "active"
 
 
@@ -89,6 +89,17 @@ def generate_launch_description():
     )
     ld.add_action(declare_command_namespace_arg)
 
+    # Puppet mode inputs
+    ld.add_action(DeclareLaunchArgument(
+        'puppet_joint_states_topic', default_value='',
+        description="JointState topic the robot follows in puppet mode (e.g. another robot's /joint_states)"))
+    ld.add_action(DeclareLaunchArgument(
+        'puppet_odom_topic', default_value='',
+        description='Odometry topic whose base velocity the robot follows in puppet mode when follow_base is set'))
+    ld.add_action(DeclareLaunchArgument(
+        'follow_base', default_value='False', choices=['True', 'False', 'true', 'false'],
+        description='In puppet mode, also follow the base velocity on puppet_odom_topic'))
+
     declare_uncalibrated_urdf_arg = DeclareLaunchArgument(
         'uncalibrated_urdf',
         default_value='False', choices=['True', 'False', 'true', 'false'],
@@ -155,7 +166,10 @@ def generate_launch_description():
                               parameters=[{'broadcast_odom_tf': LaunchConfiguration('broadcast_odom_tf')},
                                           {'mode': mode},
                                           {'action_timeout': LaunchConfiguration('action_timeout')},
-                                          {'command_namespace': LaunchConfiguration('command_namespace')}],
+                                          {'command_namespace': LaunchConfiguration('command_namespace')},
+                                          {'puppet.joint_states_topic': LaunchConfiguration('puppet_joint_states_topic')},
+                                          {'puppet.odom_topic': LaunchConfiguration('puppet_odom_topic')},
+                                          {'puppet.follow_base': LaunchConfiguration('follow_base')}],
                               ros_arguments=['--log-level', ['stretch_driver:=', LaunchConfiguration('log_level')]],
         )
         return [stretch_driver]

@@ -12,6 +12,9 @@ watches what the primary does and repeats it on each mirror:
 - runstop: the primary's is_runstopped state (which also covers the physical button)
 - parameters (optional, mirror_parameters): whitelisted parameter changes, plus an
   initial sync whenever a mirror (re)appears
+- pose (match_on_connect): when a mirror comes online, or the primary comes back after a
+  gap, the mirror is put in puppet mode following the primary's joint states until its
+  joints settle, then returned to the mode it was in
 
 Command topics (cmd_vel, joint_*_cmd, joy) aren't relayed: a mirror whose
 command_namespace is the primary's hears them directly.
@@ -21,7 +24,7 @@ from fnmatch import fnmatch
 import rclpy
 from action_msgs.msg import GoalStatus, GoalStatusArray
 from control_msgs.action import FollowJointTrajectory
-from rcl_interfaces.msg import Parameter as ParameterMsg, ParameterEvent
+from rcl_interfaces.msg import Parameter as ParameterMsg, ParameterEvent, ParameterType, ParameterValue
 from rcl_interfaces.srv import GetParameters, ListParameters, SetParameters
 from rclpy.action import ActionClient
 from rclpy.callback_groups import ReentrantCallbackGroup
@@ -31,6 +34,7 @@ from rclpy.parameter import parameter_value_to_python
 from rclpy.qos import (QoSDurabilityPolicy, QoSProfile, qos_profile_action_status_default,
                        qos_profile_parameter_events, qos_profile_system_default)
 from service_msgs.msg import ServiceEventInfo
+from sensor_msgs.msg import JointState
 from std_msgs.msg import Bool
 from std_srvs.srv import SetBool, Trigger
 
@@ -42,6 +46,16 @@ USER_MODES = ("active", "teleop")
 
 # Primary goal states after which the mirror's copy should stop too.
 ENDED_STATES = (GoalStatus.STATUS_CANCELING, GoalStatus.STATUS_CANCELED, GoalStatus.STATUS_ABORTED)
+
+# A gap this long in the primary's joint states means it went away (e.g. a driver restart).
+PRIMARY_GAP_S = 2.0
+
+# Matching a mirror's pose ends once its joints have stayed this still for SETTLE_S
+# (rather than once they equal the primary's, which calibration differences such as the
+# sim gripper's scale can prevent), or after MATCH_TIMEOUT_S.
+SETTLE_SPEED = 0.01
+SETTLE_S = 1.0
+MATCH_TIMEOUT_S = 20.0
 
 
 def namespace_of(fqn):
@@ -63,11 +77,17 @@ class Mirror:
         self.runstop_client = relay.create_client(SetBool, f"{ns}/runstop_the_robot", callback_group=group)
         self.set_params_client = relay.create_client(SetParameters, f"{fqn}/set_parameters", callback_group=group)
         self.list_params_client = relay.create_client(ListParameters, f"{fqn}/list_parameters", callback_group=group)
+        self.get_params_client = relay.create_client(GetParameters, f"{fqn}/get_parameters", callback_group=group)
+        relay.create_subscription(JointState, f"{ns}/joint_states",
+                                  lambda msg: setattr(self, "joint_states", msg), 1, callback_group=group)
 
         self.online = False          # set_parameters service seen
         self.param_names = None      # parameters this mirror has (None until listed)
         self.synced = False          # initial parameter sync done
         self.runstop_sent = None     # last runstop state delivered
+        self.needs_match = False     # should move to the primary's pose once it can
+        self.joint_states = None     # latest joint states
+        self.matching = None         # while matching: {"restore_mode", "start", "still_since"}
         self.goals = {}              # primary goal id -> mirror ClientGoalHandle, or None while pending
         self.pending_cancels = set() # primary goal ids to cancel once the mirror accepts them
 
@@ -87,6 +107,7 @@ class TwinRelay(Node):
         # trajectory_server.timeout: a sim running slower than real time needs its own
         self.declare_parameter("mirror_parameter_exclude", ["trajectory_server.timeout"])
         self.declare_parameter("cancel_mirror_on_primary_success", False)
+        self.declare_parameter("match_on_connect", True)
 
         self.primary = self.get_parameter("primary_node").value
         primary_ns = namespace_of(self.primary)
@@ -94,11 +115,14 @@ class TwinRelay(Node):
         self.patterns = self.get_parameter("mirror_parameter_patterns").value
         self.exclude = self.get_parameter("mirror_parameter_exclude").value
         self.cancel_on_success = self.get_parameter("cancel_mirror_on_primary_success").value
+        self.match_on_connect = self.get_parameter("match_on_connect").value
         self.mirrors = [Mirror(self, fqn) for fqn in self.get_parameter("mirror_nodes").value]
 
         self.primary_status = {}  # goal id -> latest primary GoalStatus status
         self.primary_params = {}  # name -> latest primary value (python), for whitelisted params
         self.runstopped = None
+        self.primary_joint_states = None
+        self.primary_joint_states_time = None
 
         group = self.callback_group
         if self.get_parameter("mirror_trajectories").value:
@@ -125,6 +149,10 @@ class TwinRelay(Node):
             self.primary_get_client = self.create_client(GetParameters, f"{self.primary}/get_parameters",
                                                          callback_group=group)
 
+        if self.match_on_connect:
+            self.create_subscription(JointState, f"{primary_ns}/joint_states", self.on_primary_joint_states, 1,
+                                     callback_group=group)
+
         # Notices mirrors appearing (or restarting), and catches up runstop state.
         self.create_timer(1.0, self.check_mirrors, callback_group=group)
         self.get_logger().info(f"Relaying {self.primary} to {[m.fqn for m in self.mirrors]} "
@@ -138,6 +166,7 @@ class TwinRelay(Node):
             if online and not mirror.online:
                 mirror.synced = not self.mirror_parameters
                 mirror.runstop_sent = None
+                mirror.needs_match = self.match_on_connect
                 if self.mirror_parameters and not self.sync_parameters(mirror):
                     continue  # try again next time
                 self.get_logger().info(f"Mirror {mirror.fqn} is up")
@@ -148,6 +177,73 @@ class TwinRelay(Node):
             mirror.online = online
             if online and self.runstopped is not None and mirror.runstop_sent != self.runstopped:
                 self.send_runstop(mirror)
+            self.match_pose(mirror)
+
+    # --- pose -------------------------------------------------------------------------
+
+    def on_primary_joint_states(self, msg):
+        now = self.get_clock().now()
+        if (self.primary_joint_states_time is not None and
+                (now - self.primary_joint_states_time).nanoseconds * 1e-9 > PRIMARY_GAP_S):
+            self.get_logger().info(f"{self.primary} is back; matching mirrors to its pose")
+            for mirror in self.mirrors:
+                mirror.needs_match = True
+        self.primary_joint_states, self.primary_joint_states_time = msg, now
+        for mirror in self.mirrors:
+            self.match_pose(mirror)
+
+    def match_pose(self, mirror):
+        """Start, or check on, moving a mirror to the primary's current pose."""
+        if mirror.matching is not None:
+            self.check_match(mirror)
+            return
+        if not (mirror.needs_match and mirror.online and mirror.synced and self.primary_joint_states):
+            return
+        if not mirror.get_params_client.service_is_ready():
+            return
+        mirror.needs_match = False
+        mirror.matching = {"restore_mode": None, "start": self.get_clock().now(), "still_since": None}
+
+        def on_mode(future):
+            response = future.result()
+            restore_mode = (response.values[0].string_value if response is not None and response.values else "") or "active"
+            mirror.matching["restore_mode"] = restore_mode
+            primary_joint_states = f"{namespace_of(self.primary)}/joint_states"
+            self.set_mirror_values(mirror, {"puppet.joint_states_topic": primary_joint_states, "mode": "puppet"})
+            self.get_logger().info(f"Moving {mirror.fqn} to {self.primary}'s pose (puppet mode following "
+                                   f"{primary_joint_states}, then back to {restore_mode})")
+
+        mirror.get_params_client.call_async(GetParameters.Request(names=["mode"])).add_done_callback(on_mode)
+
+    def check_match(self, mirror):
+        """End a pose match once the mirror's joints have settled (or it times out)."""
+        matching = mirror.matching
+        if matching["restore_mode"] is None:
+            return  # still starting
+        now = self.get_clock().now()
+        elapsed = (now - matching["start"]).nanoseconds * 1e-9
+        velocities = mirror.joint_states.velocity if mirror.joint_states is not None else []
+        if elapsed > SETTLE_S and velocities and all(abs(v) < SETTLE_SPEED for v in velocities):
+            matching["still_since"] = matching["still_since"] or now
+        else:
+            matching["still_since"] = None
+        settled = matching["still_since"] is not None and (now - matching["still_since"]).nanoseconds * 1e-9 >= SETTLE_S
+        if not settled and elapsed < MATCH_TIMEOUT_S:
+            return
+        if not settled:
+            self.get_logger().warn(f"{mirror.fqn} didn't settle at {self.primary}'s pose within {MATCH_TIMEOUT_S:.0f} s")
+        else:
+            self.get_logger().info(f"{mirror.fqn} matched {self.primary}'s pose in {elapsed:.1f} s")
+        mirror.matching = None
+        self.set_mirror_values(mirror, {"mode": matching["restore_mode"]})
+
+    def set_mirror_values(self, mirror, values):
+        """Set string parameters on a mirror, in order, in one request."""
+        request = SetParameters.Request(parameters=[
+            ParameterMsg(name=name, value=ParameterValue(type=ParameterType.PARAMETER_STRING, string_value=value))
+            for name, value in values.items()])
+        mirror.set_params_client.call_async(request).add_done_callback(
+            lambda f: self.log_param_result(mirror, ", ".join(values), f))
 
     # --- trajectories ---------------------------------------------------------------
 
@@ -287,8 +383,10 @@ class TwinRelay(Node):
         response = future.result()
         if response is None:
             self.get_logger().warn(f"Setting {name} on {mirror.fqn}: no response")
-        elif not response.results[0].successful:
-            self.get_logger().warn(f"{mirror.fqn} rejected {name}: {response.results[0].reason}")
+            return
+        for result in response.results:
+            if not result.successful:
+                self.get_logger().warn(f"{mirror.fqn} rejected {name}: {result.reason}")
 
     def sync_parameters(self, mirror):
         """Start copying the primary's current whitelisted values to a mirror that just

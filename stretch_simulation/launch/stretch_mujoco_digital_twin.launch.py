@@ -1,10 +1,14 @@
 """Runs the MuJoCo sim as a digital twin of a running Stretch driver.
 
-The sim's outputs (topics, TF frames) go in their own namespace (twin_namespace), while
-it listens to the same root command topics as the primary (real) driver. The
-stretch4_twin_relay makes the sim follow what command topics can't share: trajectory
-goals, stop/home/stow and runstop, and parameter changes. Clients keep talking to the
-primary driver and get its results.
+The sim's outputs (topics, TF frames) go in their own namespace (twin_namespace). How it
+follows the primary (real) driver depends on `follow`:
+
+- commands (default): the sim listens to the same root command topics as the primary,
+  and the stretch4_twin_relay makes it follow what command topics can't share:
+  trajectory goals, stop/home/stow and runstop, and parameter changes. Clients keep
+  talking to the primary driver and get its results.
+- joint_states: the sim runs in puppet mode, following the primary's joint states (and,
+  with follow_base, its base velocity), whatever moved the primary.
 
 Start the primary driver (e.g. stretch_core stretch_driver.launch.py on the robot) with
 no namespace, then this launch on the desktop.
@@ -22,18 +26,33 @@ PASSTHROUGH_ARGS = ["use_rviz", "use_mujoco_viewer", "use_cameras", "use_robocas
 
 def launch(context):
     twin_ns = LaunchConfiguration("twin_namespace").perform(context).strip("/")
+    follow = LaunchConfiguration("follow").perform(context)
+    primary_node = LaunchConfiguration("primary_node").perform(context)
+    primary_ns = primary_node.rstrip("/").rsplit("/", 1)[0]
+
+    if follow == "joint_states":
+        follow_args = {
+            "mode": "puppet",
+            "puppet_joint_states_topic": f"{primary_ns}/joint_states",
+            "puppet_odom_topic": f"{primary_ns}/wheel_odom",
+            "follow_base": LaunchConfiguration("follow_base"),
+        }
+    else:
+        follow_args = {"command_namespace": "/"}
 
     sim = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             str(get_package_share_path("stretch_simulation") / "launch" / "stretch_mujoco_driver.launch.py")),
         launch_arguments={
             "driver_namespace": twin_ns,
-            "command_namespace": "/",
-            # the primary's joint_jog_converter already turns joint_vel into root commands
+            # the primary's joint_jog_converter already handles joint_vel commands
             "deprecated_interfaces": "false",
+            **follow_args,
             **{arg: LaunchConfiguration(arg) for arg in PASSTHROUGH_ARGS},
         }.items(),
     )
+    if follow == "joint_states":
+        return [sim]
 
     relay = Node(
         package="hello_helpers",
@@ -57,6 +76,10 @@ def generate_launch_description():
                               description="Namespace for the twin's outputs"),
         DeclareLaunchArgument("primary_node", default_value="/stretch_driver",
                               description="Fully qualified name of the driver the twin follows"),
+        DeclareLaunchArgument("follow", default_value="commands", choices=["commands", "joint_states"],
+                              description="Follow the primary's commands (with the relay) or its joint states (puppet mode)"),
+        DeclareLaunchArgument("follow_base", default_value="true", choices=["true", "false"],
+                              description="With follow:=joint_states, also follow the primary's base velocity"),
         DeclareLaunchArgument("use_rviz", default_value="true", choices=["true", "false"]),
         DeclareLaunchArgument("use_mujoco_viewer", default_value="true", choices=["true", "false"]),
         DeclareLaunchArgument("use_cameras", default_value="false", choices=["true", "false"]),

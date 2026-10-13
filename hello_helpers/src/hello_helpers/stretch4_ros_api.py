@@ -57,6 +57,7 @@ class JointMode(str, Enum):
 class DriverMode(str, Enum):
     ACTIVE = "active"
     TELEOP = "teleop"
+    PUPPET = "puppet"
     HOMING = "homing"
     STOWING = "stowing"
     RUNSTOPPED = "runstopped"
@@ -76,11 +77,12 @@ class Stretch4ROSDriver(Node, ABC):
     driver_modes = [mode.value for mode in DriverMode]
     active_mode = DriverMode.ACTIVE
     teleop_mode = DriverMode.TELEOP
+    puppet_mode = DriverMode.PUPPET
     homing_mode = DriverMode.HOMING
     stowing_mode = DriverMode.STOWING
     runstopped_mode = DriverMode.RUNSTOPPED
 
-    control_modes = [DriverMode.ACTIVE.value, DriverMode.TELEOP.value]
+    control_modes = [DriverMode.ACTIVE.value, DriverMode.TELEOP.value, DriverMode.PUPPET.value]
     priority_modes = [DriverMode.HOMING.value, DriverMode.STOWING.value, DriverMode.RUNSTOPPED.value]
     default_mode = DriverMode.ACTIVE
 
@@ -164,6 +166,7 @@ class Stretch4ROSDriver(Node, ABC):
             mode = self.get_parameter("mode").value
             
         self.logger.info('mode = ' + str(mode))
+        self._previous_mode = mode
         
         sensitivity = self.get_parameter('sensitivity').value
         self.logger.info('sensitivity = ' + str(sensitivity))
@@ -273,6 +276,21 @@ class Stretch4ROSDriver(Node, ABC):
             type=ParameterType.PARAMETER_DOUBLE,
             description='Velocity threshold (rad/s or m/s) below which a joint is considered settled',
         ))
+        # Puppet mode: follow another robot's (or any) joint states, and optionally its base
+        self.declare_parameter("puppet.joint_states_topic", "", ParameterDescriptor(
+            type=ParameterType.PARAMETER_STRING,
+            description="sensor_msgs/JointState topic (in /joint_states form) whose positions, or velocities "
+                        "for joints in velocity mode, this robot follows in puppet mode",
+        ))
+        self.declare_parameter("puppet.odom_topic", "", ParameterDescriptor(
+            type=ParameterType.PARAMETER_STRING,
+            description="nav_msgs/Odometry topic whose base velocity this robot follows in puppet mode when puppet.follow_base is set",
+        ))
+        self.declare_parameter("puppet.follow_base", False, ParameterDescriptor(
+            type=ParameterType.PARAMETER_BOOL,
+            description="In puppet mode, drive the base at the velocity reported on puppet.odom_topic",
+        ))
+
         # Gamepad parameters
         self.declare_parameter("gamepad.dt", 0.5)
         for joint in self.command_joints:
@@ -337,6 +355,12 @@ class Stretch4ROSDriver(Node, ABC):
         self.create_subscription(JointState, self._command_topic("joint_position_cmd"), self.position_cmd_callback, 1, callback_group=self.main_group)
         
         self.create_subscription(Joy, self._command_topic("joy"), self.joy_callback, 1, callback_group=self.main_group)
+
+        # Puppet mode inputs; (re)created when their topic parameters change.
+        self.puppet_subscriptions = {}
+        self._subscribe_puppet_topic("puppet.joint_states_topic")
+        self._subscribe_puppet_topic("puppet.odom_topic")
+        self.create_timer(3.0, self.check_puppet_topics, callback_group=self.main_group)
 
     def _command_namespace(self):
         """command_namespace as an absolute namespace ('/' or '/foo'), or '' for the node's own."""
@@ -497,7 +521,14 @@ class Stretch4ROSDriver(Node, ABC):
                 if parameter.value in self.DEPRECATED_CONTROL_MODES:
                     self.replace_deprecated_mode(parameter.value)
                     return
+                if (self._previous_mode == self.puppet_mode and parameter.value != self.puppet_mode
+                        and self.get_parameter("puppet.follow_base").value):
+                    # stop following the puppet's base
+                    self.set_base_velocity(0.0, 0.0, 0.0)
+                self._previous_mode = parameter.value
                 self.handle_mode_change(parameter.value)
+            case "puppet.joint_states_topic" | "puppet.odom_topic":
+                self._subscribe_puppet_topic(parameter.name, parameter.value)
             case "velocity_timeout":
                 velocity_timeout = parameter.value
                 self.logger.info(f"Changed to velocity timeout = {velocity_timeout} s")
@@ -608,6 +639,14 @@ class Stretch4ROSDriver(Node, ABC):
                 found=True
                 if parameter.value < 0.0:
                     reason="Timeout cannot be less than 0.0."
+            case "puppet.joint_states_topic" | "puppet.odom_topic":
+                found = True
+                if not isinstance(parameter.value, str):
+                    reason = f"{parameter.name} must be a topic name (string)."
+            case "puppet.follow_base":
+                found = True
+                if not isinstance(parameter.value, bool):
+                    reason = "puppet.follow_base must be a boolean."
             case "velocity_timeout":
                 found = True
                 if parameter.value < 0.0:
@@ -823,6 +862,62 @@ class Stretch4ROSDriver(Node, ABC):
         if val is None:
             self.logger.warning(f"Last known state exists but unable to find velocity of command joint {command_joint_name}, returning None")
         return val
+
+    # --- puppet mode ---------------------------------------------------------------
+
+    def _subscribe_puppet_topic(self, param_name, topic=None):
+        """(Re)subscribe to the topic named by puppet parameter `param_name`."""
+        if topic is None:
+            topic = self.get_parameter(param_name).value
+        old = self.puppet_subscriptions.pop(param_name, None)
+        if old is not None:
+            self.destroy_subscription(old)
+        if not topic:
+            return
+        msg_type, callback = {
+            "puppet.joint_states_topic": (JointState, self.puppet_joint_states_callback),
+            "puppet.odom_topic": (Odometry, self.puppet_odom_callback),
+        }[param_name]
+        self.puppet_subscriptions[param_name] = self.create_subscription(
+            msg_type, topic, callback, 1, callback_group=self.main_group)
+
+    def puppet_joint_states_callback(self, joint_state: JointState):
+        """In puppet mode, move each command joint to match `joint_state`: its position for
+        joints in position mode, its velocity for joints in velocity mode."""
+        if self.robot_mode() != self.puppet_mode:
+            return
+        for joint in self.command_joints:
+            match self.get_parameter(f"joint_mode.{joint}").value:
+                case self.position_mode:
+                    target = self.command_joint_pose_from_joint_state(joint, joint_state, default=None)
+                    if target is not None:
+                        self.check_and_set_pos(joint, target)
+                case self.velocity_mode:
+                    target = self.command_joint_vel_from_joint_state(joint, joint_state, default=None)
+                    if target is not None:
+                        self.check_and_set_vel(joint, target)
+
+    def puppet_odom_callback(self, odom: Odometry):
+        """In puppet mode with puppet.follow_base, drive the base at the odometry's velocity."""
+        if self.robot_mode() != self.puppet_mode or not self.get_parameter("puppet.follow_base").value:
+            return
+        twist = odom.twist.twist
+        self.set_base_velocity(twist.linear.x, twist.linear.y, twist.angular.z)
+
+    def check_puppet_topics(self):
+        """In puppet mode, warn (every 3 s, from the timer) about inputs that aren't set or
+        aren't being published yet."""
+        if self.robot_mode() != self.puppet_mode:
+            return
+        inputs = ["puppet.joint_states_topic"]
+        if self.get_parameter("puppet.follow_base").value:
+            inputs.append("puppet.odom_topic")
+        for param_name in inputs:
+            topic = self.get_parameter(param_name).value
+            if not topic:
+                self.logger.warn(f"In puppet mode but {param_name} is not set; nothing to follow.")
+            elif self.count_publishers(self.puppet_subscriptions[param_name].topic_name) == 0:
+                self.logger.warn(f"In puppet mode; waiting for {topic} ({param_name}) to be published.")
 
     def joy_callback(self, joy_msg: Joy):
         self.logger.debug(f"Got joy message. Buttons: {joy_msg.buttons} Axes: {joy_msg.axes} (this message is throttled to appear at most every 2s)", throttle_duration_sec = 2.0)
