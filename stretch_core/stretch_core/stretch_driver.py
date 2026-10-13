@@ -34,7 +34,7 @@ from std_msgs.msg import Bool, String
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 from trajectory_msgs.msg import JointTrajectoryPoint
 
-from hello_helpers.stretch4_ros_api import Stretch4ROSDriver
+from hello_helpers.stretch4_ros_api import Stretch4ROSDriver, spin_until_shutdown
 
 
 import tf2_ros
@@ -683,21 +683,18 @@ class StretchDriver(Stretch4ROSDriver):
     
 
 def main():
+    rclpy.init()
+    node = None
+    executor = MultiThreadedExecutor(num_threads=5)
     try:
-        rclpy.init()
         node = StretchDriver()
-        executor = rclpy.executors.MultiThreadedExecutor(num_threads=5)
         executor.add_node(node)
-        try:
-            executor.spin()
-        finally:
-            executor.shutdown()
-            node.destroy_node()
-    except KeyboardInterrupt:
-        print("Detecting KeyboardInterrupt")
+        spin_until_shutdown(executor)
     finally:
-        if rclpy.ok():
-            rclpy.shutdown()
+        executor.shutdown()
+        if node is not None:
+            node.destroy_node()
+        rclpy.try_shutdown()
 
 
 if __name__ == "__main__":

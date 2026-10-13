@@ -25,6 +25,7 @@ from rclpy.qos import QoSProfile, QoSDurabilityPolicy, qos_profile_system_defaul
 from rclpy.service_introspection import ServiceIntrospectionState
 from rclpy.publisher import Publisher
 from rclpy.exceptions import ParameterNotDeclaredException
+from rclpy.executors import ExternalShutdownException
 
 from std_srvs.srv import Trigger, SetBool
 
@@ -43,6 +44,23 @@ from hello_helpers.joy_conversion import (
     unpack_gamepad_state_to_joy,
     get_default_joy_msg,
 )
+
+
+def spin_until_shutdown(executor):
+    """Spin `executor` until ROS shuts down (e.g. on SIGINT/SIGTERM), then return.
+
+    Shutdown surfaces as KeyboardInterrupt, ExternalShutdownException, or, if it lands
+    while a MultiThreadedExecutor is building its wait set, an RCLError about the
+    invalid context; all of these return normally, so a node exits cleanly. Anything
+    raised while ROS is still up is a real error and propagates.
+    """
+    try:
+        executor.spin()
+    except (KeyboardInterrupt, ExternalShutdownException):
+        pass
+    except Exception:
+        if executor.context.ok():
+            raise
 
 
 class JointMode(str, Enum):

@@ -43,9 +43,12 @@ from rcl_interfaces.msg import (
 )
 from rcl_interfaces.srv import GetParameters, SetParameters
 from rclpy.duration import Duration
+from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import qos_profile_parameter_events
 from sensor_msgs.msg import JointState
+
+from hello_helpers.stretch4_ros_api import spin_until_shutdown
 
 GRIPPER_JOINT = "gripper_joint"
 
@@ -607,12 +610,14 @@ class JointJogConverter(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = JointJogConverter()
+    executor = SingleThreadedExecutor()
+    executor.add_node(node)
     try:
-        rclpy.spin(node)
-    except KeyboardInterrupt:
-        pass
-    node.destroy_node()
-    rclpy.shutdown()
+        spin_until_shutdown(executor)
+    finally:
+        executor.shutdown()
+        node.destroy_node()
+        rclpy.try_shutdown()
 
 
 if __name__ == "__main__":

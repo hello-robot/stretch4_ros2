@@ -38,6 +38,8 @@ from sensor_msgs.msg import JointState
 from std_msgs.msg import Bool
 from std_srvs.srv import SetBool, Trigger
 
+from hello_helpers.stretch4_ros_api import spin_until_shutdown
+
 MIRRORED_SERVICES = ("stop_the_robot", "home_the_robot", "stow_the_robot",
                      "freewheel_the_robot", "seat_into_dock")
 
@@ -437,13 +439,11 @@ def main():
     executor = MultiThreadedExecutor()
     executor.add_node(node)
     try:
-        executor.spin()
-    except KeyboardInterrupt:
-        pass
+        spin_until_shutdown(executor)
     finally:
+        executor.shutdown()
         node.destroy_node()
-        if rclpy.ok():
-            rclpy.shutdown()
+        rclpy.try_shutdown()
 
 
 if __name__ == "__main__":

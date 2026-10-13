@@ -3,6 +3,7 @@ import array
 import copy
 import sys
 import math
+import signal
 from functools import cache
 import cv2
 import numpy as np
@@ -25,6 +26,7 @@ from tf_transformations import quaternion_from_euler
 
 import rclpy
 from rclpy.duration import Duration
+from rclpy.executors import MultiThreadedExecutor
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
 from rclpy.node import Node
 from rclpy.parameter import Parameter
@@ -72,7 +74,7 @@ from builtin_interfaces.msg import Time as TimeMsg
 
 from rclpy import time as rclpyTime
 
-from hello_helpers.stretch4_ros_api import Stretch4ROSDriver
+from hello_helpers.stretch4_ros_api import Stretch4ROSDriver, spin_until_shutdown
 from stretch_mujoco_driver.sim_tools import DEFAULT_SIM_TOOL, SIM_TOOLS, resolve_sim_tool  # noqa: F401 (DEFAULT_SIM_TOOL is re-exported)
 
 # stretch4_body's ToolMetadata takes this fraction of a tool's URDF range as its
@@ -172,6 +174,11 @@ class StretchMujocoDriver(Stretch4ROSDriver):
 
         use_mujoco_viewer = self.get_parameter('use_mujoco_viewer').value
         self.sim.start(headless=not use_mujoco_viewer)
+        # sim.start() points SIGINT/SIGTERM at sim.stop(), replacing rclpy's handlers, so
+        # the executor would never stop and launch would have to SIGKILL the driver,
+        # orphaning MuJoCo's processes. Shut ROS down instead; main() then stops the sim.
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            signal.signal(sig, lambda signum, frame: rclpy.try_shutdown())
 
         if self.get_parameter("use_cameras").value:
             self.setup_cam_pubs()
@@ -1375,23 +1382,22 @@ def get_camera_frame(camera: StretchCameras):
 
                 
 def main():
+    rclpy.init()
+    node = None
+    executor = MultiThreadedExecutor(num_threads=5)
     try:
-        rclpy.init()
         node = StretchMujocoDriver()
-        executor = rclpy.executors.MultiThreadedExecutor(num_threads=5)
         executor.add_node(node)
-        try:
-            executor.spin()
-        finally:
-            print("Stopping Stretch Mujoco Driver")
-            node.sim.stop()
-            executor.shutdown()
-            node.destroy_node()
-    except KeyboardInterrupt:
-        print("Detecting KeyboardInterrupt")
+        spin_until_shutdown(executor)
     finally:
-        if rclpy.ok():
-            rclpy.shutdown()
+        print("Stopping Stretch Mujoco Driver")
+        # Stop the executor's threads first: sim.stop() waits for every other thread.
+        executor.shutdown()
+        if node is not None:
+            if getattr(node, "sim", None) is not None:
+                node.sim.stop()
+            node.destroy_node()
+        rclpy.try_shutdown()
 
 
 if __name__ == "__main__":
