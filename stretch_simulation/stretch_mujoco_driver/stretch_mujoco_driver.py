@@ -299,7 +299,8 @@ class StretchMujocoDriver(Stretch4ROSDriver):
         # here since stretch4_mujoco doesn't expose it; both ranges are (closed, open).
         self._aperture_range = (chord_angle(conversion["aperture_closed_m"]),
                                 chord_angle(conversion["aperture_open_m"]))
-        self._finger_range = (conversion["urdf_closed_rad"], conversion["urdf_open_rad"])
+        # float(): the config gives some of these as ints (e.g. urdf_closed_rad = 0)
+        self._finger_range = (float(conversion["urdf_closed_rad"]), float(conversion["urdf_open_rad"]))
         # d(finger)/d(aperture); negative for the parallel gripper, whose fingers open
         # towards negative positions.
         self._finger_per_aperture = ((self._finger_range[1] - self._finger_range[0])
