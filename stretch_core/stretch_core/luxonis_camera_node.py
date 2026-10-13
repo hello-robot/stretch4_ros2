@@ -37,7 +37,12 @@ from stretch4_body.subsystem.cameras.enums.rgb_camera import RGBCameras
 from stretch_python_bridge import compressed_format_with_sequence
 
 from stretch_core.vision.rectify import CameraRectifier
-from stretch_core.vision.ros_messages import DeviceClockOffset, create_timestamp
+from stretch_core.vision.ros_messages import (
+    COMPRESSED_DEPTH_FORMAT,
+    DeviceClockOffset,
+    compressed_depth_payload,
+    create_timestamp,
+)
 from stretch_core.vision.vision_topics import (
     VisionTopics,
     VisionFrames,
@@ -61,7 +66,9 @@ class LuxonisCameraNode(Node):
                 "topics. This is the fast path: nothing decodes or re-encodes, and a frame costs a "
                 "fraction of the bandwidth of raw BGR. The raw and rotated topics still work, but "
                 "they are only published while something is subscribed to them, because serving them "
-                "means decoding every frame."
+                "means decoding every frame. The gripper's depth map is the exception: it is published "
+                "on compressedDepth *instead of* image_raw, which does not exist at all while this is "
+                "true."
             )),
         )
         self.declare_parameter(
@@ -75,6 +82,17 @@ class LuxonisCameraNode(Node):
             )),
         )
 
+        self.declare_parameter(
+            'fps',
+            0,
+            ParameterDescriptor(description=(
+                "Frame rate to open the left and right head cameras at, overriding the rate they "
+                "are configured with in stretch4_body's CAMERA_CONFIGS. 0 keeps that rate. The two "
+                "are synced on-device into one stereo pair, so they share a rate; the center camera "
+                "is not in that sync group and always keeps its own."
+            )),
+        )
+
         # Get parameters
         self.use_left = self.get_parameter('use_left').value
         self.use_right = self.get_parameter('use_right').value
@@ -83,6 +101,7 @@ class LuxonisCameraNode(Node):
         self.camera_namespace = self.get_parameter('camera_namespace').value
         self.use_compressed = self.get_parameter('use_compressed').value
         self.use_system_timestamp = self.get_parameter('use_system_timestamp').value
+        self.fps = self.get_parameter('fps').value
 
         # The device clock is shared by every camera on the device, so one offset estimator
         # serves them all and sees more samples than a per-camera one would.
@@ -91,6 +110,9 @@ class LuxonisCameraNode(Node):
         # Publishers and camera info caches
         self.publishers_topics = {}
         self.compressed_publishers = {}
+        # Depth is not MJPEG, so it does not share the compressed publishers above. Only the gripper
+        # node has one, and only when it is publishing compressed.
+        self.compressed_depth_publisher = None
         self.rotated_publishers = {}
         self.rect_publishers = {}
         self.info_publishers = {}
@@ -138,9 +160,21 @@ class LuxonisCameraNode(Node):
             self.camera_types['right'] = RGBCameras.gripper_right
             self.camera_info['right'] = self.load_camera_info_from_enum(RGBCameras.gripper_right)
 
-            # Depth camera (named stereo)
-            self.publishers_topics['stereo'] = self.create_publisher(
-                Image, VisionTopics.gripper_image_raw('stereo'), self.sensor_qos)
+            # Depth camera (named stereo). Depth goes out on exactly one topic: PNG on compressedDepth
+            # when publishing compressed, raw 16UC1 otherwise. The color topics keep their raw
+            # decode-on-demand fallback, but depth has nothing to gain from one, since
+            # decode_compressed_depth() reconstructs the exact same 16-bit map on the consumer's side.
+            #
+            # Deliberately Best Effort, like every other topic here, even though image_transport
+            # advertises its compressedDepth topics RELIABLE. A subscriber that asks for RELIABLE will
+            # not match this publisher and will receive nothing, so consumers ported from a
+            # depthai-ros depth topic have to ask for Best Effort.
+            if self.use_compressed:
+                self.compressed_depth_publisher = self.create_publisher(
+                    CompressedImage, VisionTopics.gripper_compressed_depth('stereo'), self.sensor_qos)
+            else:
+                self.publishers_topics['stereo'] = self.create_publisher(
+                    Image, VisionTopics.gripper_image_raw('stereo'), self.sensor_qos)
             self.info_publishers['stereo'] = self.create_publisher(
                 CameraInfo, VisionTopics.gripper_camera_info('stereo'), self.sensor_qos)
             self.camera_info['stereo'] = self.camera_info['right'] # share right camera info for depth
@@ -332,6 +366,43 @@ class LuxonisCameraNode(Node):
         info_msg.header.frame_id = frame_id
         self.info_publishers[camera_name].publish(info_msg)
 
+    def publish_depth_frame(self, depth, timestamp: float, frame_number: int | None):
+        """Publishes one gripper depth map plus its CameraInfo.
+
+        16-bit depth is not MJPEG encodable, so the compressed topic carries a PNG instead, laid out
+        the way image_transport's compressedDepth transport lays it out. PNG encoding is lossless but
+        costs real CPU per frame, unlike the memcpy the color topics pay, so neither the compressed
+        nor the raw topic is served unless something is subscribed to it.
+        """
+        frame_id = VisionFrames.gripper_camera_frame('stereo')
+        stamp = self.create_stamp(timestamp)
+
+        depth_publisher = self.publishers_topics.get('stereo')
+        if depth_publisher is not None and depth_publisher.get_subscription_count() > 0:
+            img_msg = ros2_numpy.msgify(Image, depth, encoding='16UC1')
+            img_msg.header.stamp = stamp
+            img_msg.header.frame_id = frame_id
+            depth_publisher.publish(img_msg)
+
+        if self.compressed_depth_publisher is not None and self.compressed_depth_publisher.get_subscription_count() > 0:
+            try:
+                compressed_msg = CompressedImage()
+                compressed_msg.header.stamp = stamp
+                compressed_msg.header.frame_id = frame_id
+                # ROS 2 has no header.seq, so the sensor's sequence number rides along in the format string.
+                compressed_msg.format = compressed_format_with_sequence(COMPRESSED_DEPTH_FORMAT, frame_number)
+                compressed_msg.data = compressed_depth_payload(depth)
+                self.compressed_depth_publisher.publish(compressed_msg)
+            except Exception as ex:
+                self.get_logger().error(f"Failed to compress and publish a depth frame: {ex}")
+
+        if 'stereo' not in self.camera_info or self.camera_info['stereo'] is None:
+            raise RuntimeError("Camera calibration file for gripper stereo is missing or could not be loaded!")
+        info_msg = self.camera_info['stereo']
+        info_msg.header.stamp = stamp
+        info_msg.header.frame_id = frame_id
+        self.info_publishers['stereo'].publish(info_msg)
+
     def publish_gripper_frames(self):
         self.get_logger().info(f"Starting Gripper Camera Stream (compressed={self.use_compressed})...")
 
@@ -349,24 +420,12 @@ class LuxonisCameraNode(Node):
             self.publish_camera_frame(synced_frame.left, 'left', VisionFrames.gripper_camera_frame('left'))
             self.publish_camera_frame(synced_frame.right, 'right', VisionFrames.gripper_camera_frame('right'))
 
-            # 16-bit depth is not MJPEG encodable, so it stays on the raw topic.
             if synced_frame.depth is not None:
-                frame_id = VisionFrames.gripper_camera_frame('stereo')
-                stamp = self.create_stamp(synced_frame.right.timestamp if synced_frame.right is not None else synced_frame.timestamp)
-
-                depth_publisher = self.publishers_topics['stereo']
-                if depth_publisher.get_subscription_count() > 0:
-                    img_msg = ros2_numpy.msgify(Image, synced_frame.depth, encoding='16UC1')
-                    img_msg.header.stamp = stamp
-                    img_msg.header.frame_id = frame_id
-                    depth_publisher.publish(img_msg)
-
-                if 'stereo' not in self.camera_info or self.camera_info['stereo'] is None:
-                    raise RuntimeError("Camera calibration file for gripper stereo is missing or could not be loaded!")
-                info_msg = self.camera_info['stereo']
-                info_msg.header.stamp = stamp
-                info_msg.header.frame_id = frame_id
-                self.info_publishers['stereo'].publish(info_msg)
+                self.publish_depth_frame(
+                    synced_frame.depth,
+                    timestamp=synced_frame.right.timestamp if synced_frame.right is not None else synced_frame.timestamp,
+                    frame_number=synced_frame.right.frame_number if synced_frame.right is not None else None,
+                )
 
     def publish_head_frames(self):
         self.get_logger().info(f"Starting Head Cameras Stream (compressed={self.use_compressed})...")
@@ -392,12 +451,24 @@ class LuxonisCameraNode(Node):
 
         enabled = [name for name, is_enabled in (('left', self.use_left), ('right', self.use_right), ('center', self.use_center)) if is_enabled]
 
+        configs = {}
+        if self.fps > 0:
+            self.get_logger().info(f"Opening the left and right head cameras at {self.fps} fps.")
+            configs = {
+                camera_type: camera_type.config_with(fps=self.fps)
+                for camera_type in (RGBCameras.head_left, RGBCameras.head_right)
+            }
+
         if self.use_left and self.use_right and self.use_center:
-            generator = stream_left_right_center(is_rotate=False, is_run_pipeline=False)
+            generator = stream_left_right_center(is_rotate=False, is_run_pipeline=False, configs=configs)
         elif self.use_left and self.use_right:
-            generator = stream_left_right(is_rotate=False, is_run_pipeline=False)
+            generator = stream_left_right(is_rotate=False, is_run_pipeline=False, configs=configs)
         elif len(enabled) == 1:
-            generator = single_streams[enabled[0]](is_rotate=False, is_run_pipeline=False)
+            generator = single_streams[enabled[0]](
+                is_rotate=False,
+                is_run_pipeline=False,
+                config=configs.get(self.camera_types[enabled[0]].base),
+            )
         else:
             self.get_logger().warn(f"Unsupported head camera combination: {enabled or 'none selected'}!")
             return

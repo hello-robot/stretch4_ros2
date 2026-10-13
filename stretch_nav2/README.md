@@ -302,6 +302,142 @@ If the robot can see the calibration tag, AMCL will automatically ingest this in
 
 ---
 
+## Autodocking
+
+The `docking_server` node implements the standard Nav2 `DockRobot` action on `/dock_robot`, so existing Nav2 docking clients work against it unchanged. The full definition of DockRobot is available at [this url](https://api.nav2.org/actions/jazzy/dockrobot.html).
+
+### Discovering docks
+
+After following the [quickstart](#quickstart) to create a map, run:
+```
+ros2 launch stretch_nav2 discover_dock.launch.py map:=${HELLO_FLEET_PATH}/maps/<map_name>.yaml
+```
+
+Similar to before, teleoperate the robot around the space. When the robot discovers a dock, it'll automatically add it to its database.
+
+TODO:
+
+```
+ros2 launch stretch_nav2 autodocking_cpu.launch.py map:=${HELLO_FLEET_PATH}/maps/apt1.yaml autodocking_log_level:=debug
+```
+
+TODO
+```
+ros2 launch stretch_nav2 autodocking_cpu.launch.py
+ros2 run stretch_nav2 dock_nav_cycle.py --ros-args -p dock_id:=<id in the dock database>
+Then click Publish Point in RViz.
+```
+
+### Custom `error_code` values
+
+Nav2 reserves the `900`–`999` block of `DockRobot.Result.error_code` for its own errors (`DOCK_NOT_IN_DB=901` through `UNKNOWN=999`). Stretch-specific outcomes that upstream has no code for are assigned codes in the `800` block instead, deliberately below that range so future Nav2 additions cannot collide with ours.
+
+| Code | Name | Meaning |
+|------|------|---------|
+| `800` | `PREEMPTED_ERROR_CODE` | Goal was superseded by a newer dock request |
+| `801` | `FAILED_TO_STOW_ERROR_CODE` | The arm could not be brought into its stowed configuration |
+| `802` | `UNDOCK_BLOCKED_ERROR_CODE` | The space the robot would undock into is occupied |
+
+`800` and `801` are defined at the top of `stretch_nav2/docking_server.py`, `802` in `stretch_nav2/undocking_server.py`.
+
+The docking server accepts concurrent goals and always runs the most recent one, so `800` is a normal outcome rather than a fault. Treat it as "someone else took over," and only retry if the preemption was not intentional.
+
+`801` means the robot never reached a configuration it can safely dock from. It is raised when the stow times out, when `/stow_the_robot` is unavailable or refused, or when the joints are still out of tolerance after the stow returns (custom servo EEs should tune tol). Unlike `800`, it is a genuine fault.
+
+`802` is raised by `undocking_server` before it moves. Undocking drives the base 0.5 m to its right, so the server checks that corridor against the lidar costmap first - any obstacle or cliff cell within the servo's own 0.27 m stop radius of the swept path aborts the goal without moving, as does a missing or >1 s stale costmap. It replaces what used to be a blind timed sideways move.
+
+Alongside these, the server emits the standard Nav2 codes:
+
+- `DOCK_NOT_IN_DB` (901) - the requested dock ID isn't tracked by the [dock database](#dock-database)
+- `FAILED_TO_STAGE` (903) - the robot should switch to servo-based docking as soon as it sights the dock, so arriving to the staging pose via Nav2 is an error and this err_code is returned. Additionally, if this step (STAGING) of the FSM takes longer than `goal.max_staging_time`, then this err_code is returned.
+- `FAILED_TO_DETECT_DOCK` (904) - the dock was never identified after reaching the staging pose, or was lost partway through visual servoing.
+- `FAILED_TO_CONTROL` (905) - servoing exceeded its timeout, or blind docking completed without the charger reporting a connection.
+- `UNKNOWN` (999) - either 1) for preemption, a new goal gave up waiting for the previous one to release the robot, or 2) robot power state is unclear/unknown
+
+A future improvement (TODO) is to implement `DOCK_NOT_VALID`, defind by Nav2 as "Error code indicating the dock pose or configuration is invalid". Currently, the autodocking software makes no attempt to determine whether the dock is in a configuration that permits docking. It'll try even if the dock is facing a wall. This isn't a big deal since the obstacle-aware docking routine won't permit collisions with the wall, and the robot will simply dither near the dock for 25s (or whatever timeout is configured) before erroring out.
+
+### Dock Discovery
+
+TODO
+
+### Dock Database
+
+Discovered docks are persisted to disk in `~/stretch_user/maps/docks/{map_name}_docks.yaml`. The format will be:
+
+```yaml
+version: '1.0'
+docks:
+  dock_1:
+    timestamp: '2026-09-01T13:45:00'
+    pose:
+      position: [1.2, 0.5, 0.1]
+      orientation: [0.0, 0.0, 0.0, 1.0]
+```
+
+Docks are auto-enumerated. The next discovered dock for this map would be "dock_2". You can edit the yaml directly give docks more interpretable names.
+
+A Python class, `stretch_nav2.DockDatabase` makes working with this database easy:
+
+```python
+from hello_helpers.hello_misc import HelloNode
+from stretch_nav2.dock_database import DockDatabase
+
+temp_node = HelloNode.quick_create('temp_ipython_node')
+db = DockDatabase(temp_node, default_map_name='apartment_map')
+# If you have Nav2 running (specifically map_server), DockDatabase
+# will automatically pick up the active map you're navigating with
+
+# 1. Print summary (reports current active map, version, and loaded dock IDs)
+print("--- Summary ---")
+print(db)
+
+# 2. List docks the database knows about
+print("\n--- Available Dock IDs ---")
+print(list(db.keys()))
+
+# 3. Add a mock dock for prototyping (e.g., 'kitchen_dock')
+print("\n--- Adding 'kitchen_dock' ---")
+db['kitchen_dock'] = {
+    'timestamp': '2026-09-01T14:40:00',
+    'pose': {
+        'position': [2.45, -1.12, 0.0],
+        'orientation': [0.0, 0.0, 0.7071, 0.7071]
+    }
+}
+db.save_database() # Save back to YAML
+print(db)
+
+# 4. Check if a dock exists by ID
+print("\n--- Checking for 'kitchen_dock' ---")
+if 'kitchen_dock' in db:
+    print(f"Found '{search_id}'!")
+else:
+    print(f"'{search_id}' is not in the database.")
+
+# 5. Retrieve a dock by name and convert its pose dict to PoseStamped
+kitchen_dock = db['kitchen_dock']
+pose_stamped_msg = DockDatabase.dict_to_pose_stamped(kitchen_dock['pose'])
+print("\nConverted PoseStamped Msg:")
+print(f"  Frame ID: {pose_stamped_msg.header.frame_id}")
+print(f"  Position: [{pose_stamped_msg.pose.position.x:.2f}, {pose_stamped_msg.pose.position.y:.2f}]")
+print(f"  Orientation: [{pose_stamped_msg.pose.orientation.z:.4f}, {pose_stamped_msg.pose.orientation.w:.4f}]")
+```
+
+## Type checking
+
+Run `pip3 install pyright`. Pyright is the one worth running - it catches attribute typos (`self.future` for `self.seating_future`) that the `mypy/pyflake` miss entirely.
+
+```bash
+source /opt/ros/jazzy/setup.bash && source ~/ament_ws/install/setup.bash
+
+python3 -m pyflakes stretch_nav2/*.py
+python3 -m mypy --ignore-missing-imports --check-untyped-defs stretch_nav2/*.py
+python3 -m pyright --pythonpath "$(which python3)" stretch_nav2/*.py
+```
+
+Pyright resolves ROS imports from the sourced environment via `--pythonpath`, so there is no
+config file to keep in sync. Expect ~16 unavoidable errors from upstream, all of one of two kinds: `rclpy.time` / `rclpy.duration` / `tf2_ros.TransformException` reported as unknown attributes (submodules pyright cannot see without an explicit import), and `ActionServer` / `CancelResponse` / `GoalResponse` / `rclpy.ok` reported as private (rclpy re-exports them without `__all__`). Both are fine at runtime. Anything else is worth reading.
+
 ## Things to Note and Design Decisions
 
 - **Filtering Methods:** We use two filters for point cloud processing:  
