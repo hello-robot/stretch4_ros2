@@ -30,7 +30,7 @@ def test_mode_published():
     try:
         node = MockSubscriberNode()
         assert node.wait_for_message('mode', timeout=5.0), 'Did not receive mode msg!'
-        assert node.latest_msgs['mode'].data == 'navigation', 'Default mode not navigation'
+        assert node.latest_msgs['mode'].data == 'active', 'Default mode not active'
     finally:
         node.stop()
 

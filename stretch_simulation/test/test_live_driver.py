@@ -24,12 +24,16 @@ import math
 import rclpy
 from rclpy.node import Node
 from rclpy.parameter import Parameter
+from rclpy.qos import QoSProfile, QoSDurabilityPolicy
 from rclpy.duration import Duration
 from rclpy.action import ActionClient
 from rcl_interfaces.srv import GetParameters, SetParameters
 from rcl_interfaces.msg import Parameter as ParameterMsg, ParameterType, ParameterValue
 from std_srvs.srv import Trigger, SetBool
-from geometry_msgs.msg import Twist
+from geometry_msgs.msg import Twist, TwistWithCovarianceStamped
+from control_msgs.msg import JointJog
+from std_msgs.msg import String
+from rclpy.parameter import parameter_value_to_python
 from sensor_msgs.msg import JointState, Joy, Imu, BatteryState
 from nav_msgs.msg import Odometry
 from control_msgs.action import FollowJointTrajectory
@@ -71,12 +75,16 @@ class StretchLiveDriverTester(Node):
         self.stow_cli = self.create_client(Trigger, '/stow_the_robot')
         self.stop_cli = self.create_client(Trigger, '/stop_the_robot')
         self.runstop_cli = self.create_client(SetBool, '/runstop_the_robot')
+        self.freewheel_cli = self.create_client(Trigger, '/freewheel_the_robot')
+        self.seat_cli = self.create_client(Trigger, '/seat_into_dock')
 
         # Setup publishers for command inputs
         self.cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', 10)
         self.position_cmd_pub = self.create_publisher(JointState, '/joint_position_cmd', 10)
         self.velocity_cmd_pub = self.create_publisher(JointState, '/joint_velocity_cmd', 10)
         self.joy_pub = self.create_publisher(Joy, '/joy', 10)
+        self.cmd_vel_stiff_pub = self.create_publisher(TwistWithCovarianceStamped, '/cmd_vel_stiff', 10)
+        self.joint_jog_pub = self.create_publisher(JointJog, '/joint_vel', 10)
 
         # Setup variables to record received data from subscribers
         self.latest_joint_state = None
@@ -88,6 +96,38 @@ class StretchLiveDriverTester(Node):
 
     def joint_state_cb(self, msg):
         self.latest_joint_state = msg
+
+    # --- helpers ---------------------------------------------------------------
+
+    def get_params(self, names):
+        """The driver's values for parameters `names`, as Python values (None if unset)."""
+        future = self.param_get_cli.call_async(GetParameters.Request(names=list(names)))
+        rclpy.spin_until_future_complete(self, future)
+        return [parameter_value_to_python(v) for v in future.result().values]
+
+    def set_param(self, name, value):
+        """Set a driver parameter; returns the SetParametersResult."""
+        future = self.param_set_cli.call_async(SetParameters.Request(
+            parameters=[Parameter(name, value=value).to_parameter_msg()]))
+        rclpy.spin_until_future_complete(self, future)
+        return future.result().results[0]
+
+    def call_trigger(self, client):
+        future = client.call_async(Trigger.Request())
+        rclpy.spin_until_future_complete(self, future)
+        return future.result()
+
+    def gripper_at(self, fraction):
+        """gripper_joint position `fraction` of the way from closed (0) to open (1), in
+        the attached tool's URDF units (tool_info.urdf_range is (closed, open))."""
+        if not hasattr(self, "_gripper_range"):
+            self._gripper_range = self.get_params(["tool_info.urdf_range"])[0]
+        closed, opened = self._gripper_range
+        return closed + fraction * (opened - closed)
+
+    def joint_pos(self, name):
+        msg = self.latest_joint_state
+        return msg.position[msg.name.index(name)]
 
     def odom_cb(self, msg):
         self.latest_odom = msg
@@ -163,6 +203,7 @@ class StretchLiveDriverTester(Node):
         print(f"{GREEN}✓ Restored parameter 'mode' back to 'active'{RESET}")
 
         # Test C: Set joint_limit.lift_joint.velocity to a valid value (0.05)
+        original_lift_limit = self.get_params(['joint_limit.lift_joint.velocity'])[0]
         req_set_limit = SetParameters.Request()
         p_limit = ParameterMsg()
         p_limit.name = 'joint_limit.lift_joint.velocity'
@@ -183,11 +224,11 @@ class StretchLiveDriverTester(Node):
         assert res_limit_neg is not None and not res_limit_neg.results[0].successful, "Unexpectedly allowed setting negative joint velocity limit"
         print(f"{GREEN}✓ Successfully rejected negative value for 'joint_limit.lift_joint.velocity'{RESET}")
 
-        # Test E: Reset joint_limit.lift_joint.velocity to None/large to not affect other tests
-        p_limit.value.double_value = 999.0
+        # Test E: Restore joint_limit.lift_joint.velocity so as not to affect other tests
+        p_limit.value.double_value = original_lift_limit if original_lift_limit is not None else 999.0
         future_limit_reset = self.param_set_cli.call_async(req_set_limit)
         rclpy.spin_until_future_complete(self, future_limit_reset)
-        print(f"{GREEN}✓ Reset parameter 'joint_limit.lift_joint.velocity' back to default large value{RESET}")
+        print(f"{GREEN}✓ Restored parameter 'joint_limit.lift_joint.velocity' to {p_limit.value.double_value}{RESET}")
 
         # Test F: Set read-only 'control_loop_rate' -> should fail
         req_set_ro = SetParameters.Request()
@@ -321,8 +362,8 @@ class StretchLiveDriverTester(Node):
         self.ros_sleep(2.0)
 
         # Test Gripper Position Commands and Left/Right Finger States
-        print_robot_behavior("The simulated gripper should set to a few values, and we will verify the left and right finger joints sum up to the commanded value.")
-        for target_gripper_val in [0.1, 0.25]:
+        print_robot_behavior("The simulated gripper should set to a few values, and we will verify gripper_joint and both fingers report the commanded value (one finger's URDF units).")
+        for target_gripper_val in [self.gripper_at(0.25), self.gripper_at(0.6)]:
             js = JointState()
             js.name = ["gripper_joint"]
             js.position = [target_gripper_val]
@@ -331,24 +372,24 @@ class StretchLiveDriverTester(Node):
                 self.position_cmd_pub.publish(js)
                 self.ros_sleep(0.1)
                 
-            print(f"{YELLOW}Published gripper target of {target_gripper_val} meters. Waiting to verify...{RESET}")
+            print(f"{YELLOW}Published gripper target of {target_gripper_val:.4f}. Waiting to verify...{RESET}")
+            tolerance = 0.05 * abs(self.gripper_at(1.0) - self.gripper_at(0.0))
+            left_name, right_name = self.get_params(["tool_info.tool_joints"])[0]
             start_time = self.get_clock().now()
             success = False
             while (self.get_clock().now() - start_time).nanoseconds * 1e-9 < 5.0:
                 if self.latest_joint_state is not None:
-                    idx_l = self.latest_joint_state.name.index("gripper_finger_left_joint")
-                    idx_r = self.latest_joint_state.name.index("gripper_finger_right_joint")
-                    left_pos = self.latest_joint_state.position[idx_l]
-                    right_pos = self.latest_joint_state.position[idx_r]
-                    sum_pos = left_pos + right_pos
-                    print(f"  Left finger: {left_pos:.4f} m, Right finger: {right_pos:.4f} m, Sum: {sum_pos:.4f} m", end="\r")
-                    if abs(sum_pos - target_gripper_val) < 0.05:
+                    gripper_pos = self.joint_pos("gripper_joint")
+                    left_pos = self.joint_pos(left_name)
+                    right_pos = self.joint_pos(right_name)
+                    print(f"  gripper_joint: {gripper_pos:.4f}, left finger: {left_pos:.4f}, right finger: {right_pos:.4f}", end="\r")
+                    if all(abs(p - target_gripper_val) < tolerance for p in (gripper_pos, left_pos, right_pos)):
                         success = True
                         break
                 self.ros_sleep(0.2)
             print()
             assert success, f"Gripper did not reach the target value of {target_gripper_val}!"
-            print(f"{GREEN}✓ Gripper successfully reached {target_gripper_val} with correct joint summing!{RESET}")
+            print(f"{GREEN}✓ Gripper reached {target_gripper_val:.4f}, reported in the same units as commanded!{RESET}")
             self.ros_sleep(1.0)
 
     # =========================================================================
@@ -399,10 +440,6 @@ class StretchLiveDriverTester(Node):
             if joint_name == "arm_joint":
                 arm_positions = [self.latest_joint_state.position[self.latest_joint_state.name.index(link)] for link in ['arm_l1_joint', 'arm_l2_joint', 'arm_l3_joint', 'arm_l4_joint']]
                 return sum(arm_positions)
-            elif joint_name == "gripper_joint":
-                idx_l = self.latest_joint_state.name.index("gripper_finger_left_joint")
-                idx_r = self.latest_joint_state.name.index("gripper_finger_right_joint")
-                return self.latest_joint_state.position[idx_l] + self.latest_joint_state.position[idx_r]
             else:
                 actual_name = joint_name
                 idx = self.latest_joint_state.name.index(actual_name)
@@ -415,7 +452,9 @@ class StretchLiveDriverTester(Node):
             ("wrist_yaw_joint", 0.15, 1.5, 0.05, False),
             ("wrist_pitch_joint", 0.15, 1.5, 0.05, False),
             ("wrist_roll_joint", 0.15, 1.5, 0.05, False),
-            ("gripper_joint", 0.1, 1.5, 0.02, False),
+            # 20% of the gripper's range per second, towards open
+            ("gripper_joint", self.gripper_at(0.2) - self.gripper_at(0.0), 1.5,
+             0.04 * abs(self.gripper_at(1.0) - self.gripper_at(0.0)), False),
         ]
 
         for joint_name, test_vel, duration, threshold, check_positive in joints_to_test:
@@ -812,8 +851,8 @@ class StretchLiveDriverTester(Node):
             yaw_pos = 0.2 * math.cos(angle)
             # Roll rotates slowly
             roll_pos = 0.5 * math.sin(angle)
-            # Gripper opens and closes
-            gripper_pos = 0.1 * (1.0 + math.sin(2.0 * angle))
+            # Gripper opens and closes, between 20% and 60% open
+            gripper_pos = self.gripper_at(0.4 + 0.2 * math.sin(2.0 * angle))
             
             point.positions = [float(pitch_pos), float(yaw_pos), float(roll_pos), float(gripper_pos)]
             point.time_from_start = Duration(seconds=int(t), nanoseconds=int((t - int(t)) * 1e9)).to_msg()
@@ -870,7 +909,7 @@ class StretchLiveDriverTester(Node):
             ("wrist_yaw_joint", 1.0),
             ("wrist_pitch_joint", 0.2),
             ("wrist_roll_joint", 0.5),
-            ("gripper_joint", 0.5),
+            ("gripper_joint", self.gripper_at(0.9)),
             ("arm_joint", 0.3)
         ]
 
@@ -888,8 +927,6 @@ class StretchLiveDriverTester(Node):
             actual_joint_name = joint
             if joint == "arm_joint":
                 actual_joint_name = "arm_l1_joint"  # or sum of arm_l1_joint..arm_l4_joint
-            elif joint == "gripper_joint":
-                actual_joint_name = "gripper_finger_left_joint"
                 
             if self.latest_joint_state is not None:
                 if joint == "arm_joint":
@@ -950,7 +987,7 @@ class StretchLiveDriverTester(Node):
             ("wrist_yaw_joint", 0.5),
             ("wrist_pitch_joint", 0.2),
             ("wrist_roll_joint", 0.4),
-            ("gripper_joint", 0.1),
+            ("gripper_joint", self.gripper_at(0.2)),
         ]
 
         for joint, target in trajectory_tests:
@@ -968,8 +1005,6 @@ class StretchLiveDriverTester(Node):
                 self.ros_sleep(2.0)
                 
                 actual_joint_name = joint
-                if joint == "gripper_joint":
-                    actual_joint_name = "gripper_finger_left_joint"
                 if self.latest_joint_state is not None:
                     idx = self.latest_joint_state.name.index(actual_joint_name)
                     pos = self.latest_joint_state.position[idx]
@@ -1122,7 +1157,157 @@ class StretchLiveDriverTester(Node):
         assert lease_msg.name.endswith("server_lease_holder"), f"Unexpected lease holder name {lease_msg.name}!"
         print(f"{GREEN}✓ Successfully verified server_lease_holder diagnostics name: {lease_msg.name}{RESET}")
 
+    # =========================================================================
+    # 12. JAZZY PARITY: tool/velocity params, docking & freewheel services, cmd_vel_stiff
+    # =========================================================================
+    def test_jazzy_parity(self):
+        print_header("12. JAZZY PARITY INTERFACES")
+        self.ros_sleep(1.0)
+        assert self.latest_joint_state is not None, "No JointState received yet!"
+
+        # --- tool_info.* (read-only) ---
+        names = ["tool_info.name", "tool_info.is_actuated", "tool_info.tool_joints",
+                 "tool_info.urdf_range", "tool_info.aperture_range", "tool_info.position_tolerance"]
+        tool, actuated, tool_joints, urdf_range, aperture_range, tolerance = self.get_params(names)
+        print(f"  tool_info: {dict(zip(names, (tool, actuated, tool_joints, urdf_range, aperture_range, tolerance)))}")
+        assert actuated is True and len(tool_joints) == 2 and len(urdf_range) == 2 and tolerance > 0.0
+        assert not self.set_param("tool_info.is_actuated", False).successful, "tool_info.* should be read-only"
+        print(f"{GREEN}✓ tool_info.* present and read-only (tool {tool}){RESET}")
+
+        latched = {"/tool": [], "/mode": []}
+        subs = [self.create_subscription(String, topic, lambda m, got=got: got.append(m.data),
+                                         QoSProfile(depth=1, durability=QoSDurabilityPolicy.TRANSIENT_LOCAL))
+                for topic, got in latched.items()]
+        self.ros_sleep(1.0)
+        for sub in subs:
+            self.destroy_subscription(sub)
+        assert latched["/tool"] and latched["/tool"][-1] == tool, f"/tool is {latched['/tool']}, expected {tool}"
+        assert latched["/mode"] and latched["/mode"][-1] == "active", f"/mode is {latched['/mode']}, expected active"
+        print(f"{GREEN}✓ /tool reports {tool}; /mode reports active{RESET}")
+
+        # --- gripper joint_states / tolerance ---
+        for name in tool_joints:
+            assert name in self.latest_joint_state.name, f"{name} missing from /joint_states"
+        assert abs(self.joint_pos("gripper_joint") - self.joint_pos(tool_joints[0])) < 1e-9, \
+            "gripper_joint should equal the tool's primary finger"
+        gripper_tol, = self.get_params(["trajectory_server.trajectory_tolerance.gripper_joint"])
+        assert abs(gripper_tol - tolerance) < 1e-9, f"gripper tolerance {gripper_tol} != tool's {tolerance}"
+        print(f"{GREEN}✓ gripper_joint mirrors {tool_joints[0]}; trajectory tolerance seeded from tool ({tolerance:.4f}){RESET}")
+
+        # --- joint_velocity.* and joint_limit.*.velocity ---
+        joints = ["lift_joint", "arm_joint", "wrist_yaw_joint", "wrist_pitch_joint", "wrist_roll_joint", "gripper_joint"]
+        velocity_names = [f"joint_velocity.{j}" for j in joints] + ["joint_velocity.omnibase.linear", "joint_velocity.omnibase.angular"]
+        velocities = self.get_params(velocity_names)
+        limits = self.get_params([f"joint_limit.{j}.velocity" for j in joints])
+        print(f"  joint_velocity: {dict(zip(velocity_names, velocities))}")
+        print(f"  joint_limit.*.velocity: {dict(zip(joints, limits))}")
+        assert all(v is not None and v > 0.0 for v in velocities), "joint_velocity.* should all be positive"
+        assert all(lim is not None and lim > 0.0 for lim in limits), "joint_limit.<joint>.velocity should be filled"
+        assert not self.set_param("joint_velocity.lift_joint", -1.0).successful, "negative joint_velocity accepted"
+        print(f"{GREEN}✓ joint_velocity.* and joint_limit.*.velocity filled{RESET}")
+
+        # --- sensitivity is settable at runtime ---
+        assert self.set_param("sensitivity", "high_sensitivity_manipulation").successful, "sensitivity should be settable"
+        assert self.set_param("sensitivity", "default").successful
+        print(f"{GREEN}✓ sensitivity settable at runtime{RESET}")
+
+        # --- action_timeout sets trajectory_server.timeout ---
+        old_timeout, = self.get_params(["trajectory_server.timeout"])
+        assert self.set_param("action_timeout", 12.5).successful
+        new_timeout, = self.get_params(["trajectory_server.timeout"])
+        assert abs(new_timeout - 12.5) < 1e-9, f"trajectory_server.timeout is {new_timeout} after action_timeout=12.5"
+        self.set_param("trajectory_server.timeout", old_timeout)
+        print(f"{GREEN}✓ action_timeout sets trajectory_server.timeout{RESET}")
+
+        # --- service introspection topics for the new services ---
+        topics = dict(self.get_topic_names_and_types())
+        for service in ("freewheel_the_robot", "seat_into_dock"):
+            assert f"/{service}/_service_event" in topics, f"/{service}/_service_event not advertised"
+        print(f"{GREEN}✓ freewheel_the_robot and seat_into_dock publish service events{RESET}")
+
+        # --- seat_into_dock fails clearly in sim, and leaves the mode alone ---
+        res = self.call_trigger(self.seat_cli)
+        print(f"  seat_into_dock -> success={res.success}, message='{res.message}'")
+        assert not res.success and "not supported in simulation" in res.message
+        assert self.get_params(["mode"])[0] == "active", "mode not restored after seat_into_dock"
+        print(f"{GREEN}✓ seat_into_dock reports 'not supported in simulation'; mode back to active{RESET}")
+
+        # --- freewheel ---
+        print_robot_behavior("The base should stop (freewheeling isn't simulated).")
+        res = self.call_trigger(self.freewheel_cli)
+        print(f"  freewheel_the_robot -> success={res.success}, message='{res.message}'")
+        assert res.success
+        print(f"{GREEN}✓ freewheel_the_robot{RESET}")
+
+        # --- cmd_vel_stiff ---
+        print_robot_behavior("The base should drive forward slowly for 2 s via cmd_vel_stiff (stiffness 0.5), then stop.")
+        start_x = self.latest_odom.pose.pose.position.x
+        msg = TwistWithCovarianceStamped()
+        msg.twist.twist.linear.x = 0.1
+        msg.twist.covariance[0] = 0.5
+        msg.twist.covariance[-1] = 1.0
+        start = self.get_clock().now()
+        while (self.get_clock().now() - start).nanoseconds * 1e-9 < 2.0:
+            self.cmd_vel_stiff_pub.publish(msg)
+            self.ros_sleep(0.1)
+        msg.twist.twist.linear.x = 0.0
+        for _ in range(3):
+            self.cmd_vel_stiff_pub.publish(msg)
+            self.ros_sleep(0.1)
+        self.ros_sleep(1.0)
+        moved = math.hypot(self.latest_odom.pose.pose.position.x - start_x, 0.0)
+        print(f"  base moved {moved:.3f} m")
+        assert moved > 0.05, "cmd_vel_stiff didn't move the base"
+        print(f"{GREEN}✓ cmd_vel_stiff drives the base{RESET}")
+
+        # --- tool name aliases for gripper_joint ---
+        print_robot_behavior("The gripper should move to 30% then 70% open, commanded by the tool's own joint names.")
+        backend = "parallel_gripper" if "pg4" in tool else "stretch_gripper"
+        for alias, fraction in ((backend, 0.3), (tool_joints[0], 0.7)):
+            target = self.gripper_at(fraction)
+            js = JointState(name=[alias], position=[float(target)])
+            for _ in range(3):
+                self.position_cmd_pub.publish(js)
+                self.ros_sleep(0.1)
+            self.ros_sleep(2.5)
+            pos = self.joint_pos("gripper_joint")
+            print(f"  {alias} -> {target:.4f}: gripper_joint at {pos:.4f}")
+            assert abs(pos - target) < 3 * tolerance, f"alias {alias} didn't move gripper_joint to {target}"
+        print(f"{GREEN}✓ tool-name aliases command gripper_joint{RESET}")
+
+        # --- deprecated joint_vel gripper jog: v * duration in URDF units ---
+        print_robot_behavior("The gripper should jog open by 10% of its range via the deprecated joint_vel topic.")
+        start_pos = self.joint_pos("gripper_joint")
+        step = self.gripper_at(0.1) - self.gripper_at(0.0)
+        jog = JointJog(joint_names=["gripper_joint"], velocities=[float(step / 0.5)], duration=0.5)
+        self.joint_jog_pub.publish(jog)
+        self.ros_sleep(3.0)
+        moved = self.joint_pos("gripper_joint") - start_pos
+        print(f"  jogged {moved:+.4f} (expected {step:+.4f})")
+        assert abs(moved - step) < 3 * tolerance, "joint_vel gripper jog didn't move by v * duration"
+        print(f"{GREEN}✓ joint_vel gripper jog moves by v * duration in URDF units{RESET}")
+
+
+ALL_TESTS = [
+    "test_parameters", "test_homing_and_stowing", "test_position_commands",
+    "test_velocity_commands", "test_joint_velocity_commands", "test_runstop_safety",
+    "test_joy_commands", "test_trajectory_action", "test_trajectory_diagnostics",
+    "test_imu_and_sensors", "test_stop_the_robot_service", "test_diagnostics_and_battery",
+    "test_jazzy_parity",
+]
+
+
 def main():
+    # --all runs every test in ALL_TESTS; --parity just test_jazzy_parity;
+    # --tests a,b runs the named ones. With no option, the selection below runs.
+    args = sys.argv[1:]
+    selected = None
+    if "--all" in args:
+        selected = ALL_TESTS
+    elif "--parity" in args:
+        selected = ["test_jazzy_parity"]
+    elif "--tests" in args:
+        selected = args[args.index("--tests") + 1].split(",")
     rclpy.init()
     tester = StretchLiveDriverTester()
 
@@ -1133,6 +1318,12 @@ def main():
         sys.exit(1)
 
     try:
+        if selected is not None:
+            for name in selected:
+                getattr(tester, name)()
+                tester.ros_sleep(3.0)
+            print(f"\n{BOLD}{GREEN}PASSED: {', '.join(selected)}{RESET}")
+            return
         # Run entire integration test suite
         '''tester.test_parameters()
         tester.ros_sleep(3.0)
