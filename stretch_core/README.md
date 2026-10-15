@@ -25,7 +25,7 @@ Switching to `puppet` is governed by `puppet.engage`:
 - `immediate` (the simulation's default, so the digital twin can snap onto the robot): the robot follows at once, jumping to the leader's pose. It logs a warning, as this isn't safe unless the poses already match.
 - `slow`: move to the leader's pose and then follow. Not implemented yet (it needs a motion planner).
 
-If returning to `puppet` after a routine or a runstop is refused, the driver switches to `active` instead.
+If returning to `puppet` after a routine or a runstop is refused, the driver switches to `active` instead. A driver launched with `mode:=puppet` starts in `active` unless `puppet.engage` is `immediate`; set `mode` to `puppet` once the poses match.
 
 Priority modes, which the driver enters by itself while it is busy: `homing`, `stowing`, `seating` (`seat_into_dock`), and `runstopped`. Routines are refused unless the robot is in a control mode, and the driver returns to the previous control mode afterwards. `position`, `navigation`, and `velocity` are deprecated: setting one selects `active`, with `velocity` also putting the joints into velocity mode.
 

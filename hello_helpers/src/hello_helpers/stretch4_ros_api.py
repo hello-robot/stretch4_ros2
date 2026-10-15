@@ -210,7 +210,8 @@ class Stretch4ROSDriver(Node, ABC):
                 [Parameter("mode", Parameter.Type.STRING, self.default_mode.value)]
             )
             mode = self.get_parameter("mode").value
-            
+        mode = self._check_startup_puppet_mode(mode)
+
         self.logger.info('mode = ' + str(mode))
         self._previous_mode = mode
         
@@ -1140,6 +1141,30 @@ class Stretch4ROSDriver(Node, ABC):
         Returns the reason entering puppet mode is refused.
         """
         return "puppet.engage 'slow' is not implemented yet; use 'require_match' or 'immediate'."
+
+    def _check_startup_puppet_mode(self, mode):
+        """Apply puppet.engage to a driver launched straight into puppet mode, which the
+        mode-change check (registered later) never sees. Under 'require_match' or 'slow'
+        it starts in active mode instead, since nothing has been matched yet. Returns the
+        mode to start in. Runs before the parameter callbacks are registered."""
+        engage = self.get_parameter("puppet.engage").value
+        if engage not in self.PUPPET_ENGAGE_MODES:
+            self.logger.warn(f"Invalid puppet.engage '{engage}', using '{self.DEFAULT_PUPPET_ENGAGE}' "
+                             f"instead (one of {list(self.PUPPET_ENGAGE_MODES)}).")
+            self.set_parameters([Parameter("puppet.engage", Parameter.Type.STRING, self.DEFAULT_PUPPET_ENGAGE)])
+            engage = self.DEFAULT_PUPPET_ENGAGE
+        if mode != self.puppet_mode:
+            return mode
+        if engage == "immediate":
+            self.logger.warn("Starting in puppet mode with puppet.engage 'immediate': joints jump to "
+                             "the leader's pose, which is not safe unless the poses already match.")
+            return mode
+        why = ("isn't implemented yet" if engage == "slow"
+               else "only enters puppet mode once this robot matches the leader's pose")
+        self.logger.warn(f"Launched in puppet mode, but puppet.engage '{engage}' {why}. Starting in "
+                         f"'{self.active_mode}'; set mode to puppet once the poses match.")
+        self.set_parameters([Parameter("mode", Parameter.Type.STRING, self.active_mode.value)])
+        return self.get_parameter("mode").value
 
     def return_to_mode(self, mode):
         """Change back to `mode` after a routine or a runstop. If puppet.engage refuses a
