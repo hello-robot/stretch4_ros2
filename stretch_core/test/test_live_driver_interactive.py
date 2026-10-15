@@ -83,7 +83,8 @@ class StretchLiveDriverTester(Node):
             "wrist_yaw_joint": 0.0,
             "wrist_pitch_joint": 0.5,
             "wrist_roll_joint": 0.0,
-            "gripper_joint": 0.5
+            # one finger's URDF value (SG4: 0 closed .. ~0.42 open)
+            "gripper_joint": 0.2
         }
 
         # Setup subscribers with relative and absolute fallbacks to handle namespaces gracefully
@@ -266,23 +267,12 @@ class StretchLiveDriverTester(Node):
             if poses:
                 return sum(poses), (sum(vels) if len(vels) == len(poses) else 0.0)
             return None, None
-        elif joint_name == "gripper_joint":
-            left_pos, left_vel = None, None
-            right_pos, right_vel = None, None
+        elif joint_name == "gripper_joint" and joint_name not in state.name:
+            # Older drivers reported only the fingers; gripper_joint is one finger's value.
             if "gripper_finger_left_joint" in state.name:
                 idx = state.name.index("gripper_finger_left_joint")
-                left_pos = state.position[idx]
-                if len(state.velocity) > idx:
-                    left_vel = state.velocity[idx]
-            if "gripper_finger_right_joint" in state.name:
-                idx = state.name.index("gripper_finger_right_joint")
-                right_pos = state.position[idx]
-                if len(state.velocity) > idx:
-                    right_vel = state.velocity[idx]
-            if left_pos is not None and right_pos is not None:
-                total_pos = left_pos + right_pos
-                total_vel = (left_vel + right_vel) if (left_vel is not None and right_vel is not None) else 0.0
-                return total_pos, total_vel
+                vel = state.velocity[idx] if len(state.velocity) > idx else 0.0
+                return state.position[idx], vel
             return None, None
         else:
             if joint_name in state.name:
@@ -1145,7 +1135,7 @@ class StretchLiveDriverTester(Node):
             "wrist_pitch_joint": (self.HOME_POSITIONS["wrist_pitch_joint"], 0.15, 0.0),
             "wrist_yaw_joint": (self.HOME_POSITIONS["wrist_yaw_joint"], 0.15, math.pi / 2),
             "wrist_roll_joint": (self.HOME_POSITIONS["wrist_roll_joint"], 0.15, 0.0),
-            "gripper_joint": (0.5, 0.0, 0.0), # constant open gripper
+            "gripper_joint": (self.HOME_POSITIONS["gripper_joint"], 0.0, 0.0), # constant, half open
         }
         joint_circles = [circles.get(j_name, (0.0, 0.0, 0.0)) for j_name in active_joints]
 
