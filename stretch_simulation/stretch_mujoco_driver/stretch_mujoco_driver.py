@@ -223,6 +223,14 @@ class StretchMujocoDriver(Stretch4ROSDriver):
             qos_profile=QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT),
         )
 
+        # pull_camera_data() reports the low-resolution center camera's frames under the
+        # full-resolution camera, so the publishers are keyed by that one.
+        active_cameras = [
+            StretchCameras.cam_nav_rgb_se4_center
+            if camera == StretchCameras.cam_nav_rgb_se4_center_low_rez
+            else camera
+            for camera in self.sim._cameras_to_use
+        ]
 
         self.camera_publishers = {
             camera.name: self.create_publisher(
@@ -232,7 +240,7 @@ class StretchMujocoDriver(Stretch4ROSDriver):
                     depth=1, reliability=ReliabilityPolicy.BEST_EFFORT
                 ),
             )
-            for camera in self.sim._cameras_to_use
+            for camera in active_cameras
         }
         self.camera_compressed_publishers = {
             camera.name: self.create_publisher(
@@ -242,7 +250,7 @@ class StretchMujocoDriver(Stretch4ROSDriver):
                     depth=1, reliability=ReliabilityPolicy.BEST_EFFORT
                 ),
             )
-            for camera in self.sim._cameras_to_use
+            for camera in active_cameras
         }
         self.pointcloud_publishers = {
             camera.name: self.create_publisher(
@@ -252,7 +260,7 @@ class StretchMujocoDriver(Stretch4ROSDriver):
                     depth=1, reliability=ReliabilityPolicy.BEST_EFFORT
                 ),
             )
-            for camera in self.sim._cameras_to_use
+            for camera in active_cameras
             if camera.is_depth
         }
         self.camera_info_publishers = {
@@ -260,10 +268,10 @@ class StretchMujocoDriver(Stretch4ROSDriver):
                 CameraInfo,
                 get_camera_info_topic_name(camera),
                 qos_profile=QoSProfile(
-                    depth=1, reliability=ReliabilityPolicy.BEST_EFFORT
+                    depth=1, reliability=ReliabilityPolicy.RELIABLE
                 ),
             )
-            for camera in self.sim._cameras_to_use
+            for camera in active_cameras
         }
 
 
@@ -1323,10 +1331,8 @@ def get_camera_topic_name(camera: StretchCameras):
         return "cameras_head/left/image_raw"
     if camera == StretchCameras.cam_nav_rgb_se4_right:
         return "cameras_head/right/image_raw"
-    if camera == StretchCameras.cam_nav_rgb_se4_center:
+    if camera == StretchCameras.cam_nav_rgb_se4_center or camera == StretchCameras.cam_nav_rgb_se4_center_low_rez:
         return "camera_head/center/image_raw"
-    if camera == StretchCameras.cam_nav_rgb_se4_center_low_rez:
-        return "camera_head/center/low_res"
     raise NotImplementedError(f"Camera {camera} image topic mapping is not implemented")
 
 
@@ -1345,10 +1351,8 @@ def get_camera_info_topic_name(camera: StretchCameras):
         return "cameras_head/left/camera_info"
     if camera == StretchCameras.cam_nav_rgb_se4_right:
         return "cameras_head/right/camera_info"
-    if camera == StretchCameras.cam_nav_rgb_se4_center:
+    if camera == StretchCameras.cam_nav_rgb_se4_center or camera == StretchCameras.cam_nav_rgb_se4_center_low_rez:
         return "camera_head/center/camera_info"
-    if camera == StretchCameras.cam_nav_rgb_se4_center_low_rez:
-        return "camera_head/center/low_res/camera_info"
 
     raise NotImplementedError(f"Camera {camera} camera_info topic mapping is not implemented")
 
@@ -1378,7 +1382,7 @@ def get_camera_frame(camera: StretchCameras):
         return "camera_left_optical_link"
     if camera == StretchCameras.cam_nav_rgb_se4_right:
         return "camera_right_optical_link"
-    if camera == StretchCameras.cam_nav_rgb_se4_center:
+    if camera == StretchCameras.cam_nav_rgb_se4_center or camera == StretchCameras.cam_nav_rgb_se4_center_low_rez:
         return "camera_center_optical_link"
     raise NotImplementedError(f"Camera {camera} frame is not implemented")
 
