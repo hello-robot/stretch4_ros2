@@ -84,6 +84,9 @@ def launch(context):
     action_timeout = context.perform_substitution(LaunchConfiguration("action_timeout"))
     if action_timeout:
         driver_params.append({"action_timeout": float(action_timeout)})
+    puppet_engage = context.perform_substitution(LaunchConfiguration("puppet_engage"))
+    if puppet_engage:
+        driver_params.append({"puppet.engage": puppet_engage})
 
     # Outputs (topics, TF frames) go in driver_namespace; command topics follow
     # command_namespace (see Stretch4ROSDriver).
@@ -199,6 +202,10 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "action_timeout", default_value="",
             description="If set, the trajectory server's timeout (sec), trajectory_server.timeout. Unset keeps the driver's default.",
+        ),
+        DeclareLaunchArgument(
+            "puppet_engage", default_value="",
+            description="How the sim enters puppet mode: 'immediate' (the sim's default: jumps to the leader's pose), 'require_match' (only once it matches), or 'slow' (not implemented yet)",
         ),
         DeclareLaunchArgument(
             "tool", default_value="sg4",

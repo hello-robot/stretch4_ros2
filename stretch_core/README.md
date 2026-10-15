@@ -20,6 +20,13 @@ The `mode` parameter is the driver mode. Control modes, which a client chooses:
 | `teleop` | `joy` (gamepad) |
 | `puppet` | Follows another robot's `/joint_states` (`puppet.*` parameters) |
 
+Switching to `puppet` is governed by `puppet.engage`:
+- `require_match` (the real driver's default): the switch is refused, with the joints that are too far, unless every joint in position mode is within `puppet.match_tolerance` of the leader's pose (10% of the tool's range for `gripper_joint`), going by recent leader joint states.
+- `immediate` (the simulation's default, so the digital twin can snap onto the robot): the robot follows at once, jumping to the leader's pose. It logs a warning, as this isn't safe unless the poses already match.
+- `slow`: move to the leader's pose and then follow. Not implemented yet (it needs a motion planner).
+
+If returning to `puppet` after a routine or a runstop is refused, the driver switches to `active` instead.
+
 Priority modes, which the driver enters by itself while it is busy: `homing`, `stowing`, `seating` (`seat_into_dock`), and `runstopped`. Routines are refused unless the robot is in a control mode, and the driver returns to the previous control mode afterwards. `position`, `navigation`, and `velocity` are deprecated: setting one selects `active`, with `velocity` also putting the joints into velocity mode.
 
 Whether each joint takes position or velocity commands is set per joint with `joint_mode.<joint>` (`position` or `velocity`).
@@ -50,6 +57,8 @@ Joint parameters use the command joint names: `lift_joint`, `arm_joint`, `wrist_
 | `joint_acceleration.<joint>`, `joint_acceleration.omnibase.{linear,angular}` | double | Default accelerations. |
 | `joint_limit.<joint>.{lower,upper}` | double | Position limits applied to position commands and trajectories. Set for `gripper_joint` from the tool's URDF range. |
 | `joint_limit.<joint>.{velocity,acceleration}` | double | Maximum speed and acceleration. Faster velocity commands are limited to `velocity`. |
+| `puppet.joint_states_topic`, `puppet.odom_topic`, `puppet.follow_base` | string / bool | What puppet mode follows, and whether it also follows the leader's base velocity. Writable. |
+| `puppet.engage`, `puppet.match_tolerance` | string / double | How the driver enters puppet mode; see *Modes*. Writable. |
 | `trajectory_server.*` | | The `follow_joint_trajectory` server's settings, e.g. `timeout` and the per-joint `trajectory_tolerance.<joint>` (for `gripper_joint`, the tool's `position_tolerance`). |
 | `action_timeout` | double | Kept for launch files written for the old driver: if set (at launch or later), it sets `trajectory_server.timeout`. The navigation launch sets 30. |
 | `broadcast_odom_tf` | bool | Broadcast the wheel-odometry TF. Read-only. |

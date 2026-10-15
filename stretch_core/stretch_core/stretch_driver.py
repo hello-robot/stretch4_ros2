@@ -554,7 +554,7 @@ class StretchDriver(Stretch4ROSDriver):
                 already_not_runstopped = self.robot_mode() != 'runstopped'
             if already_not_runstopped:
                 return
-            self.change_mode(self.prerunstop_mode)
+            self.return_to_mode(self.prerunstop_mode)
             if not just_change_mode:
                 self.robot.power_periph.clear_runstop()
 

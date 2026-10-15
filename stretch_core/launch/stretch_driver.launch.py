@@ -144,6 +144,14 @@ def generate_launch_description():
     )
     ld.add_action(action_timeout_arg)
 
+    ld.add_action(DeclareLaunchArgument(
+        'puppet_engage',
+        default_value='',
+        description="How the driver enters puppet mode: 'require_match' (the default: only once "
+                    "it matches the leader's pose), 'immediate' (jumps to the leader's pose; not "
+                    "safe unless they already match), or 'slow' (not implemented yet)"
+    ))
+
     # Deprecated interface shims
     declare_deprecated_interfaces_arg = DeclareLaunchArgument(
         "deprecated_interfaces",
@@ -161,6 +169,9 @@ def generate_launch_description():
         # only passed when given, so that the driver's own default applies otherwise
         action_timeout = LaunchConfiguration('action_timeout').perform(context)
         optional_params = [{'action_timeout': float(action_timeout)}] if action_timeout else []
+        puppet_engage = LaunchConfiguration('puppet_engage').perform(context)
+        if puppet_engage:
+            optional_params.append({'puppet.engage': puppet_engage})
         stretch_driver = Node(package='stretch_core',
                               executable='stretch_driver',
                               name='stretch_driver',

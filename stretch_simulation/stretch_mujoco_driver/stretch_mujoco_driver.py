@@ -95,6 +95,10 @@ class StretchMujocoDriver(Stretch4ROSDriver):
                       ]
     velocity_joints = ["arm_joint", "lift_joint", "wrist_yaw_joint",
                        "wrist_roll_joint", "wrist_pitch_joint", "gripper_joint"]
+
+    # A twin is put in puppet mode to snap it onto the real robot's pose (the relay's
+    # match_on_connect), so the sim enters it at once by default; see puppet.engage.
+    DEFAULT_PUPPET_ENGAGE = "immediate"
     
     def __init__(self):
         super().__init__('stretch_mujoco_driver')
@@ -725,7 +729,7 @@ class StretchMujocoDriver(Stretch4ROSDriver):
             already_not_runstopped = not self.is_runstopped()
             if already_not_runstopped:
                 return
-            self.change_mode(self.prerunstop_mode)
+            self.return_to_mode(self.prerunstop_mode)
 
     def publish_camera_and_lidar(self, current_time: TimeMsg | None = None):
 

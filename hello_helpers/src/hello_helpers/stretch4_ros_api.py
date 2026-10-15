@@ -139,6 +139,14 @@ class Stretch4ROSDriver(Node, ABC):
         "gripper_joint": "stretch_gripper",
     }
 
+    # How the robot may enter puppet mode (puppet.engage): 'require_match' only once its
+    # joints are within puppet.match_tolerance of the leader's; 'immediate' at once,
+    # jumping to the leader's pose; 'slow' (not implemented) by moving there first.
+    PUPPET_ENGAGE_MODES = ("require_match", "immediate", "slow")
+    DEFAULT_PUPPET_ENGAGE = "require_match"
+    # The leader's joint states must be at most this old (s) for 'require_match'.
+    PUPPET_LEADER_MAX_AGE_S = 1.0
+
     # Default position tolerances (m or rad) the trajectory server uses to decide a
     # joint has reached a waypoint. Joints not listed fall back to
     # trajectory_server.default_tolerance.
@@ -331,6 +339,19 @@ class Stretch4ROSDriver(Node, ABC):
             type=ParameterType.PARAMETER_BOOL,
             description="In puppet mode, drive the base at the velocity reported on puppet.odom_topic",
         ))
+        self.declare_parameter("puppet.engage", self.DEFAULT_PUPPET_ENGAGE, ParameterDescriptor(
+            type=ParameterType.PARAMETER_STRING,
+            description="How the robot enters puppet mode: 'require_match' (only once every joint in "
+                        "position mode is within puppet.match_tolerance of the leader's), 'immediate' "
+                        "(at once, jumping to the leader's pose: not safe unless the poses already "
+                        "match), or 'slow' (not implemented yet)",
+        ))
+        self.declare_parameter("puppet.match_tolerance", 0.05, ParameterDescriptor(
+            type=ParameterType.PARAMETER_DOUBLE,
+            description="Largest difference (m or rad) between this robot's joints and the leader's "
+                        "for entering puppet mode with puppet.engage 'require_match'. The gripper "
+                        "uses 10% of the tool's URDF range instead.",
+        ))
 
         # Gamepad parameters
         self.declare_parameter("gamepad.dt", 0.5)
@@ -454,6 +475,7 @@ class Stretch4ROSDriver(Node, ABC):
 
         # Puppet mode inputs; (re)created when their topic parameters change.
         self.puppet_subscriptions = {}
+        self._puppet_leader = None  # (latest leader JointState, time.monotonic() received)
         self._subscribe_puppet_topic("puppet.joint_states_topic")
         self._subscribe_puppet_topic("puppet.odom_topic")
         self.create_timer(3.0, self.check_puppet_topics, callback_group=self.main_group)
@@ -634,6 +656,10 @@ class Stretch4ROSDriver(Node, ABC):
                         and self.get_parameter("puppet.follow_base").value):
                     # stop following the puppet's base
                     self.set_base_velocity(0.0, 0.0, 0.0)
+                if (parameter.value == self.puppet_mode and self._previous_mode != self.puppet_mode
+                        and self.get_parameter("puppet.engage").value == "immediate"):
+                    self.logger.warn("Entering puppet mode with puppet.engage 'immediate': joints jump to "
+                                     "the leader's pose, which is not safe unless the poses already match.")
                 self._previous_mode = parameter.value
                 self.handle_mode_change(parameter.value)
             case "puppet.joint_states_topic" | "puppet.odom_topic":
@@ -746,6 +772,16 @@ class Stretch4ROSDriver(Node, ABC):
                     and parameter.value not in self.DEPRECATED_CONTROL_MODES
                 ):
                     reason=f"Mode does not exist. (Control modes are {self.control_modes}. Priority modes are {self.priority_modes}.)"
+                elif parameter.value == self.puppet_mode and self.robot_mode() != self.puppet_mode:
+                    reason = self._puppet_engage_refusal()
+            case "puppet.engage":
+                found = True
+                if parameter.value not in self.PUPPET_ENGAGE_MODES:
+                    reason = f"puppet.engage must be one of {list(self.PUPPET_ENGAGE_MODES)}."
+            case "puppet.match_tolerance":
+                found = True
+                if not isinstance(parameter.value, float) or parameter.value <= 0.0:
+                    reason = "puppet.match_tolerance must be a positive number."
             case "action_timeout":
                 found=True
                 if parameter.value < 0.0:
@@ -1013,6 +1049,8 @@ class Stretch4ROSDriver(Node, ABC):
         old = self.puppet_subscriptions.pop(param_name, None)
         if old is not None:
             self.destroy_subscription(old)
+        if param_name == "puppet.joint_states_topic":
+            self._puppet_leader = None
         if not topic:
             return
         msg_type, callback = {
@@ -1025,6 +1063,8 @@ class Stretch4ROSDriver(Node, ABC):
     def puppet_joint_states_callback(self, joint_state: JointState):
         """In puppet mode, move each command joint to match `joint_state`: its position for
         joints in position mode, its velocity for joints in velocity mode."""
+        # kept in every mode, for puppet.engage 'require_match' to compare against
+        self._puppet_leader = (joint_state, time.monotonic())
         if self.robot_mode() != self.puppet_mode:
             return
         for joint in self.command_joints:
@@ -1044,6 +1084,69 @@ class Stretch4ROSDriver(Node, ABC):
 
     # Puppet mode only re-commands a joint whose target moved by more than this (m or rad).
     PUPPET_DEADBAND = 1e-4
+
+    def _puppet_engage_refusal(self):
+        """Why the robot can't enter puppet mode now, under puppet.engage, or None if it can.
+        Runs while a mode change is being validated, so it only reads state."""
+        engage = self.get_parameter("puppet.engage").value
+        if engage == "immediate":
+            return None
+        if engage == "slow":
+            return self._puppet_engage_slow()
+
+        # require_match: every joint followed by position must already be at the leader's
+        # (limit-clamped) position. Joints in velocity mode follow speeds, so can't jump.
+        topic = self.get_parameter("puppet.joint_states_topic").value
+        if self._puppet_leader is None or time.monotonic() - self._puppet_leader[1] > self.PUPPET_LEADER_MAX_AGE_S:
+            return (f"Can't enter puppet mode: no recent leader joint states on "
+                    f"{topic or '(puppet.joint_states_topic is not set)'} to match "
+                    f"(puppet.engage is 'require_match').")
+        if self.last_known_state is None:
+            return "Can't enter puppet mode: this robot's joint states aren't known yet."
+        leader = self._puppet_leader[0]
+        far = []
+        for joint in self.command_joints:
+            if self.get_parameter(f"joint_mode.{joint}").value != self.position_mode:
+                continue
+            target = self.command_joint_pose_from_joint_state(joint, leader)
+            current = self.command_joint_pose_from_joint_state(joint, self.last_known_state)
+            if target is None or current is None:
+                continue
+            error = abs(self._clamp_to_limits(joint, target) - current)
+            tolerance = self._puppet_match_tolerance(joint)
+            if error > tolerance:
+                far.append(f"{joint} is {error:.3f} from the leader (tolerance {tolerance:.3f})")
+        if far:
+            return ("Can't enter puppet mode until this robot matches the leader's pose "
+                    "(puppet.engage is 'require_match'): " + "; ".join(far) + ".")
+        return None
+
+    def _puppet_match_tolerance(self, joint):
+        """puppet.match_tolerance, or for the tool joint 10% of its URDF range, since a tool's
+        units (and range) vary."""
+        if joint == self.TOOL_JOINT and self.tool_is_actuated:
+            low, high = self.get_parameter("tool_info.urdf_range").value
+            return 0.1 * abs(high - low)
+        return self.get_parameter("puppet.match_tolerance").value
+
+    def _puppet_engage_slow(self):
+        """puppet.engage 'slow': move to the leader's pose, then start following.
+
+        Not implemented: moving every joint at once from an arbitrary pose can run the
+        robot into itself (as unstowing that way does), so this waits for a motion planner.
+        Returns the reason entering puppet mode is refused.
+        """
+        return "puppet.engage 'slow' is not implemented yet; use 'require_match' or 'immediate'."
+
+    def return_to_mode(self, mode):
+        """Change back to `mode` after a routine or a runstop. If puppet.engage refuses a
+        return to puppet mode (the leader moved meanwhile), go to active mode instead."""
+        result = self.set_parameters([Parameter("mode", Parameter.Type.STRING, str(mode))])[0]
+        if result.successful or mode == self.active_mode:
+            return
+        self.logger.warn(f"Couldn't return to mode '{mode}' ({result.reason}); switching to "
+                         f"'{self.active_mode}' instead.")
+        self.change_mode(self.active_mode)
 
     def _clamp_to_limits(self, joint, target):
         limits = self.get_parameters_by_prefix(f"joint_limit.{joint}")
@@ -1219,7 +1322,7 @@ class Stretch4ROSDriver(Node, ABC):
         finally:
             with self.driver_mode_lock:
                 if self.robot_mode() == mode:
-                    self.change_mode(last_mode)
+                    self.return_to_mode(last_mode)
                 elif self.prerunstop_mode == mode:
                     # Runstopped during the routine: clearing the runstop returns to the
                     # mode from before the routine, not to the routine's.
