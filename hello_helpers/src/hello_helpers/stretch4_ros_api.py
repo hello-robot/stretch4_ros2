@@ -852,6 +852,9 @@ class Stretch4ROSDriver(Node, ABC):
         #only return true if ALL changes succeed.  Checking should not have side effects!
         #We only handle parameter changes that pass both parent and child checks
         for p in parameters:
+            if p.type_ == Parameter.Type.NOT_SET:
+                # rclpy would undeclare it, breaking every later read of the parameter
+                return SetParametersResult(successful=False, reason=f"Parameter {p.name} can't be unset.")
             found_here,reason_here = self.check_common_param(p)
             found_child,reason_child = self.check_child_param(p)
             #self.logger.warning(f"Param: {p.name}, found (here,child): {found_here},{found_child}, reason(here,child): {reason_here},{reason_child}")
@@ -1951,7 +1954,7 @@ class StretchTrajectoryActionServer:
         tols = [0.0 for joint in feedback_msg.joint_names]
 
         for i, joint_name in enumerate(feedback_msg.joint_names):
-            tolerance = self.get_param(f"trajectory_tolerance.{joint_name}")
+            tolerance = self.driver.get_parameter_or(f"{self.param_prefix}.trajectory_tolerance.{joint_name}").value
             tolerance = self.get_param("default_tolerance") if tolerance is None else tolerance
             all_joints_ok = all_joints_ok and abs(feedback_msg.desired.positions[i]-feedback_msg.actual.positions[i])<tolerance
             errors[i] = abs(feedback_msg.desired.positions[i]-feedback_msg.actual.positions[i])

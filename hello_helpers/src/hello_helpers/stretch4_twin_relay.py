@@ -366,6 +366,10 @@ class TwinRelay(Node):
                 and not any(fnmatch(name, p) for p in self.exclude))
 
     def should_copy(self, name, value, previous):
+        if value is None:
+            # An unset value (e.g. a joint with no trajectory_tolerance) would undeclare
+            # the mirror's parameter.
+            return False
         if name.startswith("joint_mode.") and value == "settling":
             return False
         if name == "mode":
