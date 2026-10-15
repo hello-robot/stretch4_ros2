@@ -827,8 +827,10 @@ class Stretch4ROSDriver(Node, ABC):
                 return SetParametersResult(successful=False,reason=reason_here)
 
             if (reason_here and found_here) or (reason_child and found_child):
-                reasons = [reason_here,reason_child]
-                reasons = filter(lambda x: x is not None, reasons)
+                # only the reasons from whichever class handles this parameter; the other's
+                # is just "not found"
+                reasons = [reason for reason, found in ((reason_here, found_here), (reason_child, found_child))
+                           if found and reason]
                 return SetParametersResult(successful=False,reason=f"{' '.join(reasons)} (multiple reasons for rejection are possible)")
 
         return SetParametersResult(successful=True)
