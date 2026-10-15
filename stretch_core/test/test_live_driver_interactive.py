@@ -304,30 +304,43 @@ class StretchLiveDriverTester(Node):
             time.sleep(0.1)
         time.sleep(0.5)
 
+    # restore_all_to_home moves these groups one after another. Moving everything at once
+    # from the stowed pose swings the tucked wrist out while the lift is still low and the
+    # arm retracted, which runs it into the mast (self-collision stop). So: lift up, then
+    # arm out, then the wrist, then the gripper.
+    HOME_ORDER = [
+        ["lift_joint"],
+        ["arm_joint"],
+        ["wrist_yaw_joint", "wrist_pitch_joint", "wrist_roll_joint"],
+        ["gripper_joint"],
+    ]
+
     def restore_all_to_home(self):
-        """Restores all joints to their neutral/home positions without using calibration service."""
-        print(f"{YELLOW}Restoring all joints to neutral home posture to avoid collisions...{RESET}")
-        js = JointState()
-        js.name = list(self.HOME_POSITIONS.keys())
-        js.position = [float(x) for x in self.HOME_POSITIONS.values()]
-        
-        for _ in range(self.pub_count):
-            self.publish_position_cmd(js)
-            if self.pub_count > 1:
-                time.sleep(0.05)
-        
-        # Wait up to 5.0 seconds for all joints to settle
-        start_time = time.time()
-        while time.time() - start_time < 5.0:
-            all_settled = True
-            for joint, target in self.HOME_POSITIONS.items():
-                pos, _ = self.get_joint_pose_and_vel(joint)
-                if pos is None or abs(pos - target) > 0.02:
-                    all_settled = False
+        """Restores all joints to their neutral/home positions without using calibration service,
+        one group at a time (see HOME_ORDER)."""
+        print(f"{YELLOW}Restoring all joints to neutral home posture (lift, arm, wrist, gripper in turn) to avoid collisions...{RESET}")
+        for group in self.HOME_ORDER:
+            js = JointState()
+            js.name = list(group)
+            js.position = [float(self.HOME_POSITIONS[joint]) for joint in group]
+
+            for _ in range(self.pub_count):
+                self.publish_position_cmd(js)
+                if self.pub_count > 1:
+                    time.sleep(0.05)
+
+            # Wait up to 5.0 seconds for this group to settle before moving the next
+            start_time = time.time()
+            while time.time() - start_time < 5.0:
+                all_settled = True
+                for joint in group:
+                    pos, _ = self.get_joint_pose_and_vel(joint)
+                    if pos is None or abs(pos - self.HOME_POSITIONS[joint]) > 0.02:
+                        all_settled = False
+                        break
+                if all_settled:
                     break
-            if all_settled:
-                break
-            time.sleep(0.1)
+                time.sleep(0.1)
         time.sleep(1.0)
 
     # =========================================================================
