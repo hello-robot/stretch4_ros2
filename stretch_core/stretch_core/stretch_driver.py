@@ -53,30 +53,11 @@ class StretchDriver(Stretch4ROSDriver):
         super().__init__('stretch_driver')
         self.get_logger().info("For use with S T R E T C H (TM) RESEARCH EDITION from Hello Robot Inc.")
 
-        
-        #TODO: pull joint limits on real robot    
-        '''limits = self.robot.pull_joint_limits()
 
-        for joint in self.command_joints:
-
-            if "stretch_gripper" in joint: #stretch gripper has its fingers modeled separately in sim
-                if Actuators["gripper_right_finger"] in limits and Actuators["gripper_left_finger"] in limits:
-                    (rll, rul) = limits[Actuators["gripper_right_finger"]]
-                    (lll, lul) = limits[Actuators["gripper_left_finger"]]
-                    (ll,ul) = (np.float64(rll+lll), np.float64(rul+lul))
-                else:
-                    (ll,ul)=(None,None)
-            elif "parallel_gripper" in joint: #parallel gripper not actually implemented in sim:
-                self.logger.warning("Parallel gripper not available in simulation")
-                (ll,ul)=(None,None)
-            else:
-                (ll,ul) = limits[Actuators[joint]]
-            if ll is not None and ul is not None:
-                results = self.set_parameters([Parameter(f"joint_limit.{joint}.upper", Parameter.Type.DOUBLE, ul),
-                                 Parameter(f"joint_limit.{joint}.lower", Parameter.Type.DOUBLE, ll)])
-                success = list(map(lambda x: x.successful, results))
-                reasons = list(map(lambda x: x.reason, results))
-                self.logger.info(f"Setting joint limits for joint {joint} as ({ll},{ul}).  Success: {success}, reasons: {reasons}")'''
+        # joint_limit.<joint>.{lower,upper} follow stretch4_body's soft motion limits; see
+        # _update_joint_limits. The tool's are set from its URDF range below.
+        self._joint_limits = {}
+        self._update_joint_limits(self.robot.status)
 
         self.velocity_commands = {joint: None for joint in self.command_joints}
 
@@ -280,7 +261,33 @@ class StretchDriver(Stretch4ROSDriver):
 
     def get_robot_status(self):
         self.robot.pull_status()
-        return copy.deepcopy(self.robot.status)
+        status = copy.deepcopy(self.robot.status)
+        self._update_joint_limits(status)
+        return status
+
+    def _update_joint_limits(self, robot_status):
+        """Set joint_limit.<joint>.{lower,upper} from each joint's soft motion limits in
+        stretch4_body's status: its range minus padding, narrowed by any user limits. They
+        can change at runtime (user limits), and the wrist's only exist once it's
+        calibrated, so this runs on every status update and sets only what changed."""
+        changed = []
+        for joint, backend in self.joint_backends.items():
+            if joint == self.TOOL_JOINT:
+                continue
+            status = self._joint_status(robot_status, backend)
+            limits = None if status is None else status.get('soft_motion_limits')
+            if limits is None or None in limits:
+                continue
+            limits = (float(limits[0]), float(limits[1]))
+            if self._joint_limits.get(joint) != limits:
+                self._joint_limits[joint] = limits
+                changed += [Parameter(f"joint_limit.{joint}.lower", Parameter.Type.DOUBLE, limits[0]),
+                            Parameter(f"joint_limit.{joint}.upper", Parameter.Type.DOUBLE, limits[1])]
+        if changed:
+            for param, result in zip(changed, self.set_parameters(changed)):
+                if not result.successful:
+                    self.get_logger().warn(f"Couldn't set {param.name}: {result.reason}")
+            self.get_logger().info(f"Joint limits from stretch4_body: {self._joint_limits}")
     
     def get_odom(self, robot_status, status_time) -> Odometry:
         x = float(robot_status['omnibase']['x'])
