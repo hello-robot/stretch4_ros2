@@ -655,6 +655,7 @@ class StretchDriver(Stretch4ROSDriver):
         is_runstopped_msg = DiagnosticStatus(name="is_runstopped")
         current_msg = DiagnosticStatus(name="current")
         in_collision_msg = DiagnosticStatus(name="in_collision")
+        in_guarded_contact_msg = DiagnosticStatus(name="in_guarded_contact")
 
 
         robot_runstopped = bool(robot_status['power_periph']['runstop_event'])
@@ -676,6 +677,8 @@ class StretchDriver(Stretch4ROSDriver):
             is_homing_msg.values.append(KeyValue(key=joint, value=f"{is_homing}"))
             is_runstopped_msg.values.append(KeyValue(key=joint, value=f"{is_runstopped}"))
             in_collision_msg.values.append(KeyValue(key=joint, value=f"{status['in_collision_stop']}"))
+            in_guarded_contact_msg.values.append(KeyValue(key=joint, value=f"{self.joint_in_guarded_contact(robot_status, joint)}"))
+        in_guarded_contact_msg.values.append(KeyValue(key="mobile_base", value=f"{self.base_in_guarded_contact(robot_status)}"))
 
         joint_state_diagnostics.status.append(is_runstopped_msg)
         joint_state_diagnostics.status.append(is_homed_msg)
@@ -685,8 +688,28 @@ class StretchDriver(Stretch4ROSDriver):
         joint_state_diagnostics.status.append(braking_distance_msg)
         joint_state_diagnostics.status.append(current_msg)
         joint_state_diagnostics.status.append(in_collision_msg)
+        joint_state_diagnostics.status.append(in_guarded_contact_msg)
 
         return joint_state_diagnostics
+
+    def joint_in_guarded_contact(self, robot_status, joint):
+        """Whether command joint `joint` is in a guarded contact event, from stretch4_body's
+        status (None if it doesn't report one). Steppers (lift, arm) report in_guarded_event:
+        their firmware stops the motor once its current passes the contact threshold. The
+        Feetech servos (wrist, gripper) only flag stall_overload (high effort while stalled
+        for stall_max_time); nothing stops them, so they can grip things."""
+        status = self._joint_status(robot_status, self.joint_backends[joint])
+        if status is None:
+            return None
+        in_event = self._status_field(status, 'in_guarded_event')
+        if in_event is None:
+            in_event = status.get('stall_overload')
+        return None if in_event is None else bool(in_event)
+
+    def base_in_guarded_contact(self, robot_status):
+        """Whether any base wheel is in a guarded contact event."""
+        return any(bool(status.get('in_guarded_event')) for status in robot_status['omnibase'].values()
+                   if self._is_joint_status(status))
     
 
 def main():

@@ -1072,6 +1072,7 @@ class StretchMujocoDriver(Stretch4ROSDriver):
         is_homed_msg = DiagnosticStatus(name="is_homed")
         is_homing_msg = DiagnosticStatus(name="is_homing")
         is_runstopped_msg = DiagnosticStatus(name="is_runstopped")
+        in_guarded_contact_msg = DiagnosticStatus(name="in_guarded_contact")
 
         current_mode = self.get_parameter('mode').value
         is_runstopped = str(current_mode == 'runstopped')
@@ -1095,6 +1096,8 @@ class StretchMujocoDriver(Stretch4ROSDriver):
             is_homed_msg.values.append(KeyValue(key=joint_key, value="True"))
             is_homing_msg.values.append(KeyValue(key=joint_key, value=is_homing))
             is_runstopped_msg.values.append(KeyValue(key=joint_key, value=is_runstopped))
+            in_guarded_contact_msg.values.append(KeyValue(key=joint_key, value=f"{self.joint_in_guarded_contact(robot_status, joint)}"))
+        in_guarded_contact_msg.values.append(KeyValue(key="mobile_base", value=f"{self.base_in_guarded_contact(robot_status)}"))
 
         joint_state_diagnostics.status.append(is_runstopped_msg)
         joint_state_diagnostics.status.append(is_homed_msg)
@@ -1102,8 +1105,35 @@ class StretchMujocoDriver(Stretch4ROSDriver):
         joint_state_diagnostics.status.append(at_limit_msg)
         joint_state_diagnostics.status.append(soft_limits_msg)
         joint_state_diagnostics.status.append(braking_distance_msg)
-        
+        joint_state_diagnostics.status.append(in_guarded_contact_msg)
+
         return joint_state_diagnostics
+
+    # The MJCF actuators behind each command joint, as stretch4_mujoco's
+    # SafeMotionGuardedContact keys its in_guarded_event status.
+    GUARDED_CONTACT_ACTUATORS = {
+        "lift_joint": ["lift"],
+        "arm_joint": ["arm"],
+        "wrist_yaw_joint": ["wrist_yaw"],
+        "wrist_pitch_joint": ["wrist_pitch"],
+        "wrist_roll_joint": ["wrist_roll"],
+        "gripper_joint": ["gripper_left_finger", "gripper_right_finger"],
+    }
+    WHEEL_ACTUATORS = ["left_wheel_vel", "right_wheel_vel", "back_wheel_vel"]
+
+    def _actuators_in_guarded_contact(self, robot_status, actuators):
+        in_event = getattr(robot_status, "in_guarded_event", None) or {}
+        reported = [actuator for actuator in actuators if actuator in in_event]
+        return any(in_event[actuator] for actuator in reported) if reported else None
+
+    def joint_in_guarded_contact(self, robot_status, joint):
+        """Whether command joint `joint` is in a guarded contact event in the sim, which trips
+        on actuator effort (servos on a stall); None if it doesn't report one."""
+        return self._actuators_in_guarded_contact(robot_status, self.GUARDED_CONTACT_ACTUATORS.get(joint, []))
+
+    def base_in_guarded_contact(self, robot_status):
+        """Whether any base wheel is in a guarded contact event in the sim."""
+        return self._actuators_in_guarded_contact(robot_status, self.WHEEL_ACTUATORS)
 
 
 
