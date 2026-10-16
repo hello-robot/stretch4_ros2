@@ -1791,7 +1791,10 @@ class StretchTrajectoryActionServer:
     def _command_base_rotation(self, target, feedforward=0.0):
         """Turn the base toward `target` (BASE_ROTATION_JOINT position) at `feedforward`
         (rad/s) plus base_rotation.kp times the error."""
-        velocity = feedforward + self.get_param("base_rotation.kp") * (target - self._base_rotation())
+        self._set_base_rotation_rate(feedforward + self.get_param("base_rotation.kp") * (target - self._base_rotation()))
+
+    def _set_base_rotation_rate(self, velocity):
+        """Turn the base at `velocity` (rad/s), capped at base_rotation.max_velocity."""
         max_velocity = self.get_param("base_rotation.max_velocity")
         self.driver.set_base_velocity(0.0, 0.0, float(np.clip(velocity, -max_velocity, max_velocity)))
 
@@ -1909,18 +1912,20 @@ class StretchTrajectoryActionServer:
                 succeeded = True
                 with self._server_commands():
                     if base_i is not None:
-                        # The base is driven every loop, toward the waypoint plus a feedforward
-                        # speed: the interpolated velocity in adaptive_velocity mode, and the
-                        # segment's average speed in the position modes, so it passes through
-                        # waypoints at speed instead of slowing to each one.
+                        # The base is driven every loop. In adaptive_velocity mode the
+                        # interpolated velocity already tracks the spline (feedforward plus kp
+                        # feedback), so it's sent as is; adding feedback toward the waypoint
+                        # too makes the speed sawtooth at every waypoint. In the position modes
+                        # it turns toward the waypoint plus the segment's average speed, so it
+                        # passes through waypoints at speed instead of slowing to each one.
                         if pos is None and vel is not None:
-                            feedforward = vel[base_i]
+                            self._set_base_rotation_rate(vel[base_i])
                         else:
                             segment_time = (self._msg_seconds(active_point.time_from_start)
                                             - self._msg_seconds(prev_state.time_from_start))
                             segment_distance = active_point.positions[base_i] - prev_state.positions[base_i]
                             feedforward = segment_distance / segment_time if segment_time > 0.0 else 0.0
-                        self._command_base_rotation(active_point.positions[base_i], feedforward)
+                            self._command_base_rotation(active_point.positions[base_i], feedforward)
 
                     for joint_i, joint_name in enumerate(trajectory.joint_names):
                         if joint_i == base_i:
