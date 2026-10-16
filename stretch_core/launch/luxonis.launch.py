@@ -51,6 +51,16 @@ def generate_launch_description():
         ),
     )
 
+    use_stereo = DeclareLaunchArgument(
+        "use_stereo",
+        default_value="false",
+        description=(
+            "If true, publish the left and right head cameras as a rectified, row-aligned stereo pair "
+            "on /cameras_head/stereo/{left,right}/, only while something subscribes. Needs both "
+            "use_left and use_right."
+        ),
+    )
+
     use_system_timestamp = DeclareLaunchArgument(
         "use_system_timestamp",
         default_value="true",
@@ -68,6 +78,7 @@ def generate_launch_description():
         use_compressed,
         use_system_timestamp,
         fps,
+        use_stereo,
     ]
 
     return LaunchDescription(launch_args + [OpaqueFunction(function=launch_setup)])
@@ -80,6 +91,7 @@ def launch_setup(context, *args, **kwargs):
     is_use_compressed = is_launch_config_true(context, "use_compressed")
     is_use_system_timestamp = is_launch_config_true(context, "use_system_timestamp")
     fps = int(LaunchConfiguration("fps").perform(context))
+    is_use_stereo = is_launch_config_true(context, "use_stereo")
 
     camera_node = Node(
         package="stretch_core",
@@ -93,6 +105,7 @@ def launch_setup(context, *args, **kwargs):
                 "use_compressed": is_use_compressed,
                 "use_system_timestamp": is_use_system_timestamp,
                 "fps": fps,
+                "use_stereo": is_use_stereo,
                 "is_gripper": False,
             }
         ],
