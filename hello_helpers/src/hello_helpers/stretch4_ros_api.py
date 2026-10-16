@@ -234,6 +234,7 @@ class Stretch4ROSDriver(Node, ABC):
 
         self.last_position_target = {}
         self.last_known_state = None
+        self.last_odom = None
         self.last_joint_mode = {joint: "position" for joint in self.command_joints}
         self.position_tolerance = self.get_parameter('position_tolerance').value
 
@@ -885,7 +886,16 @@ class Stretch4ROSDriver(Node, ABC):
             )
             return
 
+        self.note_direct_base_command()
         self.set_base_velocity(twist.linear.x, twist.linear.y, twist.angular.z)
+
+    def note_direct_base_command(self):
+        """A base command from outside the trajectory server preempts a trajectory that
+        rotates the base, as joint commands do for their joints (see check_and_set_pos)."""
+        if (self.trajectory_server is not None and
+            self.trajectory_server.active_joints is not None and
+            StretchTrajectoryActionServer.BASE_ROTATION_JOINT in self.trajectory_server.active_joints):
+            self.trajectory_server.direct_command_preempted = True
 
     def stiff_twist_callback(self, stiff_twist: TwistWithCovarianceStamped):
         """cmd_vel_stiff: a base velocity together with how stiffly to hold it (the
@@ -897,6 +907,7 @@ class Stretch4ROSDriver(Node, ABC):
             )
             return
         twist = stiff_twist.twist.twist
+        self.note_direct_base_command()
         self.set_base_velocity(twist.linear.x, twist.linear.y, twist.angular.z,
                                stiffness=self.stiffness_from_covariance(stiff_twist.twist.covariance))
 
@@ -1417,6 +1428,7 @@ class Stretch4ROSDriver(Node, ABC):
 
         # handle odom separately
         odom = self.get_odom(status, current_time)
+        self.last_odom = odom
 
         broadcast_odom_tf=self.get_parameter("broadcast_odom_tf").value
         if broadcast_odom_tf:
@@ -1538,6 +1550,12 @@ class Stretch4ROSDriver(Node, ABC):
     
 
 class StretchTrajectoryActionServer:
+    # Virtual joint for turning the base in place. Its positions are radians relative to
+    # the base's heading (from odometry) when the trajectory starts; the server turns the
+    # base with base velocity commands. Only accepted when trajectory_server.allow_rotation
+    # is set.
+    BASE_ROTATION_JOINT = "mobile_base_rotation_joint"
+
     def __init__(self, driver: Stretch4ROSDriver):
         # Store the reference to the parent node
         self.driver = driver
@@ -1615,7 +1633,12 @@ class StretchTrajectoryActionServer:
         add_param("mode", "target_priority")
         add_param("strict_mode", True)
         add_param("timeout", 5.0)
-        add_param("kp", 0.1)
+        # adaptive_velocity: velocity command per unit of position error (1/s)
+        add_param("kp", 2.0)
+        # adaptive_velocity: after the last waypoint's time, keep correcting toward it until
+        # every joint is within tolerance_fraction of its trajectory tolerance (or timeout s)
+        add_param("final_convergence.tolerance_fraction", 0.2)
+        add_param("final_convergence.timeout", 1.5)
         add_param("ki", 0.001)
         add_param("kd", 0.01)
         add_param("default_tolerance", 0.05)
@@ -1630,7 +1653,18 @@ class StretchTrajectoryActionServer:
         # waypoint's condition is met, even if joints are still moving
         add_param("settle_before_return", False)
         add_param("settle_duration", 0.25)
-        # per-joint tolerances (trajectory_tolerance.<joint>) are declared by the driver
+        # if False, trajectories that include BASE_ROTATION_JOINT fail
+        add_param("allow_rotation", False)
+        # the base turns at a feedforward speed plus kp * (heading error to the active
+        # waypoint), capped at max_velocity (rad/s); after the last waypoint it keeps
+        # correcting until within final_tolerance (rad) or settle_timeout (s) passes
+        add_param("base_rotation.kp", 2.0)
+        add_param("base_rotation.max_velocity", 0.5)
+        add_param("base_rotation.final_tolerance", 0.01)
+        add_param("base_rotation.settle_timeout", 2.0)
+        # per-joint tolerances (trajectory_tolerance.<joint>) are declared by the driver,
+        # except the base rotation's, which isn't a driver joint
+        add_param(f"trajectory_tolerance.{self.BASE_ROTATION_JOINT}", 0.02)
 
     def get_param(self, short_name):
         return self.driver.get_parameter(f"{self.param_prefix}.{short_name}").value
@@ -1649,6 +1683,8 @@ class StretchTrajectoryActionServer:
 
     def _check_joints_in_mode(self, joint_names, required_mode, goal_handle):
         for joint_name in joint_names:
+            if joint_name == self.BASE_ROTATION_JOINT:
+                continue  # driven by base velocity in every mode
             try:
                 j_mode = self.driver.get_parameter(f"joint_mode.{joint_name}").value
             except Exception:
@@ -1709,8 +1745,8 @@ class StretchTrajectoryActionServer:
         actual_positions = []
         actual_velocities = []
         for joint_name in joint_names:
-            joint_pose = self.driver.cmd_joint_position(joint_name)
-            joint_vel = self.driver.cmd_joint_velocity(joint_name)
+            joint_pose = self._joint_position(joint_name)
+            joint_vel = self._joint_velocity(joint_name)
             if joint_pose is None:
                 self.driver.logger.error(f"Joint {joint_name} has unknown position; returning 0.0 for current joint pose.")
                 joint_pose = 0.0
@@ -1725,6 +1761,64 @@ class StretchTrajectoryActionServer:
         feedback_msg.actual.velocities = actual_velocities
         feedback_msg.actual.time_from_start = Duration(seconds=elapsed_sec).to_msg()
         return feedback_msg
+
+    def _joint_position(self, joint_name):
+        if joint_name == self.BASE_ROTATION_JOINT:
+            return self._base_rotation()
+        return self.driver.cmd_joint_position(joint_name)
+
+    def _joint_velocity(self, joint_name):
+        if joint_name == self.BASE_ROTATION_JOINT:
+            return self.driver.last_odom.twist.twist.angular.z
+        return self.driver.cmd_joint_velocity(joint_name)
+
+    def _odom_heading(self):
+        q = self.driver.last_odom.pose.pose.orientation
+        return np.arctan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z))
+
+    def _start_base_rotation(self):
+        """Make the base's current heading BASE_ROTATION_JOINT's zero."""
+        self._last_heading = self._odom_heading()
+        self._rotation_since_start = 0.0
+
+    def _base_rotation(self):
+        """How far the base has turned since _start_base_rotation, without wrapping at pi."""
+        heading = self._odom_heading()
+        self._rotation_since_start += np.remainder(heading - self._last_heading + np.pi, 2 * np.pi) - np.pi
+        self._last_heading = heading
+        return self._rotation_since_start
+
+    def _command_base_rotation(self, target, feedforward=0.0):
+        """Turn the base toward `target` (BASE_ROTATION_JOINT position) at `feedforward`
+        (rad/s) plus base_rotation.kp times the error."""
+        velocity = feedforward + self.get_param("base_rotation.kp") * (target - self._base_rotation())
+        max_velocity = self.get_param("base_rotation.max_velocity")
+        self.driver.set_base_velocity(0.0, 0.0, float(np.clip(velocity, -max_velocity, max_velocity)))
+
+    def _settle_base_rotation(self, target, goal_handle, rate):
+        """Hold the base's heading control on the final waypoint until it's within
+        base_rotation.final_tolerance (or base_rotation.settle_timeout passes), then stop.
+        Returns an abort result if the goal is interrupted, else None."""
+        deadline = self.driver.get_clock().now() + Duration(seconds=self.get_param("base_rotation.settle_timeout"))
+        try:
+            while abs(target - self._base_rotation()) > self.get_param("base_rotation.final_tolerance"):
+                interrupt_result = self._check_for_interrupt(goal_handle)
+                if interrupt_result is not None:
+                    return interrupt_result
+                if self.driver.get_clock().now() > deadline:
+                    self.driver.get_logger().warn(
+                        f"Base heading is {target - self._base_rotation():.3f} rad from the final waypoint")
+                    return None
+                with self._server_commands():
+                    self._command_base_rotation(target)
+                rate.sleep()
+            return None
+        finally:
+            self._stop_base()
+
+    def _stop_base(self):
+        with self._server_commands():
+            self.driver.set_base_velocity(0.0, 0.0, 0.0)
 
     def _abort(self, goal_handle, error_code, error_string):
         self.active_joints = None
@@ -1763,6 +1857,10 @@ class StretchTrajectoryActionServer:
         # server (e.g. /joint_position_cmd) preempts it; see check_and_set_pos/vel.
         self.direct_command_preempted = False
         self.active_joints = list(trajectory.joint_names)
+        base_i = (trajectory.joint_names.index(self.BASE_ROTATION_JOINT)
+                  if self.BASE_ROTATION_JOINT in trajectory.joint_names else None)
+        if base_i is not None:
+            self._start_base_rotation()
 
         point_i = 0
         feedback_msg = self._get_feedback(trajectory.points[0], 0.0, trajectory.joint_names)
@@ -1810,7 +1908,23 @@ class StretchTrajectoryActionServer:
 
                 succeeded = True
                 with self._server_commands():
+                    if base_i is not None:
+                        # The base is driven every loop, toward the waypoint plus a feedforward
+                        # speed: the interpolated velocity in adaptive_velocity mode, and the
+                        # segment's average speed in the position modes, so it passes through
+                        # waypoints at speed instead of slowing to each one.
+                        if pos is None and vel is not None:
+                            feedforward = vel[base_i]
+                        else:
+                            segment_time = (self._msg_seconds(active_point.time_from_start)
+                                            - self._msg_seconds(prev_state.time_from_start))
+                            segment_distance = active_point.positions[base_i] - prev_state.positions[base_i]
+                            feedforward = segment_distance / segment_time if segment_time > 0.0 else 0.0
+                        self._command_base_rotation(active_point.positions[base_i], feedforward)
+
                     for joint_i, joint_name in enumerate(trajectory.joint_names):
+                        if joint_i == base_i:
+                            continue
                         if pos is not None:
                             if vel is not None:
                                 v = vel[joint_i]
@@ -1882,6 +1996,20 @@ class StretchTrajectoryActionServer:
                     break
             rate.sleep()
 
+        if not settle_on_position:
+            # In velocity mode the last waypoint is "reached" when its time comes, wherever
+            # the joints are; pull them onto it before stopping.
+            converge_result = self._converge_on_final_point(trajectory, goal_handle, rate, base_i)
+            if converge_result is not None:
+                return converge_result
+
+        if base_i is not None:
+            # The final waypoint counts as reached within the trajectory tolerance, while
+            # the base may still be turning; finish the turn more precisely, then stop.
+            settle_result = self._settle_base_rotation(trajectory.points[-1].positions[base_i], goal_handle, rate)
+            if settle_result is not None:
+                return settle_result
+
         if self.get_param("settle_before_return"):
             if not settle_on_position:
                 # Velocity-controlled joints keep moving at their last commanded
@@ -1899,6 +2027,39 @@ class StretchTrajectoryActionServer:
         result.error_string = "Completed trajectory successfully"
         self.driver.get_logger().info('Goal succeeded.')
         return result
+
+    def _converge_on_final_point(self, trajectory, goal_handle, rate, base_i):
+        """Velocity modes: command kp * (position error) toward the final waypoint until every
+        joint is within final_convergence.tolerance_fraction of its trajectory tolerance, or
+        final_convergence.timeout passes. The base rotation is left to _settle_base_rotation.
+        Returns an abort result if interrupted, else None."""
+        joints = [(joint, target) for i, (joint, target)
+                  in enumerate(zip(trajectory.joint_names, trajectory.points[-1].positions)) if i != base_i]
+        fraction = self.get_param("final_convergence.tolerance_fraction")
+        thresholds = [fraction * self._tolerance(joint) for joint, _ in joints]
+        kp = self.get_param("kp")
+        deadline = self.driver.get_clock().now() + Duration(seconds=self.get_param("final_convergence.timeout"))
+
+        while True:
+            interrupt_result = self._check_for_interrupt(goal_handle)
+            if interrupt_result is not None:
+                return interrupt_result
+            errors = [target - self._joint_position(joint) for joint, target in joints]
+            if all(abs(e) < t for e, t in zip(errors, thresholds)):
+                return None
+            if self.driver.get_clock().now() > deadline:
+                self.driver.get_logger().warn(
+                    f"Joints still off the final waypoint: "
+                    f"{ {joint: round(e, 4) for (joint, _), e in zip(joints, errors)} }")
+                return None
+            with self._server_commands():
+                for (joint, _), error in zip(joints, errors):
+                    self.driver.check_and_set_vel(joint, kp * error)
+            rate.sleep()
+
+    def _tolerance(self, joint_name):
+        tolerance = self.driver.get_parameter_or(f"{self.param_prefix}.trajectory_tolerance.{joint_name}").value
+        return self.get_param("default_tolerance") if tolerance is None else tolerance
 
     def _wait_until_settled(self, trajectory, goal_handle, start_time, rate, check_position):
         """Wait for the robot to stop moving at the end of the trajectory.
@@ -1952,6 +2113,9 @@ class StretchTrajectoryActionServer:
 
     def stop_vel_joints(self, joint_names):
         for joint_name in joint_names:
+            if joint_name == self.BASE_ROTATION_JOINT:
+                self._stop_base()
+                continue
             try:
                 j_mode = self.driver.get_parameter(f"joint_mode.{joint_name}").value
             except Exception:
@@ -2103,14 +2267,14 @@ class StretchTrajectoryActionServer:
                         (-12*tau + 6) * end_pos + 
                         (6*tau - 2) * h * v1) / (h**2)
 
-            # Clamp target velocity to maxv bound
-            next_vel = np.clip(vel_d, -maxv, maxv)
-
-            kp = 0.0
+            # 4. Feedforward + Feedback Command Calculation. The velocity command pulls
+            # the joint back toward the spline's position, so tracking errors don't build
+            # up over a long trajectory; clamp it to the maxv bound.
+            kp = self.get_param("kp")
             kd = 0.0
-            
-            # 4. Feedforward + Feedback Command Calculation
-            next_acc = accel_ff + kp * (pos_d - current_pos) + kd * (next_vel - current_vel)
+            next_vel = np.clip(vel_d + kp * (pos_d - current_pos), -maxv, maxv)
+
+            next_acc = accel_ff + kd * (next_vel - current_vel)
 
             # Enforce maximum acceleration limit maxa
             next_acc = np.clip(next_acc, -maxa, maxa)
@@ -2144,6 +2308,17 @@ class StretchTrajectoryActionServer:
             return result
 
         self.driver.get_logger().info(f'Executing trajectory in {mode} mode (mode cannot be changed during execution)')
+
+        if self.BASE_ROTATION_JOINT in goal_handle.request.trajectory.joint_names:
+            # Checked before the try block so its cleanup doesn't stop a base that
+            # someone else is driving.
+            if not self.get_param("allow_rotation"):
+                return self._abort(goal_handle, FollowJointTrajectory.Result.INVALID_JOINTS,
+                                   f"Trajectory includes {self.BASE_ROTATION_JOINT} but "
+                                   f"{self.param_prefix}.allow_rotation is false")
+            if self.driver.last_odom is None:
+                return self._abort(goal_handle, FollowJointTrajectory.Result.INVALID_GOAL,
+                                   f"No odometry yet for {self.BASE_ROTATION_JOINT}")
 
         try:
             trajectory = goal_handle.request.trajectory
