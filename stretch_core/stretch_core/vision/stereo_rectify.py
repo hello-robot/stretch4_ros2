@@ -23,8 +23,6 @@ EXTRINSICS_PATH = os.path.join(DEFAULT_CALIBRATION_FOLDER_PATH, "camera_extrinsi
 ROS_LEFT = (RGBCameras.head_left, "left_to_center", VisionFrames.camera_frame("left"))
 ROS_RIGHT = (RGBCameras.head_right, "right_to_center", VisionFrames.camera_frame("right"))
 
-# A 180 degree roll about the optical axis. stereoRectify leaves the pair upside down, which also
-# swaps left and right; folding this into R1/R2 makes the pair upright and correctly ordered.
 ROLL_FIX = np.diag([-1.0, -1.0, 1.0])
 
 
@@ -68,11 +66,16 @@ class StereoRectifier:
             cv2.CALIB_ZERO_DISPARITY, newImageSize=self.size,
             balance=balance, fov_scale=fov_scale)
 
-        # Roll both cameras 180 degrees into an upright, correctly-ordered frame. The principal
+        # A positive P2[0,3] means the right camera landed on the left: the pair is upside down. Only
+        # then roll both cameras 180 degrees into an upright, correctly-ordered frame. The principal
         # point follows the rotation, and the baseline term changes sign with the horizontal order.
-        self.R1, self.R2 = ROLL_FIX @ np.asarray(R1), ROLL_FIX @ np.asarray(R2)
         fx, fy = P1[0, 0], P1[1, 1]
-        cx, cy = width - 1 - P1[0, 2], height - 1 - P1[1, 2]
+        if P2[0, 3] > 0:
+            self.R1, self.R2 = ROLL_FIX @ np.asarray(R1), ROLL_FIX @ np.asarray(R2)
+            cx, cy = width - 1 - P1[0, 2], height - 1 - P1[1, 2]
+        else:
+            self.R1, self.R2 = np.asarray(R1), np.asarray(R2)
+            cx, cy = P1[0, 2], P1[1, 2]
         baseline = abs(P2[0, 3] / P1[0, 0])
         self.P1 = np.array([[fx, 0, cx, 0.0], [0, fy, cy, 0], [0, 0, 1, 0]])
         self.P2 = np.array([[fx, 0, cx, -fx * baseline], [0, fy, cy, 0], [0, 0, 1, 0]])
