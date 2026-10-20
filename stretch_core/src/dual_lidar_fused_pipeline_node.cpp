@@ -134,7 +134,7 @@ private:
     declare_parameter<std::string>("lidar2_topic", "/lidar_points_left");
     declare_parameter<std::string>("lidar1_frame", "lidar_right_link");
     declare_parameter<std::string>("lidar2_frame", "lidar_left_link");
-    declare_parameter<std::string>("cloud_topic", "/lidar_points");
+    declare_parameter<std::string>("cloud_topic", "/lidar_points_both");
     declare_parameter<std::string>("scan_topic", "/scan_filtered");
 
     declare_parameter<std::string>("target_frame", "base_link");

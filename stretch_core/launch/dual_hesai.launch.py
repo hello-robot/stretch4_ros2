@@ -102,7 +102,7 @@ def launch_setup(context, *args, **kwargs):
         ],
     )
 
-    # Publishes both /lidar_points and /scan_filtered.
+    # Publishes both /lidar_points_both and /scan_filtered.
     fused_pipeline_node = Node(
         package='stretch_core',
         executable='dual_lidar_fused_pipeline',
@@ -180,7 +180,7 @@ def generate_launch_description():
             'What runs after the lidar driver (default laserscan). '
             'laserscan: dual_lidar_laserscan publishes /scan_filtered; filter_type and '
             'pub_pointcloud apply. '
-            'fused: one node publishes /lidar_points and /scan_filtered; the enable_* args apply. '
+            'fused: one node publishes /lidar_points_both and /scan_filtered; the enable_* args apply. '
             'none: driver only, raw /lidar_points_left and /lidar_points_right.'),
     )
 

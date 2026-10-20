@@ -1,4 +1,4 @@
-# Fused dual-lidar pipeline: one node, one pass, both /lidar_points and /scan_filtered.
+# Fused dual-lidar pipeline: one node, one pass, both /lidar_points_both and /scan_filtered.
 /**:
   ros__parameters:
     # ---- topics and frames -------------------------------------------------------------
@@ -6,7 +6,7 @@
     lidar2_topic: /lidar_points_left
     lidar1_frame: lidar_right_link
     lidar2_frame: lidar_left_link
-    cloud_topic: /lidar_points
+    cloud_topic: /lidar_points_both
     scan_topic: /scan_filtered
 
     # Frame both outputs are computed in. Not named frame_id, which robot_self_filter.yaml

@@ -212,7 +212,7 @@ public:
   {
     declare_parameter<std::string>("left_topic", "/lidar_points_left");
     declare_parameter<std::string>("right_topic", "/lidar_points_right");
-    declare_parameter<std::string>("output_topic", "/lidar_points");
+    declare_parameter<std::string>("output_topic", "/lidar_points_both");
     declare_parameter<std::string>("target_frame", "base_link");
     declare_parameter<std::string>("ring_field", "ring");
     declare_parameter<std::string>("timestamp_field", "timestamp");
