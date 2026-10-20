@@ -3,6 +3,7 @@
 from abc import ABC, abstractmethod
 from enum import Enum
 from typing import Any
+import importlib
 import threading
 from threading import RLock
 import time
@@ -185,6 +186,11 @@ class Stretch4ROSDriver(Node, ABC):
         self.main_group = ReentrantCallbackGroup()
         self.mutex_group = MutuallyExclusiveCallbackGroup()
 
+        # Which trajectory server, if any, is sending the commands on this thread (see
+        # StretchTrajectoryActionServer._server_commands and note_joint_command).
+        self._command_source = threading.local()
+        self.trajectory_servers = []
+
         self._setup_common_pubs()
         self._setup_common_subs()
         self._setup_common_srvs()
@@ -238,8 +244,6 @@ class Stretch4ROSDriver(Node, ABC):
         self.last_joint_mode = {joint: "position" for joint in self.command_joints}
         self.position_tolerance = self.get_parameter('position_tolerance').value
 
-        
-        self.trajectory_command_active = threading.Event()
         
     def start(self): #called by subclasses once setup for control loop is done
         self.control_timer = self.create_timer(
@@ -550,6 +554,21 @@ class Stretch4ROSDriver(Node, ABC):
 
     def _setup_common_actions(self):
         self.trajectory_server = StretchTrajectoryActionServer(self)
+        self.trajectory_servers = [self.trajectory_server]
+        # More trajectory servers to run alongside the default one, as comma-separated
+        # "module:Class" names. Each class takes the driver and must use its own action name
+        # and parameter prefix (e.g. stretch_dynamic_trajectory's obstacle-aware server).
+        extra = self.declare_parameter("extra_trajectory_servers", "").value
+        for name in (n.strip() for n in extra.split(",")):
+            if not name:
+                continue
+            try:
+                module_name, class_name = name.split(":")
+                server_class = getattr(importlib.import_module(module_name), class_name)
+                self.trajectory_servers.append(server_class(self))
+                self.logger.info(f"Started trajectory server {name}")
+            except Exception as e:
+                self.logger.error(f"Couldn't start trajectory server {name}: {e}\n{traceback.format_exc()}")
 
     @abstractmethod
     def check_child_param(self, parameter: Parameter) -> tuple[bool,String]:
@@ -839,7 +858,7 @@ class Stretch4ROSDriver(Node, ABC):
                     reason = f"{n} must be a positive speed."
             # --- Read-Only/Static Parameters ---
             # (sensitivity is changeable at runtime; the concrete driver checks it.)
-            case n if n in ("control_loop_rate", "broadcast_odom_tf", "command_namespace") or n.startswith("tool_info."):
+            case n if n in ("control_loop_rate", "broadcast_odom_tf", "command_namespace", "extra_trajectory_servers") or n.startswith("tool_info."):
                 found = True
                 reason = f"Parameter '{parameter.name}' is read-only after startup."
             case n if n in [f"joint_acceleration.{joint}" for joint in self.command_joints] or \
@@ -890,12 +909,19 @@ class Stretch4ROSDriver(Node, ABC):
         self.set_base_velocity(twist.linear.x, twist.linear.y, twist.angular.z)
 
     def note_direct_base_command(self):
-        """A base command from outside the trajectory server preempts a trajectory that
-        rotates the base, as joint commands do for their joints (see check_and_set_pos)."""
-        if (self.trajectory_server is not None and
-            self.trajectory_server.active_joints is not None and
-            StretchTrajectoryActionServer.BASE_ROTATION_JOINT in self.trajectory_server.active_joints):
-            self.trajectory_server.direct_command_preempted = True
+        """A base command from outside a trajectory server preempts a trajectory that
+        rotates the base, as joint commands do for their joints (see note_joint_command)."""
+        self.note_joint_command(StretchTrajectoryActionServer.BASE_ROTATION_JOINT)
+
+    def note_joint_command(self, joint_name):
+        """A command to a joint preempts every trajectory server running a goal on that joint,
+        unless that server sent it (the newest command wins). Servers mark their own commands
+        with _server_commands, per thread, so a direct command arriving on another thread
+        while a server is mid-command still counts."""
+        source = getattr(self._command_source, "server", None)
+        for server in self.trajectory_servers:
+            if server is not source and server.active_joints is not None and joint_name in server.active_joints:
+                server.preempt(joint_name)
 
     def stiff_twist_callback(self, stiff_twist: TwistWithCovarianceStamped):
         """cmd_vel_stiff: a base velocity together with how stiffly to hold it (the
@@ -939,12 +965,7 @@ class Stretch4ROSDriver(Node, ABC):
 
     def check_and_set_vel(self, joint_name, goal, a = None):
         #self.logger.info(f"Setting joint {joint_name} to velocity {goal}")
-                
-        if (self.trajectory_server is not None and 
-            self.trajectory_server.active_joints is not None and 
-            joint_name in self.trajectory_server.active_joints and 
-            not self.trajectory_command_active.is_set()):
-            self.trajectory_server.direct_command_preempted = True
+        self.note_joint_command(joint_name)
 
         try:
             mode = self.get_parameter(f"joint_mode.{joint_name}").value
@@ -984,12 +1005,7 @@ class Stretch4ROSDriver(Node, ABC):
         
     def check_and_set_pos(self, joint_name, goal, v = None, a = None):
         #self.logger.info(f"Setting joint {joint_name} to position {goal}.")
-        
-        if (self.trajectory_server is not None and 
-            self.trajectory_server.active_joints is not None and 
-            joint_name in self.trajectory_server.active_joints and 
-            not self.trajectory_command_active.is_set()):
-            self.trajectory_server.direct_command_preempted = True
+        self.note_joint_command(joint_name)
 
         try:
             mode = self.get_parameter(f"joint_mode.{joint_name}").value
@@ -1556,14 +1572,18 @@ class StretchTrajectoryActionServer:
     # is set.
     BASE_ROTATION_JOINT = "mobile_base_rotation_joint"
 
-    def __init__(self, driver: Stretch4ROSDriver):
+    def __init__(self, driver: Stretch4ROSDriver, action_name="follow_joint_trajectory",
+                 param_prefix="trajectory_server", diagnostics_namespace="trajectory_server_diagnostics"):
+        """action_name, param_prefix and diagnostics_namespace let another server (a
+        subclass) run alongside this one."""
         # Store the reference to the parent node
         self.driver = driver
 
         self.active_joints = None
         self.direct_command_preempted = False
+        self.preempted_joints = set()  # joints whose direct command preempted the goal
 
-        self.param_prefix = "trajectory_server"
+        self.param_prefix = param_prefix
         self.declare_params()
 
         self.modes = ["adaptive_velocity",
@@ -1588,7 +1608,7 @@ class StretchTrajectoryActionServer:
         self._action_server = ActionServer(
             self.driver, # Bind the action server to the parent node
             FollowJointTrajectory,
-            'follow_joint_trajectory',
+            action_name,
             execute_callback=self.execute_callback,
             goal_callback=self.goal_callback,
             handle_accepted_callback=self.handle_accepted_callback,
@@ -1602,24 +1622,24 @@ class StretchTrajectoryActionServer:
         # can follow this robot's trajectories; actions have no introspection in Jazzy.
         self.pub_accepted_goals = self.driver.create_publisher(
             FollowJointTrajectory.Impl.SendGoalService.Request,
-            "follow_joint_trajectory/accepted_goals", qos_profile
+            f"{action_name}/accepted_goals", qos_profile
         )
         
         self.pub_actual_state = self.driver.create_publisher(
-            JointState, "trajectory_server_diagnostics/actual", qos_profile
+            JointState, f"{diagnostics_namespace}/actual", qos_profile
         )
 
         # Publisher for desired joint state diagnostics
         self.pub_desired_state = self.driver.create_publisher(
-            JointState, "trajectory_server_diagnostics/desired", qos_profile
+            JointState, f"{diagnostics_namespace}/desired", qos_profile
         )
 
         self.pub_commands = self.driver.create_publisher(
-            JointState, "trajectory_server_diagnostics/commands", qos_profile
+            JointState, f"{diagnostics_namespace}/commands", qos_profile
         )
 
         
-        self.driver.get_logger().info('FollowJointTrajectory Action Server has been initialized.')
+        self.driver.get_logger().info(f'FollowJointTrajectory Action Server {action_name} has been initialized.')
 
     def handle_accepted_callback(self, goal_handle):
         self.pub_accepted_goals.publish(FollowJointTrajectory.Impl.SendGoalService.Request(
@@ -1841,13 +1861,20 @@ class StretchTrajectoryActionServer:
 
     @contextmanager
     def _server_commands(self):
-        """Mark joint commands sent inside this block as coming from the trajectory
+        """Mark joint commands sent inside this block (on this thread) as coming from this
         server, so the driver doesn't treat them as direct commands that preempt it."""
-        self.driver.trajectory_command_active.set()
+        source = self.driver._command_source
+        previous = getattr(source, "server", None)
+        source.server = self
         try:
             yield
         finally:
-            self.driver.trajectory_command_active.clear()
+            source.server = previous
+
+    def preempt(self, joint_name):
+        """Called by the driver when another source commands a joint of the running goal."""
+        self.preempted_joints.add(joint_name)
+        self.direct_command_preempted = True
 
     def follow_trajectory(self, next_point_condition, first_loop_command, every_loop_command, trajectory, goal_handle, settle_on_position):
         self.driver.logger.info("Starting to follow trajectory")
@@ -1857,8 +1884,9 @@ class StretchTrajectoryActionServer:
         last_point_i = len(trajectory.points) - 1
 
         # While the trajectory runs, a command to any of its joints from outside the
-        # server (e.g. /joint_position_cmd) preempts it; see check_and_set_pos/vel.
+        # server (e.g. /joint_position_cmd) preempts it; see note_joint_command.
         self.direct_command_preempted = False
+        self.preempted_joints = set()
         self.active_joints = list(trajectory.joint_names)
         base_i = (trajectory.joint_names.index(self.BASE_ROTATION_JOINT)
                   if self.BASE_ROTATION_JOINT in trajectory.joint_names else None)
@@ -2117,7 +2145,12 @@ class StretchTrajectoryActionServer:
             rate.sleep()
 
     def stop_vel_joints(self, joint_names):
+        """Stop the goal's joints when it ends: velocity-mode joints at zero velocity,
+        position-mode joints at their current position. Joints another source took over
+        (preempted_joints) are left to it."""
         for joint_name in joint_names:
+            if joint_name in self.preempted_joints:
+                continue
             if joint_name == self.BASE_ROTATION_JOINT:
                 self._stop_base()
                 continue
@@ -2125,16 +2158,15 @@ class StretchTrajectoryActionServer:
                 j_mode = self.driver.get_parameter(f"joint_mode.{joint_name}").value
             except Exception:
                 j_mode = None
-            if j_mode != self.driver.velocity_mode:
-                self.driver.get_logger().warning(
-                    f"Not sending stop command: {joint_name} is in {j_mode} mode (must be in {self.driver.velocity_mode} mode to stop after trajectory)."
-                )
-
-            else:
-                with self._server_commands():
+            with self._server_commands():
+                if j_mode == self.driver.velocity_mode:
                     succeeded = self.driver.check_and_set_vel(joint_name, 0.0)
-                if not succeeded:
-                    self.driver.get_logger().warning(f"Stop command to {joint_name} failed.")
+                elif j_mode == self.driver.position_mode and self._joint_position(joint_name) is not None:
+                    succeeded = self.driver.check_and_set_pos(joint_name, self._joint_position(joint_name))
+                else:
+                    succeeded = False
+            if not succeeded:
+                self.driver.get_logger().warning(f"Stop command to {joint_name} ({j_mode} mode) failed.")
 
     def at_time(self, feedback_msg):
         actual_time = feedback_msg.actual.time_from_start.sec + feedback_msg.actual.time_from_start.nanosec*1e-9

@@ -1,6 +1,8 @@
 #! /usr/bin/env python3
 import array
 import copy
+import csv
+import os
 import sys
 import math
 import signal
@@ -222,6 +224,8 @@ class StretchMujocoDriver(Stretch4ROSDriver):
             "lidar_points_right",
             qos_profile=QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT),
         )
+        self._lidar_mounts = {}  # LiDAR link -> (rotation, translation) in base_footprint, from TF
+        self._lidar_ring_elevations = None  # rad per channel, from the sim's calibration table
 
         # pull_camera_data() reports the low-resolution center camera's frames under the
         # full-resolution camera, so the publishers are keyed by that one.
@@ -739,6 +743,47 @@ class StretchMujocoDriver(Stretch4ROSDriver):
                 return
             self.return_to_mode(self.prerunstop_mode)
 
+    def hesai_cloud(self, points_in_base, lidar_link, stamp):
+        """A cloud like the real Hesai driver's: points in the LiDAR's own frame, each with the
+        ring (laser channel) that measured it. The sim traces each channel at the elevation in
+        its calibration table, so the elevation of a point in the LiDAR's frame gives its ring.
+        None until TF has the LiDAR's mount."""
+        if self._lidar_ring_elevations is None:
+            with open(os.path.join(models_path, "stretch_4", "lidar_calibration.csv")) as f:
+                elevations = [float(row["Elevation"]) for row in csv.DictReader(f)]
+            self._lidar_ring_elevations = np.deg2rad(elevations)
+        if lidar_link not in self._lidar_mounts:
+            try:
+                t = self.tf_buffer.lookup_transform(self.frame_id("base_footprint"), self.frame_id(lidar_link), rclpyTime.Time())
+            except tf2_ros.TransformException:
+                self.logger.warning(f"No TF for {lidar_link} yet; not publishing its points", throttle_duration_sec=5.0)
+                return None
+            q = t.transform.rotation
+            x, y, z, w = q.x, q.y, q.z, q.w
+            rotation = np.array([[1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+                                 [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+                                 [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)]])
+            translation = np.array([t.transform.translation.x, t.transform.translation.y, t.transform.translation.z])
+            self._lidar_mounts[lidar_link] = (rotation, translation)
+        rotation, translation = self._lidar_mounts[lidar_link]
+
+        local = (np.asarray(points_in_base) - translation) @ rotation  # base -> LiDAR frame
+        elevation = np.arcsin(np.clip(local[:, 2] / np.linalg.norm(local, axis=1), -1.0, 1.0))
+        order = np.argsort(self._lidar_ring_elevations)
+        sorted_elevations = self._lidar_ring_elevations[order]
+        nearest = np.clip(np.searchsorted(sorted_elevations, elevation), 1, len(order) - 1)
+        nearest -= (elevation - sorted_elevations[nearest - 1]) < (sorted_elevations[nearest] - elevation)
+        cloud = np.zeros(len(local), dtype=[("x", "<f4"), ("y", "<f4"), ("z", "<f4"), ("ring", "<u2"), ("pad", "<u2")])
+        cloud["x"], cloud["y"], cloud["z"] = local[:, 0], local[:, 1], local[:, 2]
+        cloud["ring"] = order[nearest]
+        fields = [PointField(name="x", offset=0, datatype=PointField.FLOAT32, count=1),
+                  PointField(name="y", offset=4, datatype=PointField.FLOAT32, count=1),
+                  PointField(name="z", offset=8, datatype=PointField.FLOAT32, count=1),
+                  PointField(name="ring", offset=12, datatype=PointField.UINT16, count=1)]
+        header = Header(stamp=stamp, frame_id=self.frame_id(lidar_link))
+        return PointCloud2(header=header, height=1, width=len(cloud), fields=fields, is_bigendian=False,
+                           point_step=16, row_step=16 * len(cloud), is_dense=True, data=cloud.tobytes())
+
     def publish_camera_and_lidar(self, current_time: TimeMsg | None = None):
 
         current_time = current_time or self.get_clock().now().to_msg()
@@ -812,19 +857,12 @@ class StretchMujocoDriver(Stretch4ROSDriver):
                 left_pts = None
                 right_pts = None
             
-            if left_pts is not None and len(left_pts) > 0:
-                header = Header()
-                header.frame_id = self.frame_id("base_footprint")
-                header.stamp = current_time
-                cloud_msg_left = pc2.create_cloud_xyz32(header, left_pts)
-                self.lidar_left_pub.publish(cloud_msg_left)
-
-            if right_pts is not None and len(right_pts) > 0:
-                header = Header()
-                header.frame_id = self.frame_id("base_footprint")
-                header.stamp = current_time
-                cloud_msg_right = pc2.create_cloud_xyz32(header, right_pts)
-                self.lidar_right_pub.publish(cloud_msg_right)
+            for points, link, publisher in ((left_pts, "lidar_left_link", self.lidar_left_pub),
+                                            (right_pts, "lidar_right_link", self.lidar_right_pub)):
+                if points is not None and len(points) > 0:
+                    cloud = self.hesai_cloud(points, link, current_time)
+                    if cloud is not None:
+                        publisher.publish(cloud)
         except Exception as e:
             self.logger.error(f"Error publishing Hesai lidar points: {e}")  
             

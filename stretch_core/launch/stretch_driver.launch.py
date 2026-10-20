@@ -88,6 +88,10 @@ def generate_launch_description():
         description="Namespace of the command topics: '' = same as driver_namespace, '/' = root"
     )
     ld.add_action(declare_command_namespace_arg)
+    ld.add_action(DeclareLaunchArgument(
+        'extra_trajectory_servers', default_value='',
+        description=("Comma-separated module:Class names of more trajectory servers to run in the driver, e.g. "
+                    "stretch_dynamic_trajectory.server:DynamicTrajectoryActionServer")))
 
     # Puppet mode inputs
     ld.add_action(DeclareLaunchArgument(
@@ -182,6 +186,7 @@ def generate_launch_description():
                                           {'mode': mode},
                                           *optional_params,
                                           {'command_namespace': LaunchConfiguration('command_namespace')},
+                                          {'extra_trajectory_servers': LaunchConfiguration('extra_trajectory_servers')},
                                           {'puppet.joint_states_topic': LaunchConfiguration('puppet_joint_states_topic')},
                                           {'puppet.odom_topic': LaunchConfiguration('puppet_odom_topic')},
                                           {'puppet.follow_base': LaunchConfiguration('follow_base')}],

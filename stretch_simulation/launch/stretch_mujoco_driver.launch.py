@@ -39,6 +39,7 @@ stretch_driver_params = {
     "timeout": LaunchConfiguration("timeout"),
     "default_goal_timeout_s": LaunchConfiguration("default_goal_timeout_s"),
     "command_namespace": LaunchConfiguration("command_namespace"),
+    "extra_trajectory_servers": LaunchConfiguration("extra_trajectory_servers"),
     "puppet.joint_states_topic": LaunchConfiguration("puppet_joint_states_topic"),
     "puppet.odom_topic": LaunchConfiguration("puppet_odom_topic"),
     "puppet.follow_base": LaunchConfiguration("follow_base"),
@@ -206,6 +207,11 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "puppet_engage", default_value="",
             description="How the sim enters puppet mode: 'immediate' (the sim's default: jumps to the leader's pose), 'require_match' (only once it matches), or 'slow' (not implemented yet)",
+        ),
+        DeclareLaunchArgument(
+            "extra_trajectory_servers", default_value="",
+            description=("Comma-separated module:Class names of more trajectory servers to run in the driver, e.g. "
+                    "stretch_dynamic_trajectory.server:DynamicTrajectoryActionServer"),
         ),
         DeclareLaunchArgument(
             "tool", default_value="sg4",
