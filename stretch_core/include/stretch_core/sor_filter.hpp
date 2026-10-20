@@ -2,6 +2,7 @@
 
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
+#include <pcl/types.h>
 
 namespace stretch_core
 {
@@ -27,6 +28,10 @@ public:
 
   pcl::PointCloud<pcl::PointXYZ>::Ptr removeStatisticalOutliersNearRobot(
     const pcl::PointCloud<pcl::PointXYZ>::Ptr & cloud_in) const;
+
+  bool statisticalInlierIndices(
+    const pcl::PointCloud<pcl::PointXYZ>::Ptr & cloud_in,
+    pcl::Indices & inliers) const;
 
 private:
   SorFilterConfig config_;
