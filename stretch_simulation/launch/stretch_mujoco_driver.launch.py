@@ -10,10 +10,16 @@ from launch_ros.actions import Node
 import launch_ros
 
 from launch.conditions import IfCondition
-from stretch4_urdf import get_urdf
-from stretch4_mujoco import Stretch4MujocoSimulator
 
 from hello_helpers.launch_utils import get_rviz_node
+from stretch_mujoco_driver.install_stretch4_mujoco import ensure_stretch4_mujoco
+
+# Installs stretch4_mujoco (and stretch4_urdf with it) on the first launch, so it has to run before
+# they are imported.
+ensure_stretch4_mujoco()
+
+from stretch4_urdf import get_urdf  # noqa: E402
+from stretch4_mujoco import Stretch4MujocoSimulator  # noqa: E402
 
 if system() == "Linux":
     # this fixes rviz launch issue

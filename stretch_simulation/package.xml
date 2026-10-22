@@ -15,7 +15,7 @@
   <depend>hello_helpers</depend>
   <depend>stretch_core</depend>
   <depend>nav_msgs</depend>
-  <depend>python-transforms3d-pip</depend>
+  <depend>python3-transforms3d</depend>
   <depend>trajectory_msgs</depend>
   <depend>rclpy</depend>
   <depend>std_msgs</depend>
@@ -29,6 +29,11 @@
   <depend>xterm</depend>
 
   <exec_depend>diagnostic_aggregator</exec_depend>
+  <!-- Used by install_stretch4_mujoco.py to install stretch4_mujoco on the first launch -->
+  <exec_depend>git</exec_depend>
+  <exec_depend>python3-pip</exec_depend>
+  <!-- stretch4_urdf, installed with stretch4_mujoco, imports xacro from ROS -->
+  <exec_depend>xacro</exec_depend>
   <!-- Temporarily Disabled (see https://github.com/ros-perception/laser_filters/issues/132)
        exec_depend>laser_filters</exec_depend -->
   <exec_depend>joy</exec_depend>

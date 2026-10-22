@@ -2,16 +2,61 @@
 
 Use this package to use ROS2 with Stretch in Mujoco.
 
-## System Requirements
+## Getting Started
 
-Stretch Simulation supports the following environments:
+You need Ubuntu 24.04 with [ROS 2 Jazzy](https://docs.ros.org/en/jazzy/Installation/Ubuntu-Install-Debs.html) (`ros-jazzy-desktop`), and an Nvidia GPU is recommended. Minimum 16GB RAM, 32GB recommended.
 
-1. Native Ubuntu 24.04 workstation with an Nvidia GPU
-2. Docker environment with GPU support
+> Note: This package is not supported on MacOS, due to the lack of GPU acceleration and OpenGL 1.5+ support in Docker.
 
-Minimum: 16GB RAM. Recommended: 32GB RAM.
+```shell
+source /opt/ros/jazzy/setup.bash
+mkdir -p ~/ament_ws/src && cd ~/ament_ws/src
+git clone https://github.com/hello-robot/stretch4_ros2
+vcs import < stretch4_ros2/stretch_simulation/stretch_ros2_jazzy.repos
 
-> Note: This package is not supported on Metal (MacOS) at this time due to the lack of GPU acceleration and OpenGL 1.5+ support in Docker, and slow performance in UTM with a virtual machine.
+cd ~/ament_ws
+sudo rosdep init; rosdep update  # skip if rosdep is already set up
+rosdep install -iy --from-paths src --skip-keys "hesai_ros_driver python-pytorch-pip"
+colcon build --symlink-install --packages-up-to stretch_simulation stretch_nav2
+source install/setup.bash
+
+ros2 launch stretch_simulation stretch_mujoco_driver.launch.py
+```
+
+The first launch clones [stretch4\_mujoco](https://github.com/hello-robot/stretch4_mujoco) to `~/repos/stretch4_mujoco` and installs it editable with pip, which takes a few minutes. Changes you make in that checkout take effect on the next launch. To use a checkout somewhere else, set `STRETCH4_MUJOCO_PATH` before the first launch, or run `pip install --user --break-system-packages -e <path>` yourself.
+
+> Note: If you are on a Stretch robot, the workspace in `~/ament_ws` already has this package, so you only need the `ros2 launch` command.
+
+### RoboCasa scenes (optional)
+
+The `use_robocasa` launch argument and the pre-mapped kitchen scenes below need [RoboCasa](https://robocasa.ai/), which is not installed by default (its support for Python 3.12 is limited):
+
+```shell
+cd ~/repos/stretch4_mujoco
+git submodule update --init --depth 1
+pip install --user --break-system-packages -e ".[robocasa]" ./third_party/robosuite -e ./third_party/robocasa
+python3 third_party/robosuite/robosuite/scripts/setup_macros.py
+python3 third_party/robocasa/robocasa/scripts/setup_macros.py
+python3 third_party/robocasa/robocasa/scripts/download_kitchen_assets.py
+```
+
+### Docker
+
+The [Dockerfile](Dockerfile) adds Mujoco and Nvidia EGL rendering on top of the image our GitHub Action builds and tests ([.github/docker/Dockerfile](../.github/docker/Dockerfile)), which contains the full Stretch workspace, including Stretch Web Teleop. You need [Docker](https://docs.docker.com/engine/install/ubuntu/) and the [Nvidia Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html).
+
+```shell
+cd stretch4_ros2/stretch_simulation
+make build     # builds both images; the first build takes a while
+make test-gpu  # checks that the container can see the GPU and render with EGL
+make run       # opens a shell in the container
+```
+
+`make run` mounts your host checkouts over the container's copies, so you can edit them on the host:
+
+* This `stretch4_ros2` checkout is mounted at `~/ament_ws/src/stretch4_ros2`. The workspace is built with `--symlink-install`, so edits to existing Python and launch files apply right away. Run `colcon build --symlink-install` in the container after adding files or changing C++ code.
+* `~/repos/stretch4_mujoco` is mounted at the same path in the container, if you have a checkout there (set `MUJOCO_SRC=<path>` to use another one). If you change its dependencies, re-run `pip install --user --break-system-packages -e ~/repos/stretch4_mujoco` in the container.
+
+The base image builds the committed HEAD of this repo, so `make build` does not include uncommitted changes, but the mounts do. Use `make shell` to open more terminals in the running container.
 
 ## Launching
 
@@ -43,8 +88,6 @@ This launch file has many arguments that you can pass via the command-line.
 
 ## Nav2
 
-First go through the [Getting Started](./#getting-started) guide to set up your environment.
-
 ### Mapping
 
 This section is similar to https://docs.hello-robot.com/0.3/ros2/navigation\_stack/#mapping, but uses the Stretch simulation environment.
@@ -72,8 +115,8 @@ ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args --remap cmd_vel:
 To save your map, run:
 
 ```sh
-mkdir ${HELLO_FLEET_PATH}/maps
-ros2 run nav2_map_server map_saver_cli -f ${HELLO_FLEET_PATH}/maps/<map_name>
+mkdir -p ~/stretch_maps
+ros2 run nav2_map_server map_saver_cli -f ~/stretch_maps/<map_name>
 ```
 
 ### Navigation
@@ -87,7 +130,7 @@ ros2 launch stretch_simulation stretch_mujoco_driver.launch.py use_mujoco_viewer
 # Terminal 2: Navigation
 ros2 service call /switch_to_navigation_mode std_srvs/srv/Trigger
 
-ros2 launch stretch_nav2 navigation_mppi.launch.py map:=${HELLO_FLEET_PATH}/maps/<map_name>.yaml use_sim_time:=true use_rviz:=true teleop_type:=none
+ros2 launch stretch_nav2 navigation_mppi.launch.py map:=$HOME/stretch_maps/<map_name>.yaml use_sim_time:=true use_rviz:=true teleop_type:=none
 ```
 
 You may want to dynamically reduce the cost\_map inflation radius for most Robocasa environments:
@@ -123,7 +166,7 @@ ros2 param set /local_costmap/local_costmap  inflation_layer.inflation_radius 0.
 
 You can use Stretch Web Teleop with the Stretch Simulation environment!
 
-Before you start, install the dependencies for Stretch Web Teleop by following these [instructions](./#setting-up-stretch-web-teleop).
+This needs [stretch4\_web\_teleop](https://github.com/hello-robot/stretch4_web_teleop) in your workspace. The [Docker](#docker) image already has it.
 
 Use the following commands to start Stretch Mujoco with Web Teleop:
 
@@ -212,19 +255,3 @@ You could display all the launch options available to the Stretch Mujoco Driver 
 ```
 
 You can also set the node's argument `arguments=["--ros-args", "--log-level", "debug"]` in the launch file to display Sim-to-Real time and other useful debug information.
-
-## Getting Started
-
-You should go through all the sections in Getting Started to run this package correctly.
-
-> Note: If you are running on a Stretch robot, you may not need to run Stretch Simulation, unless you are trying to test out the simulation environment.
-
-Estimated install time: `~1-2hrs`.
-
-### Docker Install (Recommended)
-
-If you are on Linux or Windows, you can use the [Docker setup](README_DOCKER.md) to get started using Docker with hardware acceleration. This is not supported on MacOS due to the lack of OpenGL 1.5+ support in Docker.
-
-### Native Install
-
-If you would like to install Stretch Simulation directly on your host machine, please follow the [README\_SETUP](README_SETUP.md) instructions.
