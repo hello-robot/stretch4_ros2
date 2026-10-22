@@ -1,16 +1,6 @@
+# Source dependencies of stretch_simulation that are not released in rosdistro.
+# Import with: vcs import src < src/stretch4_ros2/stretch_simulation/stretch_ros2_jazzy.repos
 repositories:
-  stretch4_ros2:
-    type: git
-    url: https://github.com/hello-robot/stretch4_ros2
-    version: jazzy
-  stretch4_body:
-    type: git
-    url: https://github.com/hello-robot/stretch4_body.git
-    version: develop
-  nav2_costmap_2d:
-    type: git
-    url: https://github.com/olaghattas/nav2_costmap_2d
-    version: jazzy_debian
   ros2_numpy:
     type: git
     url: https://github.com/hello-robot/ros2_numpy
