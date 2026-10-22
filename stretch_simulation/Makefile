@@ -10,7 +10,14 @@ CONTAINER_HOME := /home/hello-robot
 ROS2_SRC ?= $(abspath ..)
 MUJOCO_SRC ?= $(HOME)/repos/stretch4_mujoco
 
+# `make build MOLMOSPACES=1` also installs MolmoSpaces (and torch) into the image.
+MOLMOSPACES ?= 0
+
+# MolmoSpaces downloads house assets here on first use; mounting it keeps them across containers.
+MOLMOSPACES_CACHE := $(HOME)/.cache/molmospaces
+
 MOUNTS := --volume $(ROS2_SRC):$(CONTAINER_HOME)/ament_ws/src/stretch4_ros2
+MOUNTS += --volume $(MOLMOSPACES_CACHE):$(CONTAINER_HOME)/.cache/molmospaces
 ifneq ($(wildcard $(MUJOCO_SRC)/pyproject.toml),)
 MOUNTS += --volume $(MUJOCO_SRC):$(CONTAINER_HOME)/repos/stretch4_mujoco
 endif
@@ -19,6 +26,7 @@ endif
 
 help:
 	@echo "make build     Build the CI base image, then the simulation image on top of it"
+	@echo "               (MOLMOSPACES=1 to also install MolmoSpaces)"
 	@echo "make run       Run the simulation container with the GPU, X11 and the dev mounts"
 	@echo "make shell     Open another shell in the running container"
 	@echo "make test-gpu  Check that the container can see the GPU and render with EGL"
@@ -31,9 +39,11 @@ build:
 		--build-arg BASE_IMAGE=$(BASE_IMAGE) \
 		--build-arg USER_UID=$$(id -u) \
 		--build-arg USER_GID=$$(id -g) \
+		--build-arg INSTALL_MOLMOSPACES=$(MOLMOSPACES) \
 		.
 
 run:
+	@mkdir -p $(MOLMOSPACES_CACHE)
 	@xhost +local:docker > /dev/null 2>&1 || true
 	docker run -it --rm \
 		--name $(CONTAINER_NAME) \

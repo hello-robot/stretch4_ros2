@@ -2,7 +2,7 @@ from platform import system
 import os
 
 from ament_index_python import get_package_share_path
-from launch import LaunchDescription
+from launch import LaunchContext, LaunchDescription
 from launch.actions import DeclareLaunchArgument, OpaqueFunction, Shutdown
 from launch.substitutions import Command, LaunchConfiguration
 import launch_ros.parameter_descriptions
@@ -12,7 +12,7 @@ import launch_ros
 from launch.conditions import IfCondition
 
 from hello_helpers.launch_utils import get_rviz_node
-from stretch_mujoco_driver.install_stretch4_mujoco import ensure_stretch4_mujoco
+from stretch_mujoco_driver.install_stretch4_mujoco import ensure_molmospaces, ensure_stretch4_mujoco
 
 # Installs stretch4_mujoco (and stretch4_urdf with it) on the first launch, so it has to run before
 # they are imported.
@@ -32,6 +32,7 @@ stretch_driver_params = {
     "use_cameras": LaunchConfiguration("use_cameras"),
     "use_mujoco_viewer": LaunchConfiguration("use_mujoco_viewer"),
     "use_robocasa": LaunchConfiguration("use_robocasa"),
+    "use_molmospaces": LaunchConfiguration("use_molmospaces"),
     "scene_xml": LaunchConfiguration("scene_xml"),
     "scene_name": LaunchConfiguration("scene_name"),
     "mode": LaunchConfiguration("mode"),
@@ -46,7 +47,19 @@ stretch_driver_params = {
 }
 
 
-def launch(context):
+def launch(context: LaunchContext) -> tuple:
+    """
+    Build the simulation's nodes from the resolved launch arguments.
+
+    Installs MolmoSpaces first when use_molmospaces is set, and passes the RoboCasa or MolmoSpaces
+    scene parameters to the driver only when that scene is in use.
+
+    Args:
+        context: The launch context the arguments are resolved in.
+
+    Returns:
+        The joint state publisher, robot state publisher, simulation driver and RViz actions.
+    """
 
     stretch_simulation_path = get_package_share_path("stretch_simulation")
 
@@ -73,6 +86,17 @@ def launch(context):
             robocasa_style
             if robocasa_style is not None
             else LaunchConfiguration("robocasa_style")
+        )
+
+    use_molmospaces = context.perform_substitution(stretch_driver_params["use_molmospaces"]) == "true"
+
+    if use_molmospaces:
+        ensure_molmospaces()
+
+        stretch_driver_params["molmospaces_dataset"] = LaunchConfiguration("molmospaces_dataset")
+        stretch_driver_params["molmospaces_split"] = LaunchConfiguration("molmospaces_split")
+        stretch_driver_params["molmospaces_house_index"] = launch_ros.parameter_descriptions.ParameterValue(
+            LaunchConfiguration("molmospaces_house_index"), value_type=int
         )
 
     model_name, batch_name, tool_name = Stretch4MujocoSimulator.get_default_model_batch_tool_names()
@@ -119,7 +143,13 @@ def launch(context):
     return joint_state_publisher, robot_state_publisher, stretch_sim, *get_rviz_node( str(stretch_simulation_path / "rviz" / "stretch_sim.rviz"), rviz_params={"use_sim_time": True})
 
 
-def generate_launch_description():
+def generate_launch_description() -> LaunchDescription:
+    """
+    Declare the simulation's launch arguments and defer building its nodes to launch().
+
+    Returns:
+        The launch description.
+    """
     launch_func = OpaqueFunction(function=launch)
 
     launch_args = [
@@ -174,6 +204,19 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "robocasa_task", default_value="PnPCounterToCab"
+        ),
+        DeclareLaunchArgument(
+            "use_molmospaces", default_value="false", choices=["true", "false"],
+            description="Spawn into a MolmoSpaces house. Installs MolmoSpaces (and torch) on first use",
+        ),
+        DeclareLaunchArgument(
+            "molmospaces_dataset", default_value="procthor-10k", description="MolmoSpaces house dataset",
+        ),
+        DeclareLaunchArgument(
+            "molmospaces_split", default_value="train", description="MolmoSpaces dataset split",
+        ),
+        DeclareLaunchArgument(
+            "molmospaces_house_index", default_value="0", description="House index within the MolmoSpaces split",
         ),
         DeclareLaunchArgument(
             "joint_state_rate", default_value="30.0", description="Joint state update rate",

@@ -39,8 +39,11 @@ WORKDIR /home/hello-robot
 
 # Clone stretch4_mujoco to ~/repos/stretch4_mujoco and install it editable, the same way the launch
 # files do on a first run. Copied from the build context so it matches this checkout, not the base.
+# INSTALL_MOLMOSPACES=1 also installs MolmoSpaces (and torch), for use_molmospaces:=true.
+ARG INSTALL_MOLMOSPACES=0
 COPY --chown=hello-robot:hello-robot stretch_mujoco_driver/install_stretch4_mujoco.py /tmp/install_stretch4_mujoco.py
-RUN python3 /tmp/install_stretch4_mujoco.py && rm /tmp/install_stretch4_mujoco.py
+RUN python3 /tmp/install_stretch4_mujoco.py $([ "${INSTALL_MOLMOSPACES}" = "1" ] && echo --molmospaces) && \
+    rm /tmp/install_stretch4_mujoco.py
 
 RUN grep -qxF 'source ~/ament_ws/install/setup.bash' ~/.bashrc || \
     echo 'source ~/ament_ws/install/setup.bash' >> ~/.bashrc

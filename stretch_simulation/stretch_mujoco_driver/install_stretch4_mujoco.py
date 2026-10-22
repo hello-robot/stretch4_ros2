@@ -3,11 +3,13 @@
 Install stretch4_mujoco into the Python environment that ROS 2 runs in.
 
 The simulation launch files call ensure_stretch4_mujoco() before importing stretch4_mujoco, so the
-first launch on a fresh computer clones and installs it. It can also be run directly:
+first launch on a fresh computer clones and installs it, and ensure_molmospaces() when a MolmoSpaces
+scene is requested. It can also be run directly:
 
-    python3 -m stretch_mujoco_driver.install_stretch4_mujoco
+    python3 -m stretch_mujoco_driver.install_stretch4_mujoco [--molmospaces]
 """
 
+import argparse
 import importlib.util
 import os
 import subprocess
@@ -34,14 +36,46 @@ def is_stretch4_mujoco_installed() -> bool:
     return importlib.util.find_spec("stretch4_mujoco") is not None
 
 
+def is_molmospaces_installed() -> bool:
+    """
+    Check whether MolmoSpaces (the molmo_spaces package) is importable by this Python interpreter.
+
+    Returns:
+        True if molmo_spaces can be imported, False otherwise.
+    """
+    return importlib.util.find_spec("molmo_spaces") is not None
+
+
+def pip_install(*requirements: str) -> None:
+    """
+    Install requirements with pip into this Python interpreter.
+
+    Outside a virtual environment the install goes to the user site-packages, which Ubuntu 24.04
+    only allows with --break-system-packages.
+
+    Args:
+        requirements: Arguments for `pip install`, e.g. "-e", a path, or requirement specifiers.
+
+    Returns:
+        None.
+
+    Raises:
+        subprocess.CalledProcessError: If pip fails.
+    """
+    pip_install_command = [sys.executable, "-m", "pip", "install"]
+    if sys.prefix == sys.base_prefix:
+        pip_install_command += ["--user", "--break-system-packages"]
+
+    subprocess.run([*pip_install_command, *requirements], check=True)
+
+
 def install_stretch4_mujoco() -> None:
     """
     Clone stretch4_mujoco if needed and install it, editable, into this Python interpreter.
 
     The repository is cloned shallowly to STRETCH4_MUJOCO_PATH (default ~/repos/stretch4_mujoco)
     unless a checkout is already there. It is installed editable so that changes to the checkout
-    take effect on the next launch. Outside a virtual environment the install goes to the user
-    site-packages, which Ubuntu 24.04 only allows with --break-system-packages.
+    take effect on the next launch.
 
     Returns:
         None.
@@ -57,12 +91,42 @@ def install_stretch4_mujoco() -> None:
             check=True,
         )
 
-    pip_install = [sys.executable, "-m", "pip", "install"]
-    if sys.prefix == sys.base_prefix:
-        pip_install += ["--user", "--break-system-packages"]
-
     print(f"Installing {STRETCH4_MUJOCO_PATH} with pip (this takes a few minutes)...", flush=True)
-    subprocess.run([*pip_install, "-e", str(STRETCH4_MUJOCO_PATH), *EXTRA_REQUIREMENTS], check=True)
+    pip_install("-e", str(STRETCH4_MUJOCO_PATH), *EXTRA_REQUIREMENTS)
+
+
+def ensure_molmospaces(stretch4_mujoco_path: Path | None = None) -> None:
+    """
+    Install MolmoSpaces through stretch4_mujoco's `molmo` extra, if it is missing.
+
+    The extra is installed against the stretch4_mujoco checkout that is already installed, wherever
+    it is, so that MolmoSpaces gets the versions that checkout pins. It pulls in torch, so it is
+    only installed when a MolmoSpaces scene is requested. No restart is needed: only the driver
+    node imports molmo_spaces, and it starts in a new process.
+
+    Args:
+        stretch4_mujoco_path: The stretch4_mujoco checkout to install the extra from. Defaults to
+            the one this interpreter imports stretch4_mujoco from.
+
+    Returns:
+        None.
+
+    Raises:
+        subprocess.CalledProcessError: If pip fails.
+    """
+    if is_molmospaces_installed():
+        return
+
+    if stretch4_mujoco_path is None:
+        # origin is <checkout>/stretch4_mujoco/__init__.py
+        stretch4_mujoco_path = Path(importlib.util.find_spec("stretch4_mujoco").origin).parents[1]
+
+    print(
+        f"MolmoSpaces is not installed. Installing {stretch4_mujoco_path}[molmo] with pip "
+        "(this downloads torch and takes a while)...",
+        flush=True,
+    )
+    pip_install("-e", f"{stretch4_mujoco_path}[molmo]")
 
 
 def ensure_stretch4_mujoco() -> None:
@@ -89,16 +153,28 @@ def ensure_stretch4_mujoco() -> None:
 
 def main() -> None:
     """
-    Install stretch4_mujoco if it is missing, without restarting the process.
+    Install stretch4_mujoco, and optionally MolmoSpaces, if missing, without restarting the process.
 
     Returns:
         None.
     """
+    parser = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
+    parser.add_argument(
+        "--molmospaces", action="store_true", help="Also install MolmoSpaces (pulls in torch)."
+    )
+    args = parser.parse_args()
+
+    stretch4_mujoco_path = None
     if is_stretch4_mujoco_installed():
         print("stretch4_mujoco is already installed.")
-        return
+    else:
+        install_stretch4_mujoco()
+        # The fresh editable install is not importable by this interpreter (see
+        # ensure_stretch4_mujoco()), so tell ensure_molmospaces() where it is.
+        stretch4_mujoco_path = STRETCH4_MUJOCO_PATH
 
-    install_stretch4_mujoco()
+    if args.molmospaces:
+        ensure_molmospaces(stretch4_mujoco_path)
 
 
 if __name__ == "__main__":

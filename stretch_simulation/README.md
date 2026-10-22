@@ -40,13 +40,27 @@ python3 third_party/robocasa/robocasa/scripts/setup_macros.py
 python3 third_party/robocasa/robocasa/scripts/download_kitchen_assets.py
 ```
 
+### MolmoSpaces scenes (optional)
+
+Spawn Stretch into a house from a [MolmoSpaces](https://github.com/allenai/molmospaces) dataset:
+
+```shell
+ros2 launch stretch_simulation stretch_mujoco_driver.launch.py use_molmospaces:=true molmospaces_house_index:=3
+```
+
+The first launch with `use_molmospaces:=true` installs stretch4\_mujoco's `molmo` extra, which pulls in torch, so it takes a while. Each house's assets are downloaded into `~/.cache/molmospaces` the first time it is used.
+
+* `molmospaces_dataset` (default `procthor-10k`), `molmospaces_split` (default `train`) and `molmospaces_house_index` (default `0`) pick the house.
+* `scene_xml:=/path/to/scene.xml` loads a MolmoSpaces scene file instead.
+* Stretch spawns at the centroid of the house's largest room. Odometry is in the house's coordinates, so `odom` starts at that point rather than at the origin.
+
 ### Docker
 
 The [Dockerfile](Dockerfile) adds Mujoco and Nvidia EGL rendering on top of the image our GitHub Action builds and tests ([.github/docker/Dockerfile](../.github/docker/Dockerfile)), which contains the full Stretch workspace, including Stretch Web Teleop. You need [Docker](https://docs.docker.com/engine/install/ubuntu/) and the [Nvidia Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html).
 
 ```shell
 cd stretch4_ros2/stretch_simulation
-make build     # builds both images; the first build takes a while
+make build     # builds both images; the first build takes a while. Add MOLMOSPACES=1 to include MolmoSpaces
 make test-gpu  # checks that the container can see the GPU and render with EGL
 make run       # opens a shell in the container
 ```
