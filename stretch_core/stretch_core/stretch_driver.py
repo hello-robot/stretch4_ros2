@@ -149,6 +149,7 @@ class StretchDriver(Stretch4ROSDriver):
         # end of arm's joints (wrists and tool).
         self.robot.pull_status()
         self._status_paths = {}
+        self._motor_to_joint_scales = {}
         self.joint_backends = {}
         for name, status in self.robot.status.items():
             if self._is_joint_status(status) and hasattr(self.robot, name):
@@ -223,6 +224,20 @@ class StretchDriver(Stretch4ROSDriver):
                 if key in d:
                     return d[key]
         return default
+
+    def _stepper_position_error(self, backend, status):
+        """(error in joint units, error in motor rad) from a stepper joint's controller, or
+        None for joints without a stepper (the Feetech servos). The joint-unit value is None
+        until the motor-to-joint scale is known: stretch4_body converts motor angle to joint
+        position by a fixed factor, which is read off the status once the motor is far
+        enough from zero to divide by."""
+        motor = status.get('motor')
+        if not isinstance(motor, dict) or 'err' not in motor:
+            return None
+        scale = self._motor_to_joint_scales.get(backend)
+        if scale is None and abs(motor['pos']) > 1.0:
+            scale = self._motor_to_joint_scales[backend] = status['pos'] / motor['pos']
+        return (motor['err'] * scale if scale is not None else None), motor['err']
 
     def _ros_joint_states(self, joint, pos, vel):
         """(name, position, velocity) for each /joint_states entry of a command joint."""
@@ -656,6 +671,10 @@ class StretchDriver(Stretch4ROSDriver):
         current_msg = DiagnosticStatus(name="current")
         in_collision_msg = DiagnosticStatus(name="in_collision")
         in_guarded_contact_msg = DiagnosticStatus(name="in_guarded_contact")
+        # The stepper controllers' error, stepper joints (lift, arm) only. In joint units
+        # (m) and in motor rad, the units of the stepper gains.
+        position_error_msg = DiagnosticStatus(name="position_error")
+        motor_position_error_msg = DiagnosticStatus(name="motor_position_error")
 
 
         robot_runstopped = bool(robot_status['power_periph']['runstop_event'])
@@ -678,6 +697,10 @@ class StretchDriver(Stretch4ROSDriver):
             is_runstopped_msg.values.append(KeyValue(key=joint, value=f"{is_runstopped}"))
             in_collision_msg.values.append(KeyValue(key=joint, value=f"{status['in_collision_stop']}"))
             in_guarded_contact_msg.values.append(KeyValue(key=joint, value=f"{self.joint_in_guarded_contact(robot_status, joint)}"))
+            position_error = self._stepper_position_error(backend, status)
+            if position_error is not None:
+                position_error_msg.values.append(KeyValue(key=joint, value=f"{position_error[0]}"))
+                motor_position_error_msg.values.append(KeyValue(key=joint, value=f"{position_error[1]}"))
         in_guarded_contact_msg.values.append(KeyValue(key="mobile_base", value=f"{self.base_in_guarded_contact(robot_status)}"))
 
         joint_state_diagnostics.status.append(is_runstopped_msg)
@@ -689,6 +712,8 @@ class StretchDriver(Stretch4ROSDriver):
         joint_state_diagnostics.status.append(current_msg)
         joint_state_diagnostics.status.append(in_collision_msg)
         joint_state_diagnostics.status.append(in_guarded_contact_msg)
+        joint_state_diagnostics.status.append(position_error_msg)
+        joint_state_diagnostics.status.append(motor_position_error_msg)
 
         return joint_state_diagnostics
 
