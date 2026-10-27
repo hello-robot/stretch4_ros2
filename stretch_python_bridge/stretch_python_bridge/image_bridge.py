@@ -30,15 +30,23 @@ class ImageFrame:
         return self.compression_format != ""
 
 
-def compressed_format_with_sequence(compression_format: str, sequence_number: int | None) -> str:
+def compressed_format_with_sequence(compression_format: str, sequence_number: int | None,
+                                    encoding: str = "bgr8") -> str:
     """Builds a CompressedImage.format string that also carries the sensor's sequence number.
 
     ROS 2 removed `header.seq` and sensor_msgs/CompressedImage has nowhere else to put a frame
-    counter, so publishers append it to the format string, e.g. "jpeg; seq=1234". Consumers that only
-    care about the codec (rviz, image_transport) read the leading token and ignore the remainder.
+    counter, so publishers append it to the format string, e.g. "bgr8; jpeg compressed bgr8; seq=1234".
+
+    image_transport's compressed decoder (used by rviz and image_view) reads the text before the
+    first ";" as the pixel encoding. So a bare codec such as "jpeg" is first written in
+    image_transport's own form, "<encoding>; jpeg compressed <encoding>": "jpeg; seq=1234" made
+    image_view fail with "Unknown encoding jpeg". Formats that already have a ";" (e.g.
+    "16UC1; compressedDepth png") are kept as they are.
     """
     if sequence_number is None:
         return compression_format
+    if ";" not in compression_format:
+        compression_format = f"{encoding}; {compression_format} compressed {encoding}"
     return f"{compression_format}; {SEQUENCE_NUMBER_KEY}={sequence_number}"
 
 
