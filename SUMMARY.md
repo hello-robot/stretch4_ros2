@@ -16,5 +16,3 @@
   * [LICENSE](stretch_python_bridge/LICENSE.md)
 * [Stretch Simulation in ROS2](stretch_simulation/README.md)
   * [LICENSE](stretch_simulation/LICENSE.md)
-  * [Docker Setup for Stretch Simulation with Nvidia GPU Support](stretch_simulation/README_DOCKER.md)
-  * [Setting up Stretch Simulation](stretch_simulation/README_SETUP.md)
