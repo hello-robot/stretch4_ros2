@@ -15,7 +15,6 @@
   <depend>hello_helpers</depend>
   <depend>stretch_core</depend>
   <depend>nav_msgs</depend>
-  <depend>python-transforms3d-pip</depend>
   <depend>trajectory_msgs</depend>
   <depend>rclpy</depend>
   <depend>std_msgs</depend>
