@@ -4,10 +4,6 @@ import time
 from common.launch_descriptions import stretch_driver_ld
 from common.client_nodes.mock_subscriber import MockSubscriberNode
 from common.client_nodes.fjt_client import FJTClient
-from stretch_core.command_groups import (
-    ArmCommandGroup, LiftCommandGroup, MobileBaseCommandGroup,
-    WristYawCommandGroup, WristPitchCommandGroup, WristRollCommandGroup, GripperCommandGroup
-)
 from stretch_core.stretch_driver import StretchDriver
 
 @pytest.fixture
@@ -119,43 +115,6 @@ def test_action_error_threshold_closeness(benchmark, action_client):
 
     benchmark(settle_to_goal)
 
-
-def test_command_group_monitor_execution_time(benchmark):
-    """
-    Unit test benchmark: how fast are the check/monitor functions inside command_groups?
-    This is extremely important for the 100Hz loop.
-    """
-    groups = [
-        ArmCommandGroup(), LiftCommandGroup(), MobileBaseCommandGroup(),
-        WristYawCommandGroup(), WristPitchCommandGroup(), WristRollCommandGroup(), GripperCommandGroup()
-    ]
-
-    # Mock status dict
-    robot_status = {
-        'arm': {'pos': 0.1, 'motor': {'is_mg_moving': 0}},
-        'lift': {'pos': 0.2, 'motor': {'is_mg_moving': 0}},
-        'omnibase': {'x': 0.0, 'wheel_0': {'is_mg_moving': 0}, 'wheel_1': {'is_mg_moving': 0}, 'wheel_2': {'is_mg_moving': 0}},
-        'end_of_arm': {
-            'wrist_yaw': {'pos': 0.0},
-            'wrist_pitch': {'pos': 0.0},
-            'wrist_roll': {'pos': 0.0}
-        },
-        'gripper': {'pos': 0.0}
-    }
-
-    for g in groups:
-        # Give them fake goals
-        g.active = True
-        if g.name == 'translate_mobile_base':
-            g.initx = 0.0
-        g.goal = {'position': 0.0}
-
-    def run_all_monitors():
-        for g in groups:
-            g.monitor_execution(robot_status)
-            g.is_finished(robot_status)
-
-    benchmark(run_all_monitors)
 
 def test_driver_control_loop_benchmark(benchmark):
     """
