@@ -16,23 +16,6 @@ namespace
 
 constexpr float kNoHitRange = std::numeric_limits<float>::infinity();
 
-bool hasValidHit(
-  const PipelineOutput & output,
-  const ScanProjectionConfig & scan_cfg,
-  size_t index)
-{
-  return output.hit_counts[index] > 0 &&
-         std::isfinite(output.ranges[index]) &&
-         output.ranges[index] < scan_cfg.range_max;
-}
-
-bool isFullCircleScan(const ScanProjectionConfig & scan_cfg)
-{
-  const float span = scan_cfg.angle_max - scan_cfg.angle_min;
-  const float full_circle = 2.0f * static_cast<float>(M_PI);
-  return span >= full_circle - (1.5f * scan_cfg.angle_increment);
-}
-
 void finalizeCloud(const pcl::PointCloud<pcl::PointXYZ>::Ptr & cloud)
 {
   cloud->width = static_cast<uint32_t>(cloud->points.size());
@@ -154,68 +137,21 @@ void DualLidarPipeline::applySpeckleFilter(
   const ScanProjectionConfig & scan_cfg,
   PipelineOutput & output) const
 {
-  if (!config_.speckle_filter_enabled ||
-    config_.speckle_min_points <= 0 ||
-    config_.speckle_neighbor_window <= 0 ||
-    config_.speckle_min_neighbors <= 0)
-  {
-    return;
-  }
+  SpeckleFilterConfig speckle;
+  speckle.enabled = config_.speckle_filter_enabled;
+  speckle.min_points = config_.speckle_min_points;
+  speckle.neighbor_window = config_.speckle_neighbor_window;
+  speckle.min_neighbors = config_.speckle_min_neighbors;
+  speckle.range_tolerance = config_.speckle_range_tolerance;
 
-  if (output.ranges.empty() || output.hit_counts.size() != output.ranges.size()) {
-    return;
-  }
-
-  const int num_ranges = static_cast<int>(output.ranges.size());
-  const bool wrap_scan = isFullCircleScan(scan_cfg);
-  const float range_tolerance = std::max(0.0f, config_.speckle_range_tolerance);
-  std::vector<float> filtered_ranges = output.ranges;
-
-  for (int i = 0; i < num_ranges; ++i) {
-    const size_t bin = static_cast<size_t>(i);
-    if (!hasValidHit(output, scan_cfg, bin) ||
-      output.hit_counts[bin] >= config_.speckle_min_points)
-    {
-      continue;
-    }
-
-    int similar_neighbors = 0;
-    for (int offset = -config_.speckle_neighbor_window;
-      offset <= config_.speckle_neighbor_window;
-      ++offset)
-    {
-      if (offset == 0) {
-        continue;
-      }
-
-      int neighbor = i + offset;
-      if (wrap_scan) {
-        neighbor %= num_ranges;
-        if (neighbor < 0) {
-          neighbor += num_ranges;
-        }
-      } else if (neighbor < 0 || neighbor >= num_ranges) {
-        continue;
-      }
-
-      const size_t neighbor_bin = static_cast<size_t>(neighbor);
-      if (hasValidHit(output, scan_cfg, neighbor_bin) &&
-        std::abs(output.ranges[neighbor_bin] - output.ranges[bin]) <= range_tolerance)
-      {
-        ++similar_neighbors;
-        if (similar_neighbors >= config_.speckle_min_neighbors) {
-          break;
-        }
-      }
-    }
-
-    if (similar_neighbors < config_.speckle_min_neighbors) {
-      filtered_ranges[bin] = kNoHitRange;
-      output.hit_counts[bin] = 0;
-    }
-  }
-
-  output.ranges.swap(filtered_ranges);
+  ScanBins bins;
+  bins.ranges.swap(output.ranges);
+  bins.hit_counts.swap(output.hit_counts);
+  stretch_core::applySpeckleFilter(
+    speckle, scan_cfg.angle_min, scan_cfg.angle_max, scan_cfg.angle_increment,
+    scan_cfg.range_max, bins);
+  output.ranges.swap(bins.ranges);
+  output.hit_counts.swap(bins.hit_counts);
 }
 
 PipelineOutput DualLidarPipeline::process(
