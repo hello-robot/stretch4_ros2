@@ -34,6 +34,7 @@ from stretch4_body.utils.tool_metadata import ToolConfigurationError, get_tool_m
 from tf_transformations import quaternion_from_euler
 
 from .joint_trajectory_server import JointTrajectoryAction
+from .command_groups import gripper_open_direction
 
 
 class StretchDriver(Node):
@@ -432,7 +433,8 @@ class StretchDriver(Node):
                 # move_by() takes a displacement in this tool's command units (Pct for SG4,
                 # aperture meters for PG4), so scale the rate by duration as the wrist joints do,
                 # then convert with convert_delta(), which is exact across PG4's linkage.
-                delta_urdf = joint_velocity * duration
+                # Only the generic aliases reach here, and they use + = open on every tool.
+                delta_urdf = gripper_open_direction() * joint_velocity * duration
                 at_urdf = self._gripper_position_urdf(joint_metadata)
                 joint_velocity = joint_metadata.convert_delta(
                     delta_urdf, "urdf", "command", at_urdf
@@ -625,14 +627,19 @@ class StretchDriver(Node):
                     joint_state.velocity.append(vel/4.0)
                     joint_state.effort.append(eff)
             elif cg.name == "gripper_joint" or cg.name == f"{RobotJoints.gripper.value}_joint":
-                tool_joint_names = list(RobotJoints.gripper.tool_joints)
-                if "gripper_joint" not in tool_joint_names:
-                    tool_joint_names.append("gripper_joint")
-                for link in tool_joint_names:
+                # Real tool joints in URDF units (for TF); the gripper_joint alias as + = open.
+                for link in RobotJoints.gripper.tool_joints:
+                    if link == "gripper_joint":
+                        continue
                     joint_state.name.append(link)
                     joint_state.position.append(pos)
                     joint_state.velocity.append(vel)
                     joint_state.effort.append(eff)
+                direction = gripper_open_direction()
+                joint_state.name.append("gripper_joint")
+                joint_state.position.append(direction * pos)
+                joint_state.velocity.append(direction * vel)
+                joint_state.effort.append(eff)
             elif cg.name == "translate_mobile_base":
                 for w in ['wheel_0_joint', 'wheel_1_joint', 'wheel_2_joint']:
                     joint_state.name.append(w)

@@ -263,8 +263,9 @@ class KeyboardTeleop(Node):
                 self.gripper_joint_type = 'parallel_gripper_joint'
                 # For parallel gripper, pos is finger_left_joint (which is absolute position or pos_mm)
                 # or we can read parallel_gripper_joint directly
-                if 'parallel_gripper_joint' not in self.joint_positions and 'finger_left_joint' in self.joint_positions:
-                    self.joint_positions['parallel_gripper_joint'] = self.joint_positions['finger_left_joint']
+                # Display the + = open alias, not the raw URDF finger_left_joint (negative-open on PG4)
+                if 'gripper_joint' in self.joint_positions:
+                    self.joint_positions['parallel_gripper_joint'] = self.joint_positions['gripper_joint']
             else:
                 self.gripper_joint_type = 'gripper_joint'
                 if 'gripper_joint' not in self.joint_positions and 'gripper_finger_left_joint' in self.joint_positions:

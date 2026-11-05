@@ -9,6 +9,17 @@ from hello_helpers.base_command_group import BaseCommandGroup, check_active
 if TYPE_CHECKING:
     from stretch_core.stretch_driver import StretchDriver
 
+def gripper_open_direction() -> float:
+    """
+    Sign that maps the tool's URDF finger joint onto the generic gripper aliases
+    (gripper_joint, <tool>_joint), so that on every tool + opens and - closes.
+    
+    """
+    try:
+        closed, opened = RobotJoints.gripper.urdf_range
+    except Exception:
+        return 1.0
+    return -1.0 if opened < closed else 1.0
 
 class WristYawCommandGroup(BaseCommandGroup):
 
@@ -138,6 +149,7 @@ class GripperCommandGroup(BaseCommandGroup):
     @override
     def __init__(self) -> None:
         super().__init__('gripper_joint')
+        self.direction = 1.0
 
     @property
     def gripper_joint_names(self) -> List[str]:
@@ -165,6 +177,8 @@ class GripperCommandGroup(BaseCommandGroup):
                     return False
                 self.index = commanded_joint_names.index(name)
                 self.active = True
+                # Real tool joints stay in URDF units; the generic aliases use + = open.
+                self.direction = 1.0 if name in RobotJoints.gripper.tool_joints else gripper_open_direction()
                 break
         return True
 
@@ -175,10 +189,11 @@ class GripperCommandGroup(BaseCommandGroup):
         if tool is None:
             return
 
-        goal_p = self.goal['position']
-        goal_v = self.goal['velocity']
-        goal_a = self.goal['acceleration']
-    
+        # Goal arrives in the commanded name's frame; convert to URDF.
+        d = self.direction
+        goal_p = d * self.goal['position']
+        goal_v = d * self.goal['velocity'] if self.goal['velocity'] is not None else None
+        goal_a = d * self.goal['acceleration'] if self.goal['acceleration'] is not None else None
     
         tool.move_to(
             RobotJoints.gripper.urdf_to_command(goal_p),
@@ -196,6 +211,7 @@ class GripperCommandGroup(BaseCommandGroup):
             return self.name, desired, 0.0, 0.0
 
         actual, _, _ = self.joint_state(robot_status)
+        actual *= self.direction
         self.error: float = desired - actual
         return self.name, desired, actual, self.error
 
