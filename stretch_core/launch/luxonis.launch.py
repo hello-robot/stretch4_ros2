@@ -80,6 +80,9 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "stereo_output_size", default_value="[1600,1200]",
             description="[width,height] of the rectified head stereo images. [0,0] = raw size."),
+        DeclareLaunchArgument(
+            "stereo_max_rate", default_value="0.0",
+            description="Max rate of the head stereo pair, Hz. 0 = every frame."),
     ]
 
     launch_args = stereo_args + [
@@ -106,6 +109,7 @@ def launch_setup(context, *args, **kwargs):
     is_use_stereo = is_launch_config_true(context, "use_stereo")
     stereo_pitch_deg = float(LaunchConfiguration("stereo_pitch_deg").perform(context))
     stereo_focal_px = float(LaunchConfiguration("stereo_focal_px").perform(context))
+    stereo_max_rate = float(LaunchConfiguration("stereo_max_rate").perform(context))
     stereo_output_size = [int(v) for v in
                           LaunchConfiguration("stereo_output_size").perform(context).strip("[] ").split(",")]
 
@@ -125,6 +129,7 @@ def launch_setup(context, *args, **kwargs):
                 "stereo_pitch_deg": stereo_pitch_deg,
                 "stereo_focal_px": stereo_focal_px,
                 "stereo_output_size": stereo_output_size,
+                "stereo_max_rate": stereo_max_rate,
                 "is_gripper": False,
             }
         ],

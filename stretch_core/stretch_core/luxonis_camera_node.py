@@ -82,6 +82,11 @@ class LuxonisCameraNode(Node):
             [1600, 1200],
             ParameterDescriptor(description=(
                 "[width, height] of the rectified head stereo images. [0, 0] = raw size.")))
+        self.declare_parameter(
+            'stereo_max_rate',
+            0.0,
+            ParameterDescriptor(description=(
+                "Max rate of the head stereo pair, Hz. 0 = every frame.")))
         self.declare_parameter('camera_namespace', 'camera')
         self.declare_parameter(
             'use_compressed',
@@ -132,6 +137,8 @@ class LuxonisCameraNode(Node):
         self.stereo_focal_px = float(self.get_parameter('stereo_focal_px').value)
         size = [int(v) for v in self.get_parameter('stereo_output_size').value]
         self.stereo_output_size = tuple(size) if len(size) == 2 and min(size) > 0 else None
+        self.stereo_max_rate = float(self.get_parameter('stereo_max_rate').value)
+        self.stereo_next_t = None
 
         # The device clock is shared by every camera on the device, so one offset estimator
         # serves them all and sees more samples than a per-camera one would.
@@ -384,6 +391,8 @@ class LuxonisCameraNode(Node):
         sources = {'left': getattr(frame, 'left', None), 'right': getattr(frame, 'right', None)}
         if any(f is None or f.image is None for f in sources.values()):
             return
+        if not self.stereo_rate_allows(sources['left'].timestamp):
+            return
 
         # One stamp for both images, or the stereo sync downstream will never pair them.
         stamp = self.create_stamp(sources['left'].timestamp)
@@ -411,6 +420,16 @@ class LuxonisCameraNode(Node):
             except Exception as ex:
                 self.get_logger().error(f"Failed to publish the {side} stereo image: {ex}")
                 return
+
+    def stereo_rate_allows(self, t: float) -> bool:
+        """Throttles by capture time on a fixed schedule, so jitter doesn't drop extra frames."""
+        if self.stereo_max_rate <= 0.0:
+            return True
+        if self.stereo_next_t is not None and t < self.stereo_next_t:
+            return False
+        period = 1.0 / self.stereo_max_rate
+        self.stereo_next_t = t + period if self.stereo_next_t is None else max(self.stereo_next_t + period, t)
+        return True
 
     def create_stamp(self, device_seconds: float):
         """The frame's timestamp as a ROS Time, on the system clock unless asked otherwise."""
