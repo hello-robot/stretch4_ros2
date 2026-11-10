@@ -67,6 +67,21 @@ class LuxonisCameraNode(Node):
                 "If true, publish the head cameras as a rectified, row-aligned stereo pair on "
                 "/cameras_head/stereo/{left,right}/, only while something subscribes. Needs both "
                 "head cameras enabled.")))
+        self.declare_parameter(
+            'stereo_pitch_deg',
+            25.0,
+            ParameterDescriptor(description=(
+                "Pitch of the rectified head stereo pair, degrees (> 0 up).")))
+        self.declare_parameter(
+            'stereo_focal_px',
+            400.0,
+            ParameterDescriptor(description=(
+                "Rectified head stereo focal length, pixels. 0 keeps OpenCV's.")))
+        self.declare_parameter(
+            'stereo_output_size',
+            [1600, 1200],
+            ParameterDescriptor(description=(
+                "[width, height] of the rectified head stereo images. [0, 0] = raw size.")))
         self.declare_parameter('camera_namespace', 'camera')
         self.declare_parameter(
             'use_compressed',
@@ -113,6 +128,10 @@ class LuxonisCameraNode(Node):
         self.use_compressed = self.get_parameter('use_compressed').value
         self.use_system_timestamp = self.get_parameter('use_system_timestamp').value
         self.fps = self.get_parameter('fps').value
+        self.stereo_pitch_deg = float(self.get_parameter('stereo_pitch_deg').value)
+        self.stereo_focal_px = float(self.get_parameter('stereo_focal_px').value)
+        size = [int(v) for v in self.get_parameter('stereo_output_size').value]
+        self.stereo_output_size = tuple(size) if len(size) == 2 and min(size) > 0 else None
 
         # The device clock is shared by every camera on the device, so one offset estimator
         # serves them all and sees more samples than a per-camera one would.
@@ -314,13 +333,17 @@ class LuxonisCameraNode(Node):
         """
         if self.stereo_rectifier is None:
             try:
-                self.stereo_rectifier = StereoRectifier()
+                self.stereo_rectifier = StereoRectifier(
+                    pitch_deg=self.stereo_pitch_deg, focal_px=self.stereo_focal_px,
+                    output_size=self.stereo_output_size)
                 self.stereo_camera_info = {
                     side: self.stereo_rectifier.camera_info(side) for side in ('left', 'right')
                 }
                 self.publish_stereo_tf(self.stereo_rectifier)
                 self.get_logger().info(
-                    f"Head stereo pair rectified with a {self.stereo_rectifier.baseline_m:.4f} m baseline.")
+                    f"Head stereo pair rectified with a {self.stereo_rectifier.baseline_m:.4f} m baseline: "
+                    f"{self.stereo_rectifier.size[0]}x{self.stereo_rectifier.size[1]}, "
+                    f"f={self.stereo_rectifier.P1[0, 0]:.1f} px, pitch {self.stereo_pitch_deg:+.1f} deg.")
             except Exception as ex:
                 self.get_logger().error(f"Cannot publish a head stereo pair: {ex}")
                 self.stereo_rectifier = False
