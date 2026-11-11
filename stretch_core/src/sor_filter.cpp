@@ -131,4 +131,23 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr SorFilter::removeStatisticalOutliersNearRobo
   return mergeNearAndOutside(sor_filtered, split.outside_roi);
 }
 
+bool SorFilter::statisticalInlierIndices(
+  const pcl::PointCloud<pcl::PointXYZ>::Ptr & cloud_in,
+  pcl::Indices & inliers) const
+{
+  inliers.clear();
+  if (!cloud_in ||
+    cloud_in->points.size() <= static_cast<size_t>(std::max(config_.sor_mean_k, 1)))
+  {
+    return false;
+  }
+
+  pcl::StatisticalOutlierRemoval<pcl::PointXYZ> sor;
+  sor.setInputCloud(cloud_in);
+  sor.setMeanK(config_.sor_mean_k);
+  sor.setStddevMulThresh(config_.sor_stddev);
+  sor.filter(inliers);
+  return true;
+}
+
 }  // namespace stretch_core

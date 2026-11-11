@@ -269,6 +269,16 @@ class StretchDriver(Node):
             self.driver_mode = new_mode
         self.robot.logger.info(f'Changed to mode = {self.driver_mode}')
 
+    def restore_mode_after_routine(self, last_driver_mode):
+        with self.driver_mode_lock:
+            if self.driver_mode == 'runstopped':
+                # Runstopped during the routine: stay runstopped, and return to the
+                # pre-routine mode (not the routine's mode) when the runstop is released
+                self.prerunstop_mode = last_driver_mode
+                return
+            self.driver_mode = last_driver_mode
+        self.robot.logger.info(f'Changed to mode = {last_driver_mode}')
+
     def home_the_robot(self):
         with self.driver_mode_lock:
             can_home = self.driver_mode in self.control_modes
@@ -280,7 +290,7 @@ class StretchDriver(Node):
         self.change_mode('homing')
         finished, _rid = self.robot.routines.routine_robot_home(
             do_push=False, wait_on_completion=True, timeout=60, do_pull=False)
-        self.change_mode(last_driver_mode)
+        self.restore_mode_after_routine(last_driver_mode)
         if not finished:
             return False, 'Homing routine did not complete.'
         return True, 'Homed.'
@@ -296,7 +306,7 @@ class StretchDriver(Node):
         self.change_mode('stowing')
         finished, _rid = self.robot.routines.routine_robot_stow(
             do_push=False, wait_on_completion=True, timeout=30, do_pull=False)
-        self.change_mode(last_driver_mode)
+        self.restore_mode_after_routine(last_driver_mode)
         if not finished:
             return False, 'Stowing routine did not complete.'
         return True, 'Stowed.'
@@ -312,7 +322,7 @@ class StretchDriver(Node):
         self.change_mode('seating')
         succeeded, _rid = self.robot.routines.routine_blind_dock(
             do_push=False, wait_on_completion=True, do_pull=False)
-        self.change_mode(last_driver_mode)
+        self.restore_mode_after_routine(last_driver_mode)
         return bool(succeeded), 'Success' if succeeded else 'Failure'
 
     def runstop_the_robot(self, runstopped, just_change_mode=False):

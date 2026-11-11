@@ -64,6 +64,21 @@ if(OpenMP_CXX_FOUND)
   target_link_libraries(dual_lidar_laserscan OpenMP::OpenMP_CXX)
 endif()
 
+add_executable(dual_lidar_fused_pipeline
+  src/dual_lidar_fused_pipeline_node.cpp
+  src/fused_lidar_pipeline.cpp
+  src/robot_self_filter.cpp
+  src/sor_filter.cpp
+  src/floor_plane_filter.cpp)
+ament_target_dependencies(dual_lidar_fused_pipeline ${lidar_filter_dependencies} pcl_conversions diagnostic_msgs)
+target_include_directories(dual_lidar_fused_pipeline PUBLIC
+  ${EIGEN3_INCLUDE_DIRS}
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
+target_link_libraries(dual_lidar_fused_pipeline ${PCL_LIBRARIES})
+if(OpenMP_CXX_FOUND)
+  target_link_libraries(dual_lidar_fused_pipeline OpenMP::OpenMP_CXX)
+endif()
+
 add_executable(dual_lidar_pointcloud_merger
   src/dual_lidar_pointcloud_merger_node.cpp)
 target_link_libraries(dual_lidar_pointcloud_merger OpenMP::OpenMP_CXX)
@@ -91,6 +106,7 @@ target_include_directories(robot_footprint_publisher PUBLIC
 
 install(TARGETS
   dual_lidar_laserscan
+  dual_lidar_fused_pipeline
   dual_lidar_pointcloud_merger
   robot_footprint_publisher
   DESTINATION lib/${PROJECT_NAME}

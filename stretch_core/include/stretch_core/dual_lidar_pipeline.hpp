@@ -16,6 +16,7 @@
 
 #include "stretch_core/floor_plane_filter.hpp"
 #include "stretch_core/pipeline_stages.hpp"
+#include "stretch_core/scan_speckle_filter.hpp"
 #include "stretch_core/region_filter.hpp"
 #include "stretch_core/robot_self_filter.hpp"
 #include "stretch_core/sor_filter.hpp"
