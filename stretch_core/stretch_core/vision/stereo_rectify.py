@@ -29,7 +29,9 @@ ROLL_FIX = np.diag([-1.0, -1.0, 1.0])
 class StereoRectifier:
     """Builds and applies the rectifying remap for the head stereo pair."""
 
-    def __init__(self, balance: float = 0.0, fov_scale: float = 1.0):
+    def __init__(self, balance: float = 0.0, fov_scale: float = 1.0, pitch_deg: float = 0.0,
+                 focal_px: float = 0.0, output_size: tuple[int, int] | None = None):
+        """pitch_deg > 0 looks up; focal_px 0 keeps OpenCV's; output_size None = raw size."""
         with open(EXTRINSICS_PATH) as f:
             ext = yaml.safe_load(f)
 
@@ -50,11 +52,15 @@ class StereoRectifier:
         (lcam, lext, lframe), (rcam, rext, rframe) = ROS_LEFT, ROS_RIGHT
         self.PARENT_FRAME = {"left": lframe, "right": rframe}
 
-        K1, D1, self.size = intrinsics(lcam)
+        K1, D1, raw_size = intrinsics(lcam)
         K2, D2, size2 = intrinsics(rcam)
-        if size2 != self.size:
-            raise RuntimeError(f"{lcam.name} is {self.size} but {rcam.name} is {size2}; both must match.")
-        width, height = self.size
+        if size2 != raw_size:
+            raise RuntimeError(f"{lcam.name} is {raw_size} but {rcam.name} is {size2}; both must match.")
+        width, height = raw_size
+        custom = bool(pitch_deg) or focal_px > 0 or output_size is not None
+        self.size = tuple(int(v) for v in output_size) if output_size is not None else raw_size
+        if self.size[0] > width or self.size[1] > height or min(self.size) <= 0:
+            raise RuntimeError(f"Rectified size {self.size} must be positive and at most the raw {raw_size}.")
 
         # Pose of each camera in the head-centre frame, composed into left -> right.
         T_right_left = np.linalg.inv(np.array(ext[rext], dtype=np.float64)) @ np.array(ext[lext], dtype=np.float64)
@@ -62,8 +68,8 @@ class StereoRectifier:
         T = np.ascontiguousarray(T_right_left[:3, 3]).reshape(3, 1)
 
         R1, R2, P1, P2, self.Q = cv2.fisheye.stereoRectify(
-            K1, D1, K2, D2, self.size, R, T,
-            cv2.CALIB_ZERO_DISPARITY, newImageSize=self.size,
+            K1, D1, K2, D2, raw_size, R, T,
+            cv2.CALIB_ZERO_DISPARITY, newImageSize=raw_size,
             balance=balance, fov_scale=fov_scale)
 
         # A positive P2[0,3] means the right camera landed on the left: the pair is upside down. Only
@@ -77,6 +83,14 @@ class StereoRectifier:
             self.R1, self.R2 = np.asarray(R1), np.asarray(R2)
             cx, cy = P1[0, 2], P1[1, 2]
         baseline = abs(P2[0, 3] / P1[0, 0])
+        if custom:
+            # Same pitch for both cameras about the baseline keeps rows aligned.
+            a = np.radians(-pitch_deg)
+            Rx = np.array([[1.0, 0, 0], [0, np.cos(a), -np.sin(a)], [0, np.sin(a), np.cos(a)]])
+            self.R1, self.R2 = Rx @ self.R1, Rx @ self.R2
+            if focal_px > 0:
+                fx = fy = float(focal_px)
+            cx, cy = (self.size[0] - 1) / 2.0, (self.size[1] - 1) / 2.0
         self.P1 = np.array([[fx, 0, cx, 0.0], [0, fy, cy, 0], [0, 0, 1, 0]])
         self.P2 = np.array([[fx, 0, cx, -fx * baseline], [0, fy, cy, 0], [0, 0, 1, 0]])
 
