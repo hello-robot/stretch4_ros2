@@ -25,6 +25,7 @@ from rclpy.executors import MultiThreadedExecutor
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 
+from std_msgs.msg import Empty
 from std_srvs.srv import Trigger
 from rcl_interfaces.msg import ParameterDescriptor, SetParametersResult
 from sensor_msgs.msg import BatteryState, JointState, PointCloud2, Image
@@ -157,6 +158,8 @@ class DockRobotAction:
         self.last_feedback_time = 0.0
         self.stow_future = None
         self.seating_future = None
+        self.stop_requested = threading.Event()
+        self._aborting = threading.Event()
 
         self.latest_goal_uuid: bytes | None = None  # Used as a signal for preemption
         self.latest_goal_lock = threading.Lock()
@@ -257,6 +260,7 @@ class DockRobotAction:
         self.goal_start = self.node.get_clock().now()
         self.reacquire_count = 0
         self.last_feedback_time = 0.0
+        self.stop_requested.clear()
 
         # FSM stepping logic
         goal: DockRobot.Goal = goal_handle.request
@@ -283,12 +287,13 @@ class DockRobotAction:
         except DockFailure as e:
             return self.error_result(goal_handle, e.error_code, e.msg)
         finally:
-            self._abort_active_phase()
-            self.node.navigator.cancelTask()
+            prev_state = self.machine.state
             self.machine.set_state(AutodockState.READY)
+            self._abort_active_phase(prev_state)
+            self.node.navigator.cancelTask()
             self.goal_idle.set()
 
-    def _abort_active_phase(self) -> None:
+    def _abort_active_phase(self, prev_state: AutodockState) -> None:
         """
         Stop active driver motion or routines when exiting an incomplete docking goal.
 
@@ -296,27 +301,31 @@ class DockRobotAction:
         unwinding after issuing stop_the_robot.
 
         Args:
-            None.
+            prev_state: State machine phase that was active when the goal exited.
 
         Returns:
             None.
         """
-        state = self.machine.state
-        if state is AutodockState.SERVOING:
+        if prev_state is AutodockState.SERVOING:
             self.node.stop_base.call_async(Trigger.Request())
             return
 
         active_future = None
-        if state is AutodockState.BLIND_DOCKING:
+        if prev_state is AutodockState.BLIND_DOCKING:
             active_future = self.seating_future
-        elif state is AutodockState.STOWING:
+        elif prev_state is AutodockState.STOWING:
             active_future = self.stow_future
 
         if active_future is not None and not active_future.done():
-            self.node.stop_robot.call_async(Trigger.Request())
-            deadline = time.time() + 5.0
-            while not active_future.done() and time.time() < deadline:
-                self.rate.sleep()
+            self._aborting.set()
+            try:
+                if not self.stop_requested.is_set():
+                    self.node.stop_robot.call_async(Trigger.Request())
+                deadline = time.time() + 5.0
+                while not active_future.done() and time.time() < deadline:
+                    self.rate.sleep()
+            finally:
+                self._aborting.clear()
 
     def publish_feedback(self, goal_handle: ServerGoalHandle) -> None:
         now = time.time()
@@ -339,11 +348,23 @@ class DockRobotAction:
         with self.latest_goal_lock:
             return self.latest_goal_uuid != my_uuid
 
-    def check_interrupts(self, goal_handle, my_uuid):
+    def check_interrupts(self, goal_handle: ServerGoalHandle, my_uuid: bytes) -> None:
+        """
+        Raise an interrupt exception if the goal was canceled, preempted, or externally stopped.
+
+        Args:
+            goal_handle: Active action server goal handle.
+            my_uuid: Byte representation of this goal's UUID.
+
+        Returns:
+            None.
+        """
         if goal_handle.is_cancel_requested:
             raise Cancelled
         if self._preempted(my_uuid):
             raise Preempted
+        if self.stop_requested.is_set():
+            raise DockFailure(DockRobot.Result.UNKNOWN, "Docking stopped via stop_the_robot")
 
     def draw_state_machine(self):
         png = self.machine.draw(None, format='png')
@@ -632,6 +653,9 @@ class DockingServer(Node):
         self.stow_targets = ensure_stow.stow_targets()
         self.joint_positions = None
         self.joint_state_time = 0.0
+        self.create_subscription(
+            Empty, 'stop_the_robot_event', self.stop_event_cb, 10,
+            callback_group=self.action_group)
 
         cloud_qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -707,6 +731,21 @@ class DockingServer(Node):
         self.joint_positions = ensure_stow.positions_from_joint_state(
             dict(zip(msg.name, msg.position)))
         self.joint_state_time = time.time()
+
+    def stop_event_cb(self, _msg: Empty) -> None:
+        """
+        Flag an active docking goal for abort when stop_the_robot is invoked externally.
+
+        Args:
+            _msg: Empty notification published by stretch_driver on stop_the_robot.
+
+        Returns:
+            None.
+        """
+        action = getattr(self, 'action', None)
+        if action is None or action.goal_idle.is_set() or action._aborting.is_set():
+            return
+        action.stop_requested.set()
 
     def sync_dock_parameter(self) -> None:
         """Mirror the loaded dock ids into the `docks` parameter."""
@@ -809,10 +848,22 @@ class DockingServer(Node):
             return
         self.dock_confirm_count = 0
 
-    def cloud_cb(self, right_cloud: PointCloud2, left_cloud: PointCloud2):
+    def cloud_cb(self, right_cloud: PointCloud2, left_cloud: PointCloud2) -> None:
+        """
+        Process synchronized left and right LiDAR point clouds for dock scanning or servoing.
+
+        Args:
+            right_cloud: PointCloud2 message from the right head LiDAR.
+            left_cloud: PointCloud2 message from the left head LiDAR.
+
+        Returns:
+            None.
+        """
         # Keep track of how large a point cloud should be (~115200 for single-return, ~230400 for dual-return)
         self.full_points = max(self.full_points, max(right_cloud.width * right_cloud.height, left_cloud.width * left_cloud.height))
 
+        if self.action.stop_requested.is_set():
+            return
         if self.action.machine.state is AutodockState.STAGING_AND_SCANNING:
             self.scanning_only(right_cloud, left_cloud)
             return
@@ -888,6 +939,8 @@ class DockingServer(Node):
         t4 = time.perf_counter()
 
         # Compute & send control
+        if self.action.stop_requested.is_set() or self.action.machine.state is not AutodockState.SERVOING:
+            return
         current_time = self.get_clock().now().to_msg()
         u, ctrl_viz = self.compute_control(dock_pose, costmap, current_time)
         self.cmd_vel_pub.publish(u)

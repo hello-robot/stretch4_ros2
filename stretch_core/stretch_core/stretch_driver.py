@@ -25,7 +25,7 @@ from rclpy.parameter import Parameter
 from rclpy.publisher import Publisher
 from rclpy.qos import QoSDurabilityPolicy, QoSProfile
 from sensor_msgs.msg import BatteryState, Imu, JointState, Joy, MagneticField
-from std_msgs.msg import Bool, String
+from std_msgs.msg import Bool, Empty, String
 from std_srvs.srv import SetBool, Trigger
 from stretch4_body.core.gamepad_control_mappings import ControlMapping
 from stretch4_body.core.gamepad_teleop import GamePadTeleop
@@ -106,6 +106,7 @@ class StretchDriver(Node):
         self.diagnostics_pub = self.create_publisher(DiagnosticArray, '/diagnostics', 1) # Diagnostics are centralized, so we publish to a single global /diagnostics topic
         self.lease_holder_pub = self.create_publisher(DiagnosticStatus, 'server_lease_holder', 1)
         self.joint_state_diagnostics_pub = self.create_publisher(DiagnosticArray, 'joint_states_diagnostics', 1)
+        self.stop_event_pub = self.create_publisher(Empty, 'stop_the_robot_event', 10)
 
         # Saved Message States (for latched topics)
         self.last_published_value = {}
@@ -290,10 +291,45 @@ class StretchDriver(Node):
             self.driver_mode = last_driver_mode
         self.robot.logger.info(f'Changed to mode = {last_driver_mode}')
 
-    def home_the_robot(self):
+    def _queue_stop_all_actuators(self) -> None:
+        """
+        Queue hardware stop commands on the base and all calibrated ranged joints.
+
+        Caller must hold driver_mode_lock.
+
+        Args:
+            None.
+
+        Returns:
+            None.
+        """
+        self.robot.omnibase.hard_stop()
+        if hasattr(self.robot, 'lift') and self.robot.lift.is_homed():
+            self.robot.lift.move_by(0.0)
+        if hasattr(self.robot, 'arm') and self.robot.arm.is_homed():
+            self.robot.arm.move_by(0.0)
+        if hasattr(self.robot, 'end_of_arm') and hasattr(self.robot.end_of_arm, 'joints'):
+            for joint in self.robot.end_of_arm.joints:
+                if self.robot.end_of_arm.is_homed(joint):
+                    self.robot.end_of_arm.hold_position(joint)
+
+    def home_the_robot(self) -> tuple[bool, str]:
+        """
+        Execute the robot homing routine and restore the prior driver mode on completion.
+
+        Stops calibrated actuators and returns False if the routine is canceled mid-flight.
+
+        Args:
+            None.
+
+        Returns:
+            A tuple of (succeeded, message) describing homing completion status.
+        """
         with self.driver_mode_lock:
             can_home = self.driver_mode in self.control_modes
             last_driver_mode = copy.copy(self.driver_mode)
+            if can_home:
+                self._routine_canceled = False
         if not can_home:
             errmsg = f'Cannot home while in mode={last_driver_mode}.'
             self.robot.logger.error(errmsg)
@@ -301,15 +337,34 @@ class StretchDriver(Node):
         self.change_mode('homing')
         finished, _rid = self.robot.routines.routine_robot_home(
             do_push=False, wait_on_completion=True, timeout=60, do_pull=False)
+        with self.driver_mode_lock:
+            canceled = self._routine_canceled
+            if canceled:
+                self._queue_stop_all_actuators()
         self.restore_mode_after_routine(last_driver_mode)
+        if canceled:
+            return False, 'Homing routine canceled.'
         if not finished:
             return False, 'Homing routine did not complete.'
         return True, 'Homed.'
 
-    def stow_the_robot(self):
+    def stow_the_robot(self) -> tuple[bool, str]:
+        """
+        Execute the robot stowing routine and restore the prior driver mode on completion.
+
+        Stops calibrated actuators and returns False if the routine is canceled mid-flight.
+
+        Args:
+            None.
+
+        Returns:
+            A tuple of (succeeded, message) describing stowing completion status.
+        """
         with self.driver_mode_lock:
             can_stow = self.driver_mode in self.control_modes
             last_driver_mode = copy.copy(self.driver_mode)
+            if can_stow:
+                self._routine_canceled = False
         if not can_stow:
             errmsg = f'Cannot stow while in mode={last_driver_mode}.'
             self.robot.logger.error(errmsg)
@@ -317,7 +372,15 @@ class StretchDriver(Node):
         self.change_mode('stowing')
         finished, _rid = self.robot.routines.routine_robot_stow(
             do_push=False, wait_on_completion=True, timeout=30, do_pull=False)
+        with self.driver_mode_lock:
+            canceled = self._routine_canceled
+            if canceled:
+                # RobotServer drops actuator commands while a routine is active, so queue
+                # the stop here after routine_robot_stow returns to routine_nop.
+                self._queue_stop_all_actuators()
         self.restore_mode_after_routine(last_driver_mode)
+        if canceled:
+            return False, 'Stowing routine canceled.'
         if not finished:
             return False, 'Stowing routine did not complete.'
         return True, 'Stowed.'
@@ -378,7 +441,7 @@ class StretchDriver(Node):
         self, request: Trigger.Request, response: Trigger.Response
     ) -> Trigger.Response:
         """
-        Cancel any active driver routine and command zero motion on all actuators.
+        Cancel active routines or trajectories and command all actuators to stop.
 
         Args:
             request: Empty trigger request.
@@ -387,20 +450,16 @@ class StretchDriver(Node):
         Returns:
             The populated Trigger.Response indicating all actuators were commanded to stop.
         """
+        with self.joint_trajectory_action.latest_goal_lock:
+            self.joint_trajectory_action.latest_goal_uuid = None
+
         with self.driver_mode_lock:
             if self.driver_mode in self.priority_modes:
                 self._routine_canceled = True
                 self.robot.routines.cancel_routine(do_push=False)
-            self.robot.omnibase.rotate_by(0.0)
-            self.robot.lift.move_by(0.0)
+            self._queue_stop_all_actuators()
 
-            if hasattr(self.robot, 'arm'):
-                self.robot.arm.move_by(0.0)
-
-            if hasattr(self.robot, 'end_of_arm') and hasattr(self.robot.end_of_arm, 'joints'):
-                for joint in self.robot.end_of_arm.joints:
-                    self.robot.end_of_arm.move_by(joint, 0.0)
-
+        self.stop_event_pub.publish(Empty())
         self.robot.logger.info('Received stop_the_robot service call, so commanded all actuators to stop.')
         response.success = True
         response.message = 'Stopped the robot.'
@@ -457,105 +516,123 @@ class StretchDriver(Node):
             low, high = joint_metadata.urdf_range
             return (low + high) / 2.0
 
-    def velocity_callback(self, jointjog_msg: JointJog):
+    def velocity_callback(self, jointjog_msg: JointJog) -> None:
         """
-        Velocity control for the ranged joints on Stretch. Velocity control of the mobile base is handled by /cmd_vel.
-        Only the JointJog.velocities[] is parsed. JointJog.displacements[] is ignored. JointJog.duration is the timeout
-        before the robot stops moving. It cannot exceed velocity_timeout parameter.
+        Queue velocity commands for Stretch ranged joints in velocity or navigation mode.
+
+        Only JointJog.velocities is parsed; JointJog.displacements is ignored.
+
+        Args:
+            jointjog_msg: Incoming JointJog command specifying joint names, velocities, and duration.
+
+        Returns:
+            None.
         """
         with self.driver_mode_lock:
             if self.driver_mode not in ['velocity', 'navigation']:
                 self.robot.logger.warn(f'Must be in velocity or navigation mode to service JointJog msg. Current mode = {self.driver_mode}.')
                 return
 
-        # Queue velocity commands
-        for i, joint in enumerate(jointjog_msg.joint_names):
+            # Queue velocity commands
+            for i, joint in enumerate(jointjog_msg.joint_names):
 
-            if joint not in self.set_vel_functions.keys():
-                self.robot.logger.warn(f"Received velocity command for unexpected joint: {joint}")
-                continue
+                if joint not in self.set_vel_functions.keys():
+                    self.robot.logger.warn(f"Received velocity command for unexpected joint: {joint}")
+                    continue
 
-            joint_metadata = self.joint_metadata_cache.get(joint)
-            acceleration_key = joint_metadata.value if joint_metadata else joint.split('_joint')[0]
-            acceleration_param = self.get_parameter_or(f"joint_acceleration.{acceleration_key}",None).value
+                joint_metadata = self.joint_metadata_cache.get(joint)
+                acceleration_key = joint_metadata.value if joint_metadata else joint.split('_joint')[0]
+                acceleration_param = self.get_parameter_or(f"joint_acceleration.{acceleration_key}",None).value
 
-            joint_velocity = jointjog_msg.velocities[i]
-            duration = jointjog_msg.duration
+                joint_velocity = jointjog_msg.velocities[i]
+                duration = jointjog_msg.duration
 
-            if joint_metadata is RobotJoints.gripper:
-                # move_by() takes a displacement in this tool's command units (Pct for SG4,
-                # aperture meters for PG4), so scale the rate by duration as the wrist joints do,
-                # then convert with convert_delta(), which is exact across PG4's linkage.
-                delta_urdf = joint_velocity * duration
-                at_urdf = self._gripper_position_urdf(joint_metadata)
-                joint_velocity = joint_metadata.convert_delta(
-                    delta_urdf, "urdf", "command", at_urdf
-                )
+                if joint_metadata is RobotJoints.gripper:
+                    # move_by() takes a displacement in this tool's command units (Pct for SG4,
+                    # aperture meters for PG4), so scale the rate by duration as the wrist joints do,
+                    # then convert with convert_delta(), which is exact across PG4's linkage.
+                    delta_urdf = joint_velocity * duration
+                    at_urdf = self._gripper_position_urdf(joint_metadata)
+                    joint_velocity = joint_metadata.convert_delta(
+                        delta_urdf, "urdf", "command", at_urdf
+                    )
 
-            elif joint_metadata in (RobotJoints.wrist_pitch, RobotJoints.wrist_roll, RobotJoints.wrist_yaw):
-                # account for move_by (lack of velocity control)
-                joint_velocity *= duration
+                elif joint_metadata in (RobotJoints.wrist_pitch, RobotJoints.wrist_roll, RobotJoints.wrist_yaw):
+                    # account for move_by (lack of velocity control)
+                    joint_velocity *= duration
 
-            self.set_vel_functions[joint](joint_velocity, acceleration_param)
+                self.set_vel_functions[joint](joint_velocity, acceleration_param)
 
-        # Set timeout (TODO)
-        self.robot.logger.debug(str(self.robot.cmd_dict))
+            # Set timeout (TODO)
+            self.robot.logger.debug(str(self.robot.cmd_dict))
 
-    def joy_callback(self, joy_msg: Joy):
+    def joy_callback(self, joy_msg: Joy) -> None:
         """
-        During teleop mode, the robot can be controlled with anything that can publish Joy messages on the /joy topic.
-        e.g., VR, dex teleop, Rviz joy panel, puppet robot. The Joy message should follow the format described in hello_utils.joy_conversion
+        Queue teleoperation motion commands from a Joy message when in teleop mode.
+
+        Args:
+            joy_msg: Joy message formatted according to hello_helpers.joy_conversion.
+
+        Returns:
+            None.
         """
+        state = jc.unpack_joy_to_gamepad_state(joy_msg)
+
         with self.driver_mode_lock:
             if self.driver_mode != 'teleop':
                 self.robot.logger.warn(f'Must be in teleop mode to service Joy msg. Current mode = {self.driver_mode}.')
                 return
 
-        state = jc.unpack_joy_to_gamepad_state(joy_msg)
+            self.gamepad_teleop.controller_state = state
+            ControlMapping.JOINT_SPACE.do_motion(self.robot, self.gamepad_teleop)
 
-        self.gamepad_teleop.controller_state = state
+    def twist_callback(self, twist: Twist) -> None:
+        """
+        Queue mobile base planar velocity commands in navigation or velocity mode.
 
+        Args:
+            twist: Desired planar linear (m/s) and angular (rad/s) velocities.
 
-        ControlMapping.JOINT_SPACE.do_motion(self.robot, self.gamepad_teleop)
-
-
-
-
-        # if hasattr(self.robot, 'omnibase'):
-        #     linear_acc = self.get_parameter_or("joint_acceleration.omnibase.linear", None).value
-        #     angular_acc = self.get_parameter_or("joint_acceleration.omnibase.angular", None).value
-        #     self.robot.omnibase.set_velocity(vx_m=vx, vy_m=vy, w_r=w, a_m=linear_acc, a_r=angular_acc)
-
-
-    def twist_callback(self, twist: Twist):
-        with self.driver_mode_lock:
-            if self.driver_mode not in ['navigation', 'velocity']:
-                self.robot.logger.warn(f'Must be in {['navigation', 'velocity']} modes to service Twist msg. Current mode = {self.driver_mode}.')
-                return
+        Returns:
+            None.
+        """
         linear_acc = self.get_parameter_or("joint_acceleration.omnibase.linear",None).value
         angular_acc = self.get_parameter_or("joint_acceleration.omnibase.angular",None).value
-        self.robot.omnibase.set_velocity(vx_m = twist.linear.x,
-                                         vy_m = twist.linear.y,
-                                         w_r = twist.angular.z,
-                                         a_m = linear_acc,
-                                         a_r = angular_acc
-                                        )
-
-    def stiff_twist_callback(self, stiff_twist: TwistWithCovarianceStamped):
         with self.driver_mode_lock:
             if self.driver_mode not in ['navigation', 'velocity']:
                 self.robot.logger.warn(f'Must be in {['navigation', 'velocity']} modes to service Twist msg. Current mode = {self.driver_mode}.')
                 return
+            self.robot.omnibase.set_velocity(vx_m = twist.linear.x,
+                                             vy_m = twist.linear.y,
+                                             w_r = twist.angular.z,
+                                             a_m = linear_acc,
+                                             a_r = angular_acc
+                                            )
+
+    def stiff_twist_callback(self, stiff_twist: TwistWithCovarianceStamped) -> None:
+        """
+        Queue mobile base planar velocity and wheel stiffness commands in navigation or velocity mode.
+
+        Args:
+            stiff_twist: Desired base Twist message encoding wheel stiffness in covariance.
+
+        Returns:
+            None.
+        """
         linear_acc = self.get_parameter_or("joint_acceleration.omnibase.linear",None).value
         angular_acc = self.get_parameter_or("joint_acceleration.omnibase.angular",None).value
         stiffness = 1.0 if stiff_twist.twist.covariance[-1] == 0.0 else stiff_twist.twist.covariance[0]
-        self.robot.omnibase.set_velocity(vx_m = stiff_twist.twist.twist.linear.x,
-                                         vy_m = stiff_twist.twist.twist.linear.y,
-                                         w_r = stiff_twist.twist.twist.angular.z,
-                                         a_m = linear_acc,
-                                         a_r = angular_acc,
-                                         stiffness=stiffness,
-                                        )
+        with self.driver_mode_lock:
+            if self.driver_mode not in ['navigation', 'velocity']:
+                self.robot.logger.warn(f'Must be in {['navigation', 'velocity']} modes to service Twist msg. Current mode = {self.driver_mode}.')
+                return
+            self.robot.omnibase.set_velocity(vx_m = stiff_twist.twist.twist.linear.x,
+                                             vy_m = stiff_twist.twist.twist.linear.y,
+                                             w_r = stiff_twist.twist.twist.angular.z,
+                                             a_m = linear_acc,
+                                             a_r = angular_acc,
+                                             stiffness=stiffness,
+                                            )
 
     def update_latched_value(self, pub: Publisher, value: Any):
         key = pub.topic
