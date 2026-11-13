@@ -37,8 +37,18 @@ from .joint_trajectory_server import JointTrajectoryAction
 
 
 class StretchDriver(Node):
+    """ROS 2 driver node interfacing with the Stretch 4 hardware server."""
 
-    def __init__(self):
+    def __init__(self) -> None:
+        """
+        Initialize the StretchDriver node, parameters, topics, services, and control loop.
+
+        Args:
+            None.
+
+        Returns:
+            None.
+        """
         super().__init__('stretch_driver')
         self.get_logger().info("For use with S T R E T C H (TM) RESEARCH EDITION from Hello Robot Inc.")
 
@@ -64,6 +74,7 @@ class StretchDriver(Node):
             mode = 'navigation'
         self.driver_mode = mode
         self.driver_mode_lock = Lock()
+        self._routine_canceled = False
         self.robot.logger.info('mode = ' + str(mode))
 
         # Robot sensitivity (TODO: read sensitivity mode from the robot)
@@ -311,10 +322,23 @@ class StretchDriver(Node):
             return False, 'Stowing routine did not complete.'
         return True, 'Stowed.'
 
-    def seat_into_dock(self):
+    def seat_into_dock(self) -> tuple[bool, str]:
+        """
+        Execute the blind docking routine to seat the robot onto the charging dock.
+
+        Returns False and freewheels the base if the routine is canceled before completion.
+
+        Args:
+            None.
+
+        Returns:
+            A tuple of (succeeded, message) indicating electrical contact status.
+        """
         with self.driver_mode_lock:
             can_seat = self.driver_mode in self.control_modes
             last_driver_mode = copy.copy(self.driver_mode)
+            if can_seat:
+                self._routine_canceled = False
         if not can_seat:
             errmsg = f'Cannot seat_into_dock while in mode={last_driver_mode}.'
             self.robot.logger.error(errmsg)
@@ -322,6 +346,11 @@ class StretchDriver(Node):
         self.change_mode('seating')
         succeeded, _rid = self.robot.routines.routine_blind_dock(
             do_push=False, wait_on_completion=True, do_pull=False)
+        with self.driver_mode_lock:
+            if self._routine_canceled:
+                # Clear residual wheel commands queued during routine teardown on cancel.
+                self.robot.omnibase.enable_freewheel_mode()
+                succeeded = False
         self.restore_mode_after_routine(last_driver_mode)
         return bool(succeeded), 'Success' if succeeded else 'Failure'
 
@@ -345,8 +374,23 @@ class StretchDriver(Node):
             if not just_change_mode:
                 self.robot.power_periph.clear_runstop()
 
-    def stop_the_robot_callback(self, request, response):
+    def stop_the_robot_callback(
+        self, request: Trigger.Request, response: Trigger.Response
+    ) -> Trigger.Response:
+        """
+        Cancel any active driver routine and command zero motion on all actuators.
+
+        Args:
+            request: Empty trigger request.
+            response: Trigger response populated with completion status and message.
+
+        Returns:
+            The populated Trigger.Response indicating all actuators were commanded to stop.
+        """
         with self.driver_mode_lock:
+            if self.driver_mode in self.priority_modes:
+                self._routine_canceled = True
+                self.robot.routines.cancel_routine(do_push=False)
             self.robot.omnibase.rotate_by(0.0)
             self.robot.lift.move_by(0.0)
 

@@ -111,8 +111,18 @@ class Preempted(Exception): pass
 
 
 class DockRobotAction:
+    """State-machine-backed ROS 2 action handler for docking the Stretch 4 robot."""
 
-    def __init__(self, node: "DockingServer"):
+    def __init__(self, node: "DockingServer") -> None:
+        """
+        Initialize the DockRobot action server, feedback mapping, and finite state machine.
+
+        Args:
+            node: Parent DockingServer node providing clients, publishers, and executors.
+
+        Returns:
+            None.
+        """
         self.node = node
         self.rate = self.node.create_rate(100)
 
@@ -145,6 +155,8 @@ class DockRobotAction:
         self.reacquire_count = 0
         self.goal_start = None
         self.last_feedback_time = 0.0
+        self.stow_future = None
+        self.seating_future = None
 
         self.latest_goal_uuid: bytes | None = None  # Used as a signal for preemption
         self.latest_goal_lock = threading.Lock()
@@ -215,6 +227,18 @@ class DockRobotAction:
         return CancelResponse.REJECT
 
     def execute_cb(self, goal_handle: ServerGoalHandle) -> DockRobot.Result:
+        """
+        Execute an accepted DockRobot action goal through the docking state machine.
+
+        Preempts any incumbent goal, steps the state machine until completion or interruption,
+        and halts active driver motions on early exit before releasing robot ownership.
+
+        Args:
+            goal_handle: Active action server goal handle for this docking request.
+
+        Returns:
+            DockRobot.Result populated with completion status, error code, and retry count.
+        """
         self.node.get_logger().debug("Docking requested")
 
         # Lock required because ReentrantCallbackGroup allows parallel execute_cbs
@@ -259,9 +283,40 @@ class DockRobotAction:
         except DockFailure as e:
             return self.error_result(goal_handle, e.error_code, e.msg)
         finally:
+            self._abort_active_phase()
             self.node.navigator.cancelTask()
             self.machine.set_state(AutodockState.READY)
             self.goal_idle.set()
+
+    def _abort_active_phase(self) -> None:
+        """
+        Stop active driver motion or routines when exiting an incomplete docking goal.
+
+        Waits up to 5.0 seconds for an in-flight stowing or seating service call to finish
+        unwinding after issuing stop_the_robot.
+
+        Args:
+            None.
+
+        Returns:
+            None.
+        """
+        state = self.machine.state
+        if state is AutodockState.SERVOING:
+            self.node.stop_base.call_async(Trigger.Request())
+            return
+
+        active_future = None
+        if state is AutodockState.BLIND_DOCKING:
+            active_future = self.seating_future
+        elif state is AutodockState.STOWING:
+            active_future = self.stow_future
+
+        if active_future is not None and not active_future.done():
+            self.node.stop_robot.call_async(Trigger.Request())
+            deadline = time.time() + 5.0
+            while not active_future.done() and time.time() < deadline:
+                self.rate.sleep()
 
     def publish_feedback(self, goal_handle: ServerGoalHandle) -> None:
         now = time.time()
@@ -463,7 +518,18 @@ class DockRobotAction:
 
 
 class DockingServer(Node):
-    def __init__(self):
+    """ROS 2 node hosting the autodocking perception, control, and action server pipeline."""
+
+    def __init__(self) -> None:
+        """
+        Initialize the DockingServer node, perception modules, clients, and timers.
+
+        Args:
+            None.
+
+        Returns:
+            None.
+        """
         super().__init__("docking_server")
 
         # Dock database manager.
@@ -610,6 +676,7 @@ class DockingServer(Node):
 
         # Service Clients
         self.stow_robot = self.create_client(Trigger, 'stow_the_robot')
+        self.stop_robot = self.create_client(Trigger, 'stop_the_robot')
         self.stop_base = self.create_client(Trigger, 'freewheel_the_robot')
         self.seat_dock = self.create_client(Trigger, 'seat_into_dock')
 
