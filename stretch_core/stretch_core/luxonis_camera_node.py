@@ -4,7 +4,8 @@ from dataclasses import dataclass
 from enum import Enum
 import rclpy
 from rclpy.node import Node
-from sensor_msgs.msg import CompressedImage, Image, CameraInfo
+from sensor_msgs.msg import CompressedImage, Image, CameraInfo, Imu
+from geometry_msgs.msg import Vector3Stamped
 import ros2_numpy
 import numpy as np
 import cv2
@@ -23,20 +24,25 @@ from stretch4_body.subsystem.cameras import (
     stream_center_camera,
     stream_left_right_camera,
     stream_left_right_center_camera,
-    stream_gripper_camera,
     stream_left_camera_compressed,
     stream_right_camera_compressed,
     stream_center_camera_compressed,
     stream_left_right_camera_compressed,
     stream_left_right_center_camera_compressed,
-    stream_gripper_camera_compressed,
 )
 
 from stretch4_body.subsystem.cameras.enums.rgb_camera import RGBCameras
+from stretch4_body.subsystem.cameras.controllers.camera_pipeline_controller import RGBPipelineController
 
 from stretch_python_bridge import compressed_format_with_sequence
 
 from stretch_core.vision.rectify import CameraRectifier
+from stretch_core.vision.imu_messages import (
+    imu_message,
+    linear_acceleration_message,
+    monotonic_to_system_offset,
+    stamp_from_seconds,
+)
 from stretch_core.vision.ros_messages import (
     COMPRESSED_DEPTH_FORMAT,
     DeviceClockOffset,
@@ -93,6 +99,22 @@ class LuxonisCameraNode(Node):
             )),
         )
 
+        self.declare_parameter(
+            'enable_imu',
+            True,
+            ParameterDescriptor(description=(
+                "Gripper camera only (the head cameras have no IMU and ignore this): publish the "
+                "OAK-D-SR's IMU on /cameras_gripper/imu/data (sensor_msgs/Imu, gravity included) and "
+                "/cameras_gripper/imu/linear_acceleration (gravity removed). If the camera has no IMU, "
+                "the node warns and streams images without it."
+            )),
+        )
+        self.declare_parameter(
+            'imu_rate_hz',
+            100,
+            ParameterDescriptor(description="Report rate the gripper camera's IMU is asked for."),
+        )
+
         # Get parameters
         self.use_left = self.get_parameter('use_left').value
         self.use_right = self.get_parameter('use_right').value
@@ -102,6 +124,8 @@ class LuxonisCameraNode(Node):
         self.use_compressed = self.get_parameter('use_compressed').value
         self.use_system_timestamp = self.get_parameter('use_system_timestamp').value
         self.fps = self.get_parameter('fps').value
+        self.enable_imu = self.is_gripper and self.get_parameter('enable_imu').value
+        self.imu_rate_hz = self.get_parameter('imu_rate_hz').value
 
         # The device clock is shared by every camera on the device, so one offset estimator
         # serves them all and sees more samples than a per-camera one would.
@@ -117,6 +141,9 @@ class LuxonisCameraNode(Node):
         self.rect_publishers = {}
         self.info_publishers = {}
         self.camera_info = {}
+        self.imu_publisher = None
+        self.imu_linear_acceleration_publisher = None
+        self.imu_missing_warned = False
 
         # Which RGBCameras member each published camera name maps to, and the rectifier built from
         # its calibration. Rectifiers are created on first use, since a camera nobody subscribes to
@@ -133,6 +160,8 @@ class LuxonisCameraNode(Node):
             # right -> /cameras_gripper/right/...
             # depth (stereo) -> /cameras_gripper/stereo/...
             self.get_logger().info("Configuring node for Gripper Camera Mode")
+            if self.enable_imu:
+                self.create_imu_publishers()
             
             # Left camera
             self.publishers_topics['left'] = self.create_publisher(
@@ -404,28 +433,101 @@ class LuxonisCameraNode(Node):
         self.info_publishers['stereo'].publish(info_msg)
 
     def publish_gripper_frames(self):
-        self.get_logger().info(f"Starting Gripper Camera Stream (compressed={self.use_compressed})...")
+        self.get_logger().info(f"Starting Gripper Camera Stream (compressed={self.use_compressed}, imu={self.enable_imu})...")
 
-        # is_run_pipeline=False keeps frames exactly as the camera produced them: no decode, no
-        # rotation, no extra full-frame copy. Anything that needs raw pixels decodes on demand below.
-        stream_gripper = stream_gripper_camera_compressed if self.use_compressed else stream_gripper_camera
-        generator = stream_gripper(is_rotate=False, is_run_pipeline=False)
+        # Opened through the controller, as stream_gripper_camera*() does, to keep a handle on the camera
+        # and so on its IMU. is_run_pipeline=False keeps frames exactly as the camera produced them: no
+        # decode, no rotation, no extra full-frame copy. Anything that needs raw pixels decodes on demand below.
+        configs = {}
+        if self.enable_imu:
+            configs[RGBCameras.gripper_left] = RGBCameras.gripper_left.config_with(imu_rate_hz=self.imu_rate_hz)
+        controller = RGBPipelineController(
+            camera_type=RGBCameras.gripper_rgbd_compressed if self.use_compressed else RGBCameras.gripper_rgbd,
+            recording_directory=None,
+            show_image_in=None,
+            is_rotate=False,
+            is_rectify=False,
+            is_crop=False,
+            ai_models_to_use=[],
+            detect_aruco_marker_size=None,
+            camera_configs=configs,
+        )
+        imu_stop_event = self.start_imu_thread(getattr(controller.camera, 'imu', None))
 
-        for synced_frame in generator:
-            if not self.running or not rclpy.ok():
-                break
-            if synced_frame is None:
+        try:
+            for synced_frame in controller.get_frame_synced(is_run_pipeline=False):
+                if not self.running or not rclpy.ok():
+                    break
+                if synced_frame is None:
+                    continue
+
+                self.publish_camera_frame(synced_frame.left, 'left', VisionFrames.gripper_camera_frame('left'))
+                self.publish_camera_frame(synced_frame.right, 'right', VisionFrames.gripper_camera_frame('right'))
+
+                if synced_frame.depth is not None:
+                    self.publish_depth_frame(
+                        synced_frame.depth,
+                        timestamp=synced_frame.right.timestamp if synced_frame.right is not None else synced_frame.timestamp,
+                        frame_number=synced_frame.right.frame_number if synced_frame.right is not None else None,
+                    )
+        finally:
+            if imu_stop_event is not None:
+                imu_stop_event.set()
+
+    def create_imu_publishers(self):
+        """The gripper IMU's topics. Best Effort like the camera topics; any subscriber QoS matches."""
+        imu_qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
+        self.imu_publisher = self.create_publisher(Imu, VisionTopics.gripper_imu(), imu_qos)
+        self.imu_linear_acceleration_publisher = self.create_publisher(
+            Vector3Stamped, VisionTopics.gripper_imu_linear_acceleration(), imu_qos)
+
+    def start_imu_thread(self, imu) -> threading.Event | None:
+        """Publishes `imu` (a stretch4_body LuxonisImu) from its own thread, so samples go out as they
+        arrive rather than waiting behind a camera frame. Returns the event that stops the thread."""
+        if not self.enable_imu:
+            return None
+        if imu is None:
+            if not self.imu_missing_warned:
+                self.get_logger().warn("The gripper camera's IMU is not available; streaming images without it.")
+                self.imu_missing_warned = True
+            return None
+
+        stop_event = threading.Event()
+        threading.Thread(target=self.publish_imu_loop, args=(imu, stop_event), daemon=True, name='gripper_imu').start()
+        return stop_event
+
+    def publish_imu_loop(self, imu, stop_event: threading.Event):
+        """Publishes every IMU sample as soon as it reaches the host.
+
+        Stamped with the sample's own time: DepthAI puts it on the host's monotonic clock, and
+        monotonic_to_system_offset() moves it onto the system clock exactly, with no latency in it.
+        """
+        frame_id = VisionFrames.gripper_imu_frame()
+        lost_samples_reported = 0
+        self.get_logger().info(f"Publishing the gripper IMU on {VisionTopics.gripper_imu()} in {frame_id}: {imu.describe()}")
+        while not stop_event.is_set() and self.running and rclpy.ok():
+            try:
+                samples = imu.get_samples(timeout_seconds=0.2)
+            except Exception as ex:
+                # The queue closes when the camera is stopped, e.g. before a stream retry.
+                if not stop_event.is_set() and self.running:
+                    self.get_logger().warn(f"Stopped reading the gripper IMU: {ex}")
+                return
+            if not samples:
                 continue
 
-            self.publish_camera_frame(synced_frame.left, 'left', VisionFrames.gripper_camera_frame('left'))
-            self.publish_camera_frame(synced_frame.right, 'right', VisionFrames.gripper_camera_frame('right'))
+            offset = monotonic_to_system_offset() if self.use_system_timestamp else 0.0
+            for sample in samples:
+                stamp = stamp_from_seconds(sample.timestamp + offset)
+                self.imu_publisher.publish(imu_message(sample, stamp, frame_id))
+                linear_msg = linear_acceleration_message(sample, stamp, frame_id)
+                if linear_msg is not None:
+                    self.imu_linear_acceleration_publisher.publish(linear_msg)
 
-            if synced_frame.depth is not None:
-                self.publish_depth_frame(
-                    synced_frame.depth,
-                    timestamp=synced_frame.right.timestamp if synced_frame.right is not None else synced_frame.timestamp,
-                    frame_number=synced_frame.right.frame_number if synced_frame.right is not None else None,
-                )
+            if imu.lost_samples > lost_samples_reported:
+                lost_samples_reported = imu.lost_samples
+                self.get_logger().warn(
+                    f"{lost_samples_reported} gripper IMU samples lost so far.", throttle_duration_sec=10.0)
 
     def publish_head_frames(self):
         self.get_logger().info(f"Starting Head Cameras Stream (compressed={self.use_compressed})...")

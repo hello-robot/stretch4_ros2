@@ -73,6 +73,13 @@ class VisionFrames(str, Enum):
         raise ValueError(f"{camera_name} is not a valid gripper camera name")
 
     @staticmethod
+    def gripper_imu_frame() -> str:
+        """The frame the wrist camera's IMU data is published in. The URDF has no link for the IMU, so
+        its vectors are rotated into the right camera's optical frame (x right, y down, z forward) with
+        the IMU extrinsics on the camera; the IMU's offset from that frame's origin is not applied."""
+        return VisionFrames.gripper_camera_frame('right')
+
+    @staticmethod
     def camera_frame_number_of_rotations(camera_name: str) -> int:
         """Number of rotations to apply to the camera image to make it portrait."""
         if camera_name == "left":
@@ -228,7 +235,15 @@ class VisionTopics(str, Enum):
 
     @staticmethod
     def gripper_imu() -> str:
+        """sensor_msgs/Imu from the wrist camera's IMU: acceleration with gravity, angular velocity,
+        and orientation (heading arbitrary). Frame: VisionFrames.gripper_imu_frame()."""
         return f"{VisionTopics.GRIPPER_CAMERA_NAMESPACE.value}/imu/data"
+
+    @staticmethod
+    def gripper_imu_linear_acceleration() -> str:
+        """geometry_msgs/Vector3Stamped: the wrist camera IMU's acceleration with gravity removed,
+        stamped and framed like gripper_imu()."""
+        return f"{VisionTopics.GRIPPER_CAMERA_NAMESPACE.value}/imu/linear_acceleration"
 
     @staticmethod
     def gripper_stereo_points() -> str:

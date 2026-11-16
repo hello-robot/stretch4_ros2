@@ -41,10 +41,27 @@ def generate_launch_description():
         ),
     )
 
+    enable_imu = DeclareLaunchArgument(
+        "enable_imu",
+        default_value="true",
+        description=(
+            "If true, publish the camera's IMU on /cameras_gripper/imu/data (sensor_msgs/Imu, gravity "
+            "included) and /cameras_gripper/imu/linear_acceleration (gravity removed)."
+        ),
+    )
+
+    imu_rate_hz = DeclareLaunchArgument(
+        "imu_rate_hz",
+        default_value="100",
+        description="Report rate the camera's IMU is asked for, in Hz.",
+    )
+
     launch_args = [
         use_rviz_arg,
         use_compressed,
         use_system_timestamp,
+        enable_imu,
+        imu_rate_hz,
     ]
 
     return LaunchDescription(launch_args + [OpaqueFunction(function=launch_setup)])
@@ -60,6 +77,8 @@ def launch_setup(context, *args, **kwargs):
                 "is_gripper": True,
                 "use_compressed": is_launch_config_true(context, "use_compressed"),
                 "use_system_timestamp": is_launch_config_true(context, "use_system_timestamp"),
+                "enable_imu": is_launch_config_true(context, "enable_imu"),
+                "imu_rate_hz": int(LaunchConfiguration("imu_rate_hz").perform(context)),
             }
         ],
         output="both",
