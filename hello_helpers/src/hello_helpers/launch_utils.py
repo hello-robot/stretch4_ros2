@@ -4,8 +4,9 @@ import os
 import time
 from pathlib import Path
 
+import launch.logging
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, GroupAction, LogInfo, UnsetEnvironmentVariable
+from launch.actions import DeclareLaunchArgument, GroupAction, UnsetEnvironmentVariable
 from launch.substitutions import LaunchConfiguration
 from launch.conditions import IfCondition
 from launch_ros.actions import Node
@@ -53,16 +54,40 @@ def check_launch_singleton(launch_id: str, acquire: bool = True) -> bool:
     return acquire_lock_if_available(str(lock_file), remove_if_exists_and_unused=True)
 
 
-def _own_command() -> str:
+def _ros2_argv() -> list:
+    """This process's command line from `ros2` on, e.g. ['ros2', 'launch', 'stretch_core', 'x.launch.py']."""
     try:
         argv = Path('/proc/self/cmdline').read_bytes().decode(errors='replace').split('\0')
     except OSError:
-        return ''
+        return []
     argv = [a for a in argv if a]
     for i, arg in enumerate(argv):
         if os.path.basename(arg) == 'ros2':
-            return ' '.join(['ros2'] + argv[i + 1:])
-    return ' '.join(argv)
+            return ['ros2'] + argv[i + 1:]
+    return argv
+
+
+def _own_command() -> str:
+    return ' '.join(_ros2_argv())
+
+
+def _is_launched_directly(launch_id: str) -> bool:
+    """Whether launch_id is the file named on the `ros2 launch` command line, not one it includes."""
+    argv = _ros2_argv()
+    if argv[:2] != ['ros2', 'launch']:
+        return False
+    positional = [a for a in argv[2:] if not a.startswith('-') and ':=' not in a]
+    if not positional:
+        return False
+    if positional[0].endswith('.py') or os.sep in positional[0]:
+        top = launch_file_id(os.path.abspath(positional[0]))
+    elif len(positional) > 1:
+        top = f'{positional[0]}/{positional[1]}'
+    else:
+        return False
+    # `ros2 launch <pkg> <file>` finds files in subdirectories too, so compare package and file name.
+    return (top.split('/')[0] == launch_id.split('/')[0]
+            and Path(top).name == Path(launch_id).name)
 
 
 def _write_holder_info(launch_id: str, args: dict):
@@ -136,11 +161,18 @@ class _LaunchSingletonGroup(GroupAction):
             return super().execute(context)
         except Exception as e:
             # A broken lock directory should not stop the robot from launching.
-            note = LogInfo(msg=f'{SINGLETON_LOG_TAG} Could not check whether {self.__launch_id} '
-                               f'is already running ({e!r}). Starting it anyway.')
-            return [note, *super().execute(context)]
+            launch.logging.get_logger('launch.user').warning(
+                f'{SINGLETON_LOG_TAG} Could not check whether {self.__launch_id} '
+                f'is already running ({e!r}). Starting it anyway.')
+            return super().execute(context)
         if not acquired:
-            return [LogInfo(msg=_skip_message(self.__launch_id, args))]
+            msg = _skip_message(self.__launch_id, args)
+            if _is_launched_directly(self.__launch_id):
+                # Asked for by name and nothing started: fail, so `ros2 launch` exits non-zero.
+                raise RuntimeError(msg)
+            # Included by another launch file, which carries on with the running copy.
+            launch.logging.get_logger('launch.user').warning(msg)
+            return []
         _write_holder_info(self.__launch_id, args)
         return super().execute(context)
 
@@ -148,7 +180,9 @@ class _LaunchSingletonGroup(GroupAction):
 def launch_singleton(ld: LaunchDescription, launch_file: str) -> LaunchDescription:
     """
     Makes a launch file a singleton: if another `ros2 launch` (or an earlier include in the
-    same launch) is already running it, this one logs who is and starts nothing.
+    same launch) is already running it, this one starts nothing and says who is running it:
+    as an error that makes `ros2 launch` exit 1 when this file is the one launched, or as a
+    warning when another launch file includes it and carries on with the running copy.
 
     The launch arguments stay declared either way, so `--show-args` and the
     launch arguments of including files are unaffected.
