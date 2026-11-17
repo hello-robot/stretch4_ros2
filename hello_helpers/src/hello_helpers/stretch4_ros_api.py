@@ -1930,6 +1930,7 @@ class StretchTrajectoryActionServer:
                     pos, vel, acc = every_loop_command(active_point, prev_state, next_state, feedback_msg)
 
                 command = JointState()
+                command.header.stamp = self.driver.get_clock().now().to_msg()
                 command.name = trajectory.joint_names
                 command.position = pos if pos is not None else []
                 command.velocity = vel if vel is not None else []
@@ -1992,6 +1993,7 @@ class StretchTrajectoryActionServer:
 
                 actual = JointState()
                 desired = JointState()
+                actual.header.stamp = desired.header.stamp = self.driver.get_clock().now().to_msg()
 
                 actual.name = trajectory.joint_names
                 actual.position = feedback_msg.actual.positions
