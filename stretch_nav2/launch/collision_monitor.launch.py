@@ -13,6 +13,7 @@ from launch_ros.substitutions import FindPackageShare
 from nav2_common.launch import RewrittenYaml
 
 from hello_helpers.multi_yaml import MultiYaml
+from hello_helpers.launch_utils import launch_singleton
 
 
 def scoped(action):
@@ -77,7 +78,7 @@ def generate_launch_description():
         }.items(),
     )
 
-    return LaunchDescription([
+    return launch_singleton(LaunchDescription([
         DeclareLaunchArgument(
             'namespace',
             default_value='',
@@ -156,4 +157,4 @@ def generate_launch_description():
             arguments=['--ros-args', '--log-level', log_level],
             remappings=remappings,
         ),
-    ])
+    ]), __file__)
