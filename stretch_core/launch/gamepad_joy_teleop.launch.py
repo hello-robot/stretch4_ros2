@@ -9,10 +9,11 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from hello_helpers.launch_utils import launch_singleton
 
 
 def generate_launch_description():
-    return LaunchDescription([
+    return launch_singleton(LaunchDescription([
         DeclareLaunchArgument(
             'cmd_vel_topic',
             default_value='cmd_vel_nav',
@@ -39,4 +40,4 @@ def generate_launch_description():
                 'cmd_vel_topic': LaunchConfiguration('cmd_vel_topic'),
             }],
         ),
-    ])
+    ]), __file__)

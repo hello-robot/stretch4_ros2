@@ -7,6 +7,7 @@ from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import Command, LaunchConfiguration
 from launch_ros.actions import Node
 from stretch4_urdf import get_urdf_from_robot_params
+from hello_helpers.launch_utils import launch_singleton
 
 
 def compile_robot_description(context, *args, **kwargs):
@@ -108,4 +109,4 @@ def generate_launch_description():
     add_stretch_driver_fn = OpaqueFunction(function=add_stretch_driver)
     ld.add_action(add_stretch_driver_fn)
 
-    return ld
+    return launch_singleton(ld, __file__)

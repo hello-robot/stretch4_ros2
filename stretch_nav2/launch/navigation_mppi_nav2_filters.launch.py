@@ -10,6 +10,7 @@ from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, Opaq
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.substitutions import FindPackageShare
 from hello_helpers.multi_yaml import MultiYaml
+from hello_helpers.launch_utils import launch_singleton
 
 
 def _bool_cfg(context, name, default=True):
@@ -101,7 +102,7 @@ def _launch_setup(context, *args, **kwargs):
 
 
 def generate_launch_description():
-    return LaunchDescription([
+    return launch_singleton(LaunchDescription([
         DeclareLaunchArgument(
             'map',
             description='Full path to the occupancy map.yaml',
@@ -142,4 +143,4 @@ def generate_launch_description():
             choices=['True', 'False'],
         ),
         OpaqueFunction(function=_launch_setup),
-    ])
+    ]), __file__)

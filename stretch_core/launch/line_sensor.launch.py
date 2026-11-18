@@ -4,6 +4,7 @@ from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
+from hello_helpers.launch_utils import launch_singleton
 
 
 def generate_launch_description():
@@ -20,7 +21,7 @@ def generate_launch_description():
     default_params = PathJoinSubstitution([pkg, 'config', 'line_sensors.yaml'])
     rviz_config = PathJoinSubstitution([pkg, 'rviz', 'line_sensor.rviz'])
 
-    return LaunchDescription([
+    return launch_singleton(LaunchDescription([
         DeclareLaunchArgument(
             'params_file',
             default_value=default_params,
@@ -46,4 +47,4 @@ def generate_launch_description():
             output='screen',
             condition=IfCondition(LaunchConfiguration('use_rviz')),
         ),
-    ])
+    ]), __file__)
