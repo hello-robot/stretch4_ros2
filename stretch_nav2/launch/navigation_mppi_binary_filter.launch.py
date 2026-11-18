@@ -4,6 +4,7 @@ from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 from hello_helpers.multi_yaml import MultiYaml
+from hello_helpers.launch_utils import launch_singleton
 
 
 def generate_launch_description():
@@ -49,7 +50,7 @@ def generate_launch_description():
         }.items(),
     )
 
-    return LaunchDescription([
+    return launch_singleton(LaunchDescription([
         DeclareLaunchArgument(
             'tool_preset',
             default_value='auto',
@@ -72,4 +73,4 @@ def generate_launch_description():
         hlidar_launch,
         footprint_launch,
         navigation_launch,
-    ])
+    ]), __file__)

@@ -7,6 +7,7 @@ from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from nav2_common.launch import RewrittenYaml
+from hello_helpers.launch_utils import launch_singleton
 
 
 def generate_launch_description():
@@ -102,4 +103,4 @@ def generate_launch_description():
     ld.add_action(start_map_server_cmd)
     ld.add_action(start_costmap_filter_info_server_cmd)
 
-    return ld
+    return launch_singleton(ld, __file__)
