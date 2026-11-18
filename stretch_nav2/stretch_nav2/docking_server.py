@@ -469,6 +469,10 @@ class DockRobotAction:
 
         dock_reacquire_limit = 2
         if self.node.servo_lost_count >= 10:
+            if not self.pending_goal.navigate_to_staging_pose:
+                raise DockFailure(
+                    DockRobot.Result.FAILED_TO_DETECT_DOCK,
+                    "No dock detected; cannot start servoing")
             if self.reacquire_count >= dock_reacquire_limit:
                 raise DockFailure(
                     DockRobot.Result.FAILED_TO_DETECT_DOCK,
