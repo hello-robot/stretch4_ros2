@@ -5,6 +5,7 @@ import re
 import glob
 import time
 import threading
+import traceback
 import numpy as np
 from enum import Enum
 from collections import deque
@@ -100,6 +101,7 @@ class AutodockState(Enum):
 class ServoingResult(Enum):
     SUCCESS = 1
     MULTIPLE_DOCK_AMBIGUITY = 2
+    ERROR = 3
 
 class DockFailure(Exception):
     def __init__(self, error_code, msg):
@@ -410,6 +412,8 @@ class DockRobotAction:
                 self.se2_servo_done()
             elif code == ServoingResult.MULTIPLE_DOCK_AMBIGUITY:
                 raise DockFailure(DockRobot.Result.FAILED_TO_DETECT_DOCK, msg)
+            elif code == ServoingResult.ERROR:
+                raise DockFailure(DockRobot.Result.FAILED_TO_CONTROL, msg)
 
     def init_bd_routine(self):
         self.seating_future = self.node.seat_dock.call_async(Trigger.Request())
@@ -724,6 +728,22 @@ class DockingServer(Node):
         self.servo_lost_count = 0
         self.servo_done.clear()
 
+        # Stiffness sent to the base starts soft on every servo entry
+        self.stiffness = 0.0
+        self.stiffness_time = None
+
+    def slew_stiffness(self, target: float) -> float:
+        """Track the servo law's stiffness target: instantly down, at most 1.0/s up. """
+        now = time.perf_counter()
+        elapsed = 0.0 if self.stiffness_time is None else now - self.stiffness_time
+        self.stiffness_time = now
+        target = min(max(float(target), 0.0), 1.0)
+        if target <= self.stiffness:
+            self.stiffness = target
+        else:
+            self.stiffness = min(target, self.stiffness + 1.0 * max(elapsed, 0.0))
+        return self.stiffness
+
     def scanning_only(self, right_cloud: PointCloud2, left_cloud: PointCloud2):
         # Read & transform both clouds to base_link
         n_r_raw = right_cloud.width * right_cloud.height
@@ -822,7 +842,16 @@ class DockingServer(Node):
 
         # Compute & send control
         current_time = self.get_clock().now().to_msg()
-        u, ctrl_viz = self.compute_control(dock_pose, costmap, current_time)
+        try:
+            u, ctrl_viz = self.compute_control(dock_pose, costmap, current_time)
+        except Exception as e:
+            # Fail the dock here, at the failure, with the traceback in the log. Letting it escape
+            # would end executor.spin() and silently kill the whole server.
+            self.get_logger().error(f"Servo control failed: {e!r}\n{traceback.format_exc()}")
+            self.stop_base.call_async(Trigger.Request())
+            self.servo_outcome = (ServoingResult.ERROR, f"Servo control failed: {e!r}")
+            self.servo_done.set()
+            return
         self.cmd_vel_pub.publish(u)
         self.viz_queue.append((self.tracker.filtered_points[:, :3], self.tracker.colors, self.tracker.corners, dock_pose, *ctrl_viz, costmap))
         t5 = time.perf_counter()
@@ -852,7 +881,8 @@ class DockingServer(Node):
             # Compute u and filter based on costmap
             errx, erry, errt = p_robot[0], p_robot[1], rot.as_euler('xyz')[2]
             autodock_target = (errx, erry, errt)
-            vx, vy, wz = self.servo.step(errx, erry, errt)
+            # older releases return only the three velocities, in which case the driver keeps its default stiffness.
+            vx, vy, wz, *stiffness = self.servo.step(errx, erry, errt)
             cmd_desired = (vx, vy, wz)
             filtered = filter_clearance_velocity(vx, vy, wz, costmap.obstacle_xy, costmap.cliff_xy)
             cmd_filtered = (filtered.vx, filtered.vy, filtered.wz)
@@ -868,6 +898,11 @@ class DockingServer(Node):
             u.twist.twist.linear.x = filtered.vx
             u.twist.twist.linear.y = filtered.vy
             u.twist.twist.angular.z = filtered.wz
+            if stiffness:
+                # stretch_driver reads the stiffness from the covariance: covariance[-1] != 0 flags it
+                # and covariance[0] is the value.
+                u.twist.covariance[0] = self.slew_stiffness(stiffness[0])
+                u.twist.covariance[-1] = 1.0
             return u, (autodock_target, cmd_desired, cmd_filtered, blockers_xy)
 
         # Any other scheme, 'mppi_servo' included, has no control law yet. Falling through would
