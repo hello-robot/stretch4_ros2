@@ -57,7 +57,9 @@
   <exec_depend>teleop_twist_keyboard</exec_depend>
 
   <test_depend>python3-pytest</test_depend>
+  <test_depend>python3-pytest-benchmark</test_depend>
   <test_depend>launch_pytest</test_depend>
+  <test_depend>ament_cmake_pytest</test_depend>
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
 

@@ -126,9 +126,18 @@ ament_python_install_package(${PROJECT_NAME} SCRIPTS_DESTINATION lib/${PROJECT_N
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
+  find_package(ament_cmake_pytest REQUIRED)
   set(ament_cmake_copyright_FOUND TRUE)
   set(ament_cmake_cpplint_FOUND TRUE)
   ament_lint_auto_find_test_dependencies()
+
+  ament_add_pytest_test(test_benchmarks test/performance/test_benchmarks.py TIMEOUT 120)
+  ament_add_pytest_test(test_stress test/performance/test_stress.py TIMEOUT 120)
+  ament_add_pytest_test(test_parameters test/system/test_parameters.py TIMEOUT 120)
+  ament_add_pytest_test(test_pub_topics test/system/test_pub_topics.py TIMEOUT 120)
+  ament_add_pytest_test(test_services test/system/test_services.py TIMEOUT 120)
+  ament_add_pytest_test(test_sub_topics test/system/test_sub_topics.py TIMEOUT 120)
+  ament_add_pytest_test(test_trajectory_server test/system/test_trajectory_server.py TIMEOUT 120)
 endif()
 
 ament_package()
