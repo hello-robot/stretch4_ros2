@@ -1,17 +1,25 @@
-import pytest
-import rclpy
+from collections.abc import Generator
 import time
-from common.launch_descriptions import stretch_driver_ld
+
 from common.client_nodes.fjt_client import FJTClient
-from trajectory_msgs.msg import JointTrajectoryPoint
+from common.launch_descriptions import stretch_driver_ld
+import pytest
+
 
 @pytest.fixture
-def action_client():
-    rclpy.init()
+def action_client(require_homed_robot: None) -> Generator[FJTClient, None, None]:
+    """
+    Create and yield an FJTClient after verifying the robot is homed.
+
+    Args:
+        require_homed_robot: Fixture ensuring the robot is homed before motion tests.
+
+    Yields:
+        An active FJTClient instance.
+    """
     node = FJTClient()
     yield node
     node.destroy_node()
-    rclpy.shutdown()
 
 @pytest.mark.launch(fixture=stretch_driver_ld)
 def test_fjt_success_single_joint_arm(action_client):

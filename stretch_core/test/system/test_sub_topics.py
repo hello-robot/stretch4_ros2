@@ -1,30 +1,52 @@
-import pytest
-import rclpy
+from collections.abc import Generator
 import time
 
-from common.launch_descriptions import stretch_driver_ld
 from common.client_nodes.mock_subscriber import MockSubscriberNode
 from common.client_nodes.param_client import ParamClient
+from common.launch_descriptions import stretch_driver_ld
 from geometry_msgs.msg import Twist
+import pytest
+
 
 @pytest.fixture
-def subscriber_node():
-    rclpy.init()
+def subscriber_node() -> Generator[MockSubscriberNode, None, None]:
+    """
+    Create and yield a MockSubscriberNode, stopping it on teardown.
+
+    Yields:
+        An active MockSubscriberNode instance.
+    """
     node = MockSubscriberNode('odom_sub_node')
     yield node
     node.stop()
 
+
 @pytest.fixture
-def param_client():
+def param_client() -> Generator[ParamClient, None, None]:
+    """
+    Create and yield a ParamClient, destroying it on teardown.
+
+    Yields:
+        An active ParamClient instance.
+    """
     node = ParamClient('cmd_vel_param_client')
     yield node
     node.destroy_node()
 
+
 @pytest.mark.launch(fixture=stretch_driver_ld)
-def test_twist_in_position_and_navigation_modes(subscriber_node, param_client):
+def test_twist_in_position_and_navigation_modes(
+    require_homed_robot: None,
+    subscriber_node: MockSubscriberNode,
+    param_client: ParamClient,
+) -> None:
     """
-    Test sending Twist messages in position mode (should not move)
-    and navigation mode (should move). We monitor /wheel_odom to verify.
+    Test Twist handling in position mode (no motion) and navigation mode (motion).
+
+    Args:
+        require_homed_robot: Fixture ensuring the robot is homed before motion tests.
+        subscriber_node: Mock subscriber node fixture.
+        param_client: Parameter client node fixture.
     """
     node = param_client
 
@@ -59,8 +81,6 @@ def test_twist_in_position_and_navigation_modes(subscriber_node, param_client):
     odom_msg = subscriber_node.latest_msgs.get('odom')
     assert odom_msg is not None, "Failed to receive odom"
     assert odom_msg.twist.twist.linear.x > 0.005, f"Robot did not move in navigation mode! Vel: {odom_msg.twist.twist.linear.x}"
-
-    rclpy.shutdown()
 
 @pytest.mark.launch(fixture=stretch_driver_ld)
 def test_battery_topic_reception(subscriber_node):

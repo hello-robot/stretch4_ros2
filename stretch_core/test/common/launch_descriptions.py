@@ -8,7 +8,7 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from ament_index_python.packages import get_package_share_directory
 
 
-@launch_pytest.fixture
+@launch_pytest.fixture(scope='module')
 def stretch_driver_ld():
     """Construct the LaunchDescription with stretch_driver
     """
