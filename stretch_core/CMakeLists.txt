@@ -125,38 +125,50 @@ install(
 ament_python_install_package(${PROJECT_NAME} SCRIPTS_DESTINATION lib/${PROJECT_NAME})
 
 if(BUILD_TESTING)
+  # TODO: re-enable linters once existing lint errors are resolved.
   # find_package(ament_lint_auto REQUIRED)
   find_package(ament_cmake_pytest REQUIRED)
   # set(ament_cmake_copyright_FOUND TRUE)
   # set(ament_cmake_cpplint_FOUND TRUE)
   # ament_lint_auto_find_test_dependencies()
 
+  option(RUN_HARDWARE_TESTS "Include hardware-in-the-loop tests in CTest" OFF)
+  option(RUN_STRESS_TESTS "Include long-running hardware stress tests in CTest" OFF)
+
   ament_add_pytest_test(test_unit test/unit/test_driver_unit.py TIMEOUT 60)
   if(TEST test_unit)
     set_tests_properties(test_unit PROPERTIES LABELS "pytest;unit")
   endif()
 
-  ament_add_pytest_test(test_benchmarks test/performance/test_benchmarks.py TIMEOUT 120)
-  ament_add_pytest_test(test_stress test/performance/test_stress.py TIMEOUT 360)
-  ament_add_pytest_test(test_parameters test/system/test_parameters.py TIMEOUT 120)
-  ament_add_pytest_test(test_pub_topics test/system/test_pub_topics.py TIMEOUT 120)
-  ament_add_pytest_test(test_services test/system/test_services.py TIMEOUT 120)
-  ament_add_pytest_test(test_sub_topics test/system/test_sub_topics.py TIMEOUT 120)
-  ament_add_pytest_test(test_trajectory_server test/system/test_trajectory_server.py TIMEOUT 120)
-
-  foreach(_hw_test
-    test_benchmarks
-    test_stress
-    test_parameters
-    test_pub_topics
-    test_services
-    test_sub_topics
-    test_trajectory_server
-  )
-    if(TEST ${_hw_test})
-      set_tests_properties(${_hw_test} PROPERTIES LABELS "pytest;hardware")
+  if(RUN_HARDWARE_TESTS)
+    ament_add_pytest_test(test_benchmarks test/performance/test_benchmarks.py TIMEOUT 120)
+    if(RUN_STRESS_TESTS)
+      ament_add_pytest_test(test_stress test/performance/test_stress.py TIMEOUT 360)
     endif()
-  endforeach()
+    ament_add_pytest_test(test_parameters test/system/test_parameters.py TIMEOUT 120)
+    ament_add_pytest_test(test_pub_topics test/system/test_pub_topics.py TIMEOUT 120)
+    ament_add_pytest_test(test_services test/system/test_services.py TIMEOUT 120)
+    ament_add_pytest_test(test_sub_topics test/system/test_sub_topics.py TIMEOUT 120)
+    ament_add_pytest_test(test_trajectory_server test/system/test_trajectory_server.py TIMEOUT 120)
+
+    set(_hw_tests
+      test_benchmarks
+      test_parameters
+      test_pub_topics
+      test_services
+      test_sub_topics
+      test_trajectory_server
+    )
+    if(RUN_STRESS_TESTS)
+      list(APPEND _hw_tests test_stress)
+    endif()
+
+    foreach(_hw_test ${_hw_tests})
+      if(TEST ${_hw_test})
+        set_tests_properties(${_hw_test} PROPERTIES LABELS "pytest;hardware")
+      endif()
+    endforeach()
+  endif()
 endif()
 
 ament_package()

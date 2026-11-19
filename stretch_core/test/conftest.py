@@ -1,6 +1,7 @@
 from collections.abc import Generator
 
 from common.client_nodes.mock_subscriber import MockSubscriberNode
+from common.robot_reset import reset_robot_to_default
 from launch_pytest.fixture import (
     get_event_loop_fixture,
     get_launch_context_fixture,
@@ -32,9 +33,13 @@ def rclpy_context() -> Generator[None, None, None]:
 
 
 @pytest.fixture(scope='module')
-def require_homed_robot() -> None:
+def require_homed_robot() -> Generator[None, None, None]:
     """
-    Verify that the robot is homed before running motion-capable system tests.
+    Verify that the robot is homed before running motion-capable system tests,
+    and reset the robot to a stowed pose in velocity mode on teardown.
+
+    Yields:
+        None.
 
     Raises:
         pytest.fail: If /is_homed is not received or reports False.
@@ -51,3 +56,8 @@ def require_homed_robot() -> None:
             pytest.fail('Robot is not homed. Please home the robot before running tests.')
     finally:
         node.stop()
+
+    try:
+        yield
+    finally:
+        reset_robot_to_default()

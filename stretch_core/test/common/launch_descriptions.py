@@ -16,7 +16,8 @@ def stretch_driver_ld():
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource([
                 str(Path(get_package_share_directory('stretch_core')) / 'launch' / 'stretch_driver.launch.py'),
-            ])
+            ]),
+            launch_arguments={'action_timeout': '10.0'}.items(),
         ),
         # Tell launch when to start the test
         # If no ReadyToTest action is added, one will be appended automatically.

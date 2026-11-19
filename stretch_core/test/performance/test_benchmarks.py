@@ -94,15 +94,13 @@ def test_action_preemption_latency(benchmark, action_client):
     """
     Benchmark the time it takes to preempt a goal with a new one
     """
-    def preempt_goal():
+    def preempt_goal() -> None:
         action_client.mode = 'position'
         future1 = action_client.move_to_configuration({'lift_joint': 0.8}, blocking=False)
         time.sleep(0.1)
         future2 = action_client.move_to_configuration({'lift_joint': 0.3}, blocking=False)
-        gh1 = future1.result()
-        gh1.get_result_async().result() # Wait for first to be canceled/preempted
-        gh2 = future2.result()
-        gh2.get_result_async().result() # Wait for second to finish
+        action_client._wait_for_result(future1)
+        action_client._wait_for_result(future2)
 
     benchmark(preempt_goal)
 
@@ -123,21 +121,29 @@ def test_action_cancel_latency(benchmark, action_client):
     benchmark(cancel_goal)
 
 @pytest.mark.launch(fixture=stretch_driver_ld)
-def test_action_error_threshold_closeness(benchmark, action_client):
+def test_action_error_threshold_closeness(benchmark, action_client: FJTClient) -> None:
     """
-    Benchmark the error (distance from target) and time it takes to settle
+    Benchmark the error (distance from target) and time it takes to settle.
+
+    Args:
+        benchmark: The pytest-benchmark fixture.
+        action_client: The FollowJointTrajectory client fixture.
     """
-    def settle_to_goal():
+    targets = [0.5, 0.3]
+    round_idx = 0
+
+    def settle_to_goal() -> None:
+        nonlocal round_idx
         action_client.mode = 'position'
-        target = 0.5
+        target = targets[round_idx % len(targets)]
+        round_idx += 1
         q = {'lift_joint': target}
 
         # blocking=True means it waits until is_finished() is True via the server
         result = action_client.move_to_configuration(q, blocking=True)
-        assert result.status == 4 # Succeeded
+        assert result.status == 4  # Succeeded
 
         # Verify closeness
-        # (Assuming client updates q_curr)
         actual = action_client.q_curr.get('lift_joint', 0.0)
         error = abs(target - actual)
         assert error < 0.05, f"Error {error} is outside of acceptable threshold"
