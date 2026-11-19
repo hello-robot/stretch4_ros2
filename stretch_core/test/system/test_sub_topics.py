@@ -51,36 +51,40 @@ def test_twist_in_position_and_navigation_modes(
     node = param_client
 
     # Create publisher
-    pub = node.create_publisher(Twist, '/stretch/cmd_vel', 10)
+    pub = node.create_publisher(Twist, '/cmd_vel', 10)
     t = Twist()
     t.linear.x = 0.05
 
-    # 1. POSITION MODE (Should NOT move)
-    success = node.set_parameter('mode', 'position')
-    assert success, "Failed to set position mode"
+    try:
+        # 1. POSITION MODE (Should NOT move)
+        success = node.set_parameter('mode', 'position')
+        assert success, "Failed to set position mode"
 
-    # Publish and wait
-    pub.publish(t)
-    subscriber_node.wait_for_message('odom', timeout=2.0)
+        for _ in range(5):
+            pub.publish(t)
+            time.sleep(0.1)
+        subscriber_node.wait_for_message('odom', timeout=2.0)
 
-    # Check odom (should be 0 since mode rejected it)
-    odom_msg = subscriber_node.latest_msgs.get('odom')
-    assert odom_msg is not None, "Failed to receive odom"
-    assert abs(odom_msg.twist.twist.linear.x) < 0.005, "Robot moved in position mode!"
+        # Check odom (should be 0 since mode rejected it)
+        odom_msg = subscriber_node.latest_msgs.get('odom')
+        assert odom_msg is not None, "Failed to receive odom"
+        assert abs(odom_msg.twist.twist.linear.x) < 0.005, "Robot moved in position mode!"
 
-    # 2. NAVIGATION MODE (Should move)
-    success = node.set_parameter('mode', 'navigation')
-    assert success, "Failed to set navigation mode"
+        # 2. NAVIGATION MODE (Should move)
+        success = node.set_parameter('mode', 'navigation')
+        assert success, "Failed to set navigation mode"
 
-    # Publish and wait
-    pub.publish(t)
-    time.sleep(1.5) # give driver a moment to accelerate
-    subscriber_node.wait_for_message('odom', timeout=2.0)
+        for _ in range(15):
+            pub.publish(t)
+            time.sleep(0.1)
+        subscriber_node.wait_for_message('odom', timeout=2.0)
 
-    # Check odom (should be > 0 since it is moving)
-    odom_msg = subscriber_node.latest_msgs.get('odom')
-    assert odom_msg is not None, "Failed to receive odom"
-    assert odom_msg.twist.twist.linear.x > 0.005, f"Robot did not move in navigation mode! Vel: {odom_msg.twist.twist.linear.x}"
+        # Check odom (should be > 0 since it is moving)
+        odom_msg = subscriber_node.latest_msgs.get('odom')
+        assert odom_msg is not None, "Failed to receive odom"
+        assert odom_msg.twist.twist.linear.x > 0.005, f"Robot did not move in navigation mode! Vel: {odom_msg.twist.twist.linear.x}"
+    finally:
+        pub.publish(Twist())
 
 @pytest.mark.launch(fixture=stretch_driver_ld)
 def test_battery_topic_reception(subscriber_node):

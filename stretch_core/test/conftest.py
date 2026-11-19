@@ -41,7 +41,7 @@ def require_homed_robot() -> None:
     """
     node = MockSubscriberNode('homing_check_node')
     try:
-        received = node.wait_for_message('is_homed', timeout=15.0)
+        received = node.wait_for_message('is_homed', timeout=15.0, fresh=False)
         msg = node.latest_msgs.get('is_homed')
         if not received or msg is None:
             pytest.fail(

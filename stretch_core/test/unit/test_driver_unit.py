@@ -71,6 +71,11 @@ def test_driver_control_loop_benchmark(benchmark) -> None:
         mock_inst = MockRobot.return_value
         mock_inst.startup.return_value = True
         mock_inst.status = {
+            'server': {
+                'lease_holder': 'ros2_driver',
+                'lease_holder_priority': 1,
+                'lease_expiry': 0.0,
+            },
             'omnibase': {'x': 0.0, 'y': 0.0, 'theta': 0.0, 'x_vel': 0.0, 'y_vel': 0.0, 'theta_vel': 0.0},
             'lift': {'motor': {'pos_calibrated': 1, 'is_mg_moving': 0}, 'pos': 0.0, 'vel': 0.0, 'effort': 0.0},
             'arm': {'motor': {'is_mg_moving': 0, 'effort_pct': 0.0}, 'pos': 0.0, 'vel': 0.0, 'effort': 0.0},
@@ -82,6 +87,7 @@ def test_driver_control_loop_benchmark(benchmark) -> None:
                 'battery_soc': 100.0,
                 'charger_connected': True,
                 'charger_is_charging': False,
+                'adapter_voltage_present': True,
             },
             'end_of_arm': {
                 'wrist_yaw': {'pos': 0.0, 'vel': 0.0, 'effort': 0.0},
@@ -90,6 +96,7 @@ def test_driver_control_loop_benchmark(benchmark) -> None:
             },
             'gripper': {'pos': 0.0, 'vel': 0.0, 'effort': 0.0},
         }
+        mock_inst.routines.status = {'active_routine': 'routine_nop'}
         mock_inst.params = {'tool': 'tool_none'}
         mock_inst.robot_params = {
             'ros': {'joints': []},

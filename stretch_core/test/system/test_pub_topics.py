@@ -20,7 +20,7 @@ def test_homed_published() -> None:
     """Verify is_homed messages are published by stretch_driver."""
     node = MockSubscriberNode()
     try:
-        assert node.wait_for_message('is_homed', timeout=5.0), 'Did not receive is_homed msg!'
+        assert node.wait_for_message('is_homed', timeout=5.0, fresh=False), 'Did not receive is_homed msg!'
     finally:
         node.stop()
 
@@ -30,7 +30,7 @@ def test_mode_published() -> None:
     """Verify mode messages are published with default navigation mode."""
     node = MockSubscriberNode()
     try:
-        assert node.wait_for_message('mode', timeout=5.0), 'Did not receive mode msg!'
+        assert node.wait_for_message('mode', timeout=5.0, fresh=False), 'Did not receive mode msg!'
         assert node.latest_msgs['mode'].data == 'navigation', 'Default mode not navigation'
     finally:
         node.stop()

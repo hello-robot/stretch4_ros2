@@ -59,7 +59,7 @@ def test_fjt_success_wrist_roll(action_client):
 
 @pytest.mark.launch(fixture=stretch_driver_ld)
 def test_fjt_success_gripper(action_client):
-    q = {'gripper_joint': -0.1}
+    q = {'gripper_joint': 0.2}
     result = action_client.move_to_configuration(q, blocking=True)
     assert result.status == 4
 

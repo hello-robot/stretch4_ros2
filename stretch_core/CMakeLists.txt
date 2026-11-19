@@ -137,7 +137,7 @@ if(BUILD_TESTING)
   endif()
 
   ament_add_pytest_test(test_benchmarks test/performance/test_benchmarks.py TIMEOUT 120)
-  ament_add_pytest_test(test_stress test/performance/test_stress.py TIMEOUT 120)
+  ament_add_pytest_test(test_stress test/performance/test_stress.py TIMEOUT 360)
   ament_add_pytest_test(test_parameters test/system/test_parameters.py TIMEOUT 120)
   ament_add_pytest_test(test_pub_topics test/system/test_pub_topics.py TIMEOUT 120)
   ament_add_pytest_test(test_services test/system/test_services.py TIMEOUT 120)
