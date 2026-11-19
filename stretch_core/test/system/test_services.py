@@ -1,13 +1,19 @@
-import pytest
-import rclpy
+from collections.abc import Generator
 
-from common.launch_descriptions import stretch_driver_ld
 from common.client_nodes.service_client import ServiceClientNode
-from std_srvs.srv import Trigger, SetBool
+from common.launch_descriptions import stretch_driver_ld
+import pytest
+from std_srvs.srv import SetBool, Trigger
+
 
 @pytest.fixture
-def service_client_node():
-    rclpy.init()
+def service_client_node() -> Generator[ServiceClientNode, None, None]:
+    """
+    Create and yield a ServiceClientNode, destroying it on teardown.
+
+    Yields:
+        An active ServiceClientNode instance.
+    """
     node = ServiceClientNode('test_services_client_node')
     yield node
     node.destroy_node()
@@ -49,5 +55,3 @@ def test_stop_home_stow_runstop_services(service_client_node):
     # We do not call home or stow services in this baseline test to avoid 
     # unwanted actual robot motion when these tests are run by default.
     # Calling wait_for_service confirms they exist and were initialized.
-
-    rclpy.shutdown()
