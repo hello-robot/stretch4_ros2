@@ -850,7 +850,7 @@ class Stretch4ROSDriver(Node, ABC):
                 found = True
                 if parameter.value is not None and parameter.value < 0.0:
                     reason = "Joint velocity limit cannot be less than 0.0."
-            case n if "trajectory_server." in n:
+            case n if any(n.startswith(f"{server.param_prefix}.") for server in self.trajectory_servers):
                 found = True
             case n if n.startswith("joint_velocity."):
                 found = True
@@ -1682,9 +1682,22 @@ class StretchTrajectoryActionServer:
         add_param("base_rotation.max_velocity", 0.5)
         add_param("base_rotation.final_tolerance", 0.01)
         add_param("base_rotation.settle_timeout", 2.0)
-        # per-joint tolerances (trajectory_tolerance.<joint>) are declared by the driver,
-        # except the base rotation's, which isn't a driver joint
+        # the driver declares the default server's per-joint tolerances
+        # (trajectory_server.trajectory_tolerance.<joint>), except the base rotation's, which
+        # isn't a driver joint; any other server starts from a copy of them
         add_param(f"trajectory_tolerance.{self.BASE_ROTATION_JOINT}", 0.02)
+        if self.param_prefix != "trajectory_server":
+            self._copy_default_tolerances()
+
+    def _copy_default_tolerances(self):
+        """Declare {param_prefix}.trajectory_tolerance.<joint> for every joint the default
+        server has one for, with the same value, unless this server already declared it."""
+        descriptor = ParameterDescriptor(dynamic_typing=True, description='Joint properties')
+        defaults = self.driver.get_parameters_by_prefix("trajectory_server.trajectory_tolerance")
+        for joint, parameter in defaults.items():
+            name = f"{self.param_prefix}.trajectory_tolerance.{joint}"
+            if not self.driver.has_parameter(name):
+                self.driver.declare_parameter(name, parameter.value, descriptor)
 
     def get_param(self, short_name):
         return self.driver.get_parameter(f"{self.param_prefix}.{short_name}").value
