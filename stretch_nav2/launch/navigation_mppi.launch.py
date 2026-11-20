@@ -4,6 +4,7 @@ from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.substitutions import FindPackageShare
 from hello_helpers.multi_yaml import MultiYaml
+from hello_helpers.launch_utils import launch_singleton
 
 
 def scoped(action):
@@ -62,7 +63,7 @@ def generate_launch_description():
         }.items(),
     )
 
-    return LaunchDescription([
+    return launch_singleton(LaunchDescription([
         DeclareLaunchArgument(
             'action_timeout',
             default_value='30.0',
@@ -109,4 +110,4 @@ def generate_launch_description():
         scoped(hlidar_launch),
         scoped(footprint_launch),
         scoped(navigation_launch),
-    ])
+    ]), __file__)

@@ -8,7 +8,7 @@ from launch.launch_context import LaunchContext
 from launch_ros.substitutions import FindPackageShare
 import rclpy
 
-from hello_helpers.launch_utils import _remove_qt_plugin_env_vars
+from hello_helpers.launch_utils import _remove_qt_plugin_env_vars, launch_singleton
 
 def generate_launch_description():
     logger = rclpy.logging.get_logger('navigation_launch')
@@ -86,7 +86,7 @@ def generate_launch_description():
         }.items(),
         condition=IfCondition(LaunchConfiguration('use_rviz')))
 
-    return LaunchDescription([
+    return launch_singleton(LaunchDescription([
         map_path_param,
         use_slam,
         use_localization,
@@ -98,4 +98,4 @@ def generate_launch_description():
         *_remove_qt_plugin_env_vars(),
         rviz_launch,
         map_path_check_action,
-    ])
+    ]), __file__)

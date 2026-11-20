@@ -103,7 +103,7 @@ Example:
 ros2 run stretch_core dual_lidar_pointcloud_merger --ros-args \
   -p left_topic:=/lidar_points_left \
   -p right_topic:=/lidar_points_right \
-  -p output_topic:=/lidar_points \
+  -p output_topic:=/lidar_points_both \
   -p target_frame:=base_link
 ```
 

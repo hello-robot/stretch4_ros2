@@ -8,7 +8,7 @@ from launch_ros.actions import Node
 from stretch_core.vision.vision_topics import (
     VisionTopics
 )
-from hello_helpers.launch_utils import get_rviz_node
+from hello_helpers.launch_utils import get_rviz_node, launch_singleton
 
 
 def is_launch_config_true(context, name):
@@ -47,7 +47,7 @@ def generate_launch_description():
         use_system_timestamp,
     ]
 
-    return LaunchDescription(launch_args + [OpaqueFunction(function=launch_setup)])
+    return launch_singleton(LaunchDescription(launch_args + [OpaqueFunction(function=launch_setup)]), __file__)
 
 
 def launch_setup(context, *args, **kwargs):

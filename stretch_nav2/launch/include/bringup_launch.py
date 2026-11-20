@@ -31,6 +31,7 @@ from launch_ros.actions import Node
 from launch_ros.actions import PushROSNamespace
 from launch_ros.descriptions import ParameterFile
 from nav2_common.launch import ReplaceString, RewrittenYaml
+from hello_helpers.launch_utils import launch_singleton
 
 
 def generate_launch_description():
@@ -229,4 +230,4 @@ def generate_launch_description():
     # Add the actions to launch all of the navigation nodes
     ld.add_action(bringup_cmd_group)
 
-    return ld
+    return launch_singleton(ld, __file__)

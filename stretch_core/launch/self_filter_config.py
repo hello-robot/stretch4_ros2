@@ -17,6 +17,7 @@ TOOL_PRESETS = ('auto', 'sg4', 'pg4', 'tablet', 'nil')
 ROBOT_SELF_FILTER_YAML = 'robot_self_filter.yaml'
 ROBOT_FOOTPRINT_YAML = 'robot_footprint.yaml'
 DUAL_LIDAR_PIPELINE_YAML = 'dual_lidar_filter.yaml'
+FUSED_LIDAR_PIPELINE_YAML = 'dual_lidar_fused.yaml'
 
 TOOL_NAME_TO_PRESET = {
     'eoa_wrist_dw4_tool_sg4': 'sg4',
@@ -426,6 +427,15 @@ def dual_lidar_self_filter_parameters(stretch_core: str, tool_preset: str) -> li
     """Pipeline + shared policy + generated URDF geometry."""
     return [
         _config_path(stretch_core, DUAL_LIDAR_PIPELINE_YAML),
+        robot_self_filter_yaml(stretch_core),
+        generated_urdf_self_filter_yaml(tool_preset),
+    ]
+
+
+def dual_lidar_fused_parameters(stretch_core: str, tool_preset: str) -> list:
+    """Fused-pipeline params + shared policy + generated URDF geometry."""
+    return [
+        _config_path(stretch_core, FUSED_LIDAR_PIPELINE_YAML),
         robot_self_filter_yaml(stretch_core),
         generated_urdf_self_filter_yaml(tool_preset),
     ]
