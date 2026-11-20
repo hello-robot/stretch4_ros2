@@ -26,12 +26,6 @@ def test_fjt_success_single_joint_lift(action_client):
     assert result.status == 4
 
 @pytest.mark.launch(fixture=stretch_driver_ld)
-def test_fjt_success_mobile_base(action_client):
-    q = {'translate_mobile_base': 0.1}
-    result = action_client.move_to_configuration(q, blocking=True)
-    assert result.status == 4
-
-@pytest.mark.launch(fixture=stretch_driver_ld)
 def test_fjt_success_wrist_yaw(action_client):
     q = {'wrist_yaw_joint': 0.1}
     result = action_client.move_to_configuration(q, blocking=True)
@@ -51,20 +45,20 @@ def test_fjt_success_wrist_roll(action_client):
 
 @pytest.mark.launch(fixture=stretch_driver_ld)
 def test_fjt_success_gripper(action_client):
-    q = {'gripper_joint': -0.1}
+    # one finger's URDF position (0 is closed)
+    q = {'gripper_joint': 0.1}
     result = action_client.move_to_configuration(q, blocking=True)
     assert result.status == 4
 
 @pytest.mark.launch(fixture=stretch_driver_ld)
 def test_fjt_success_all_joints_simultaneously(action_client):
     q = {
-        'translate_mobile_base': 0.1,
         'lift_joint': 0.6,
         'arm_joint': 0.2,
         'wrist_yaw_joint': 0.0,
         'wrist_pitch_joint': 0.0,
         'wrist_roll_joint': 0.0,
-        'gripper_joint': 0.0
+        'gripper_joint': 0.05
     }
     result = action_client.move_to_configuration(q, blocking=True)
     assert result.status == 4

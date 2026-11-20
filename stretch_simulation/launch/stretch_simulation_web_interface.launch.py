@@ -21,7 +21,7 @@ from launch.substitutions import (
     LaunchConfiguration,
     PathJoinSubstitution,
 )
-from stretch_mujoco_driver.stretch_mujoco_driver import DEFAULT_SIM_TOOL
+from stretch_mujoco_driver.sim_tools import DEFAULT_SIM_TOOL
 
 
 def generate_launch_description():

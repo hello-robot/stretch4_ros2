@@ -72,7 +72,7 @@ temp = hm.HelloNode.quick_create('temp')
 actually_move = False
 [...]
 if actually_move:
-    temp.move_to_pose({'translate_mobile_base': 1.0})
+    temp.move_to_pose({'lift_joint': 0.5})
 ```
 
 to be more consise:
@@ -83,7 +83,7 @@ import hello_helpers.hello_misc as hm
 temp = hm.HelloNode.quick_create('temp')
 [...]
 temp.dryrun = True
-temp.move_to_pose({'translate_mobile_base': 1.0})
+temp.move_to_pose({'lift_joint': 0.5})
 ```
 
 **Methods**

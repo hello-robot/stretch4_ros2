@@ -4,66 +4,97 @@
 
 ## stretch_driver
 
-`stretch_driver` is the main hardware node. It wraps `stretch4_body`'s `RobotClient` and exposes the robot's joints, sensors, and end-of-arm tool over ROS 2.
+`stretch_driver` is the main hardware node. It wraps `stretch4_body`'s `RobotClient` and exposes the robot's joints, sensors, and end-of-arm tool over ROS 2. Its ROS interface (topics, services, parameters, modes, and the `follow_joint_trajectory` action) comes from the `Stretch4ROSDriver` base class in `hello_helpers/stretch4_ros_api.py`, which the simulation's `stretch_mujoco_driver` shares, so the same clients work against either.
 
 ```bash
 ros2 launch stretch_core stretch_driver.launch.py
 ```
+
+### Modes
+
+The `mode` parameter is the driver mode. Control modes, which a client chooses:
+
+| Mode | Accepts |
+|---|---|
+| `active` (default) | `cmd_vel`, `cmd_vel_stiff`, `joint_position_cmd`, `joint_velocity_cmd`, `follow_joint_trajectory` |
+| `teleop` | `joy` (gamepad) |
+| `puppet` | Follows another robot's `/joint_states` (`puppet.*` parameters) |
+
+Switching to `puppet` is governed by `puppet.engage`:
+- `require_match` (the real driver's default): the switch is refused, with the joints that are too far, unless every joint in position mode is within `puppet.match_tolerance` of the leader's pose (10% of the tool's range for `gripper_joint`), going by recent leader joint states.
+- `immediate` (the simulation's default, so the digital twin can snap onto the robot): the robot follows at once, jumping to the leader's pose. It logs a warning, as this isn't safe unless the poses already match.
+- `slow`: move to the leader's pose and then follow. Not implemented yet (it needs a motion planner).
+
+If returning to `puppet` after a routine or a runstop is refused, the driver switches to `active` instead. A driver launched with `mode:=puppet` starts in `active` unless `puppet.engage` is `immediate`; set `mode` to `puppet` once the poses match.
+
+Priority modes, which the driver enters by itself while it is busy: `homing`, `stowing`, `seating` (`seat_into_dock`), and `runstopped`. Routines are refused unless the robot is in a control mode, and the driver returns to the previous control mode afterwards. `position`, `navigation`, and `velocity` are deprecated: setting one selects `active`, with `velocity` also putting the joints into velocity mode.
+
+Whether each joint takes position or velocity commands is set per joint with `joint_mode.<joint>` (`position` or `velocity`).
 
 ### Parameters
 
 All parameters live on the `/stretch_driver` node. Read them with the `<node>:<param>` form used by `ros2 param` and rosbridge's `get_param`:
 
 ```bash
-ros2 param get /stretch_driver joint_velocity.lift
+ros2 param get /stretch_driver joint_velocity.lift_joint
 ros2 param get /stretch_driver tool_info.is_actuated
 ros2 param list /stretch_driver
 ```
 
+Joint parameters use the command joint names: `lift_joint`, `arm_joint`, `wrist_yaw_joint`, `wrist_pitch_joint`, `wrist_roll_joint`, and `gripper_joint` (the attached tool, when it is actuated).
+
 | Parameter | Type | Description |
 |---|---|---|
-| `mode` | string | Driver mode: `position`, `navigation`, or `velocity`. Writable. |
-| `sensitivity` | string | Motion sensitivity preset. |
-| `tool_info.name` | string | The configured end-of-arm tool (e.g. `eoa_wrist_dw4_tool_sg4`), or `unknown`. |
-| `tool_info.is_actuated` | bool | Whether the attached tool has any actuated joints. `false` for passive tools (tablet holder, NIL) and when no tool is configured. |
-| `tool_info.tool_joints` | string[] | The tool's own joint names, from its `ToolMetadata`. Empty for a passive tool. |
-| `joint_acceleration.<joint>` | double | Default acceleration for `lift`, `arm`, and each end-of-arm joint. |
-| `joint_acceleration.omnibase.{linear,angular}` | double | Default base acceleration. |
-| `joint_velocity.<joint>` | double | Default velocity limit for `lift`, `arm`, and each end-of-arm joint. |
-| `joint_velocity.gripper` | double | Generic alias for the attached tool's velocity limit. Declared only when `tool_info.is_actuated` is true. |
-| `joint_velocity.omnibase.{linear,angular}` | double | Default base velocity limits. |
-| `broadcast_odom_tf` | bool | Broadcast the wheel-odometry TF. |
-| `action_timeout` | double | Trajectory action server timeout, seconds. |
-| `velocity_timeout` | double | Upper bound on `JointJog.duration`, seconds. |
+| `mode` | string | Driver mode; see *Modes*. Writable. |
+| `joint_mode.<joint>` | string | `position` or `velocity`. Writable. |
+| `sensitivity` | string | Guarded-contact sensitivity preset (e.g. `default`, `high_sensitivity_manipulation`). Writable. |
+| `tool_info.name` | string | The configured end-of-arm tool (e.g. `eoa_wrist_dw4_tool_sg4`), or `unknown`. Read-only. |
+| `tool_info.is_actuated` | bool | Whether the attached tool has any actuated joints. `false` for passive tools (tablet holder, NIL) and when no tool is configured. Read-only. |
+| `tool_info.tool_joints` | string[] | The tool's own URDF joint names, from its `ToolMetadata`. Empty for a passive tool. Read-only. |
+| `tool_info.{urdf_range,aperture_range,position_tolerance}` | double[] / double | The tool's range in URDF units and aperture meters (each as `[closed, open]`), and the tolerance within which a position counts as reached. Declared only for an actuated tool. Read-only. |
+| `joint_velocity.<joint>` | double | Default speed of a position command that doesn't give one (m/s or rad/s; URDF units for `gripper_joint`). Writable. |
+| `joint_velocity.omnibase.{linear,angular}` | double | Default base speeds. |
+| `joint_acceleration.<joint>`, `joint_acceleration.omnibase.{linear,angular}` | double | Default accelerations. |
+| `joint_limit.<joint>.{lower,upper}` | double | Position limits applied to position commands and trajectories. Set for `gripper_joint` from the tool's URDF range. |
+| `joint_limit.<joint>.{velocity,acceleration}` | double | Maximum speed and acceleration. Faster velocity commands are limited to `velocity`. |
+| `puppet.joint_states_topic`, `puppet.odom_topic`, `puppet.follow_base` | string / bool | What puppet mode follows, and whether it also follows the leader's base velocity. Writable. |
+| `puppet.engage`, `puppet.match_tolerance` | string / double | How the driver enters puppet mode; see *Modes*. Writable. |
+| `trajectory_server.*` | | The `follow_joint_trajectory` server's settings, e.g. `timeout` and the per-joint `trajectory_tolerance.<joint>` (for `gripper_joint`, the tool's `position_tolerance`). |
+| `action_timeout` | double | Kept for launch files written for the old driver: if set (at launch or later), it sets `trajectory_server.timeout`. The navigation launch sets 30. |
+| `broadcast_odom_tf` | bool | Broadcast the wheel-odometry TF. Read-only. |
+| `velocity_timeout` | double | Timeout for velocity commands, seconds. |
+| `command_namespace` | string | Namespace of the command topics (`''` = the node's own). Read-only. |
 
 #### Tool info
 
-`tool_info.*` is resolved once at node startup from `stretch4_body`'s `get_tool_metadata()`. A tool that raises `ToolConfigurationError` — none configured, or a passive tool with no `ToolMetadata` — yields `is_actuated: false` and an empty `tool_joints` rather than a startup failure.
+`tool_info.*` is resolved once at node startup from `stretch4_body`'s `get_tool_metadata()`. A tool that raises `ToolConfigurationError` — none configured, or a passive tool with no `ToolMetadata` — yields `is_actuated: false` and an empty `tool_joints` rather than a startup failure, and no `gripper_joint` is created.
 
 Clients use `tool_info.is_actuated` to decide whether to offer gripper controls at all; Web Teleop greys out its open/close buttons when it reads `false`.
 
+#### The gripper joint
+
+Whatever tool is attached is commanded as `gripper_joint`, in the tool's URDF units: one finger's value (radians for the Stretch gripper, meters for the parallel gripper). `/joint_states` reports `gripper_joint` in the same units, alongside the tool's own joints (e.g. `gripper_finger_left_joint` and `gripper_finger_right_joint`), so a position read from `/joint_states` can be sent straight back as a command. The tool's own names (e.g. `stretch_gripper`, `stretch_gripper_joint`, or a finger joint) are accepted for `gripper_joint` on command topics and trajectories.
+
 #### Where limits live
 
-Limits are split across three surfaces according to how they change. A consumer should read each kind from the surface that owns it, and not go looking on the others:
+Limits are split across surfaces according to how they change. A consumer should read each kind from the surface that owns it:
 
 | Surface | Holds | Consumer guidance |
 |---|---|---|
 | URDF, on `/robot_description` | **Hardware limits** — each joint's physical envelope, generated by `stretch4_urdf` from robot params. | This is the robot *model*. Consumers should **not** parse it to discover limits; it is not a client API. |
 | Topics — `joint_states_diagnostics` | **Current soft limits** — the `soft_motion_limits` status, the hard range narrowed by any user override. These change at runtime. | Subscribe here for position bounds. |
-| Parameters — `joint_velocity.*`, `joint_acceleration.*` | **Unchanging limits** — velocity and acceleration, fixed for the life of the node. | Read once at startup. |
+| Parameters — `joint_velocity.*`, `joint_acceleration.*`, `joint_limit.*` | **Speeds and accelerations** — defaults and maximums. | Read at startup; `joint_velocity.*` can be changed. |
 
-#### Joint velocity limits (parameters)
+#### Joint velocities (parameters)
 
-Velocity and acceleration limits do not change while the driver runs, so they are parameters rather than a topic. `joint_velocity.*` mirrors `joint_acceleration.*`, with one exception: for the tool joint the velocity is published in URDF units, while the acceleration stays in the tool's actuator units (rad/s^2) — that is what the driver hands to `move_by()`, and converting it out and back would only add error. Values come from `stretch4_body`'s robot params (`robot_params[<joint>]['motion']['default']['vel']`, and `vel_m` / `vel_xy_m` / `vel_w_r` for lift, arm, and base), so they follow whatever tool and calibration the robot is actually configured with.
-
-Two things are specific to the tool joint:
+Values come from `stretch4_body`'s robot params (`robot_params[<joint>]['motion']['default']['vel']`, and `vel_m` / `vel_xy_m` / `vel_w_r` for lift, arm, and base; the `max` profile for `joint_limit.<joint>.velocity`), so they follow whatever tool and calibration the robot is actually configured with. For the tool joint the velocity is in URDF units, while the acceleration stays in the tool's actuator units (rad/s^2).
 
 - The gripper value comes from `tool_metadata.position_independent_velocity_limit('urdf')`: the tool's actuator limit expressed in URDF units, so a client can consume it exactly like every other joint. A rate does not convert like a position, so the published scalar is the minimum over the range — a rate achievable at any position rather than one that holds only near a particular opening.
-- `joint_velocity.gripper` is declared only when the tool is actuated. A passive tool has no velocity to report, and its absence is the signal a client should treat the joint as unavailable.
+- `joint_velocity.gripper_joint` is declared only when the tool is actuated. A passive tool has no velocity to report, and its absence is the signal a client should treat the joint as unavailable.
 
 #### Joint position limits (topic)
 
-Position bounds are soft limits that can be narrowed at runtime, so they are published on a topic rather than fixed in a parameter or read from the URDF. `stretch_driver` publishes them on `joint_states_diagnostics` (`diagnostic_msgs/DiagnosticArray`), which carries one `DiagnosticStatus` per concern, each with a `KeyValue` per joint keyed by command-group name:
+Position bounds are soft limits that can be narrowed at runtime, so they are published on a topic rather than fixed in a parameter or read from the URDF. `stretch_driver` publishes them on `joint_states_diagnostics` (`diagnostic_msgs/DiagnosticArray`), which carries one `DiagnosticStatus` per concern, each with a `KeyValue` per command joint:
 
 | Status name | Meaning |
 |---|---|
@@ -76,20 +107,38 @@ Position bounds are soft limits that can be narrowed at runtime, so they are pub
 
 `soft_motion_limits` and `at_limit` answer different questions and a client generally wants both: the former is *where the bounds are*, the latter is *am I against one now*. Values are `DiagnosticStatus` `KeyValue` pairs, so they arrive as strings and need parsing.
 
-A separate `/joint_limits` topic (`sensor_msgs/JointState`, `position` = lower bound, `velocity` = upper bound) is published only by the Mujoco simulation driver. It predates the diagnostics status and is not the surface to build against.
-
 ### Topics
+
+Command topics are in `command_namespace` (by default the node's own namespace).
 
 | Topic | Type | Notes |
 |---|---|---|
-| `joint_states` | `sensor_msgs/JointState` | Includes the tool's own joint names plus a synthetic `gripper_joint` entry, so a client can address any tool by one generic name. |
+| `joint_states` | `sensor_msgs/JointState` | The command joints (the arm split into its `arm_l1..4_joint` links), the tool's own joints, and `gripper_joint`. |
 | `joint_states_diagnostics` | `diagnostic_msgs/DiagnosticArray` | Per-joint soft limits, at-limit state, homing, runstop, collision. See *Joint position limits* above. |
-| `joint_vel` (sub) | `control_msgs/JointJog` | Velocity jog. Accepted in `velocity` and `navigation` modes. `gripper_joint` is accepted as an alias for whichever tool joint is attached. |
-| `cmd_vel` (sub) | `geometry_msgs/Twist` | Base velocity. |
+| `mode`, `tool`, `sensitivity`, `is_homed`, `is_runstopped` | `std_msgs` | Latched. |
+| `wheel_odom`, `battery` | `nav_msgs/Odometry`, `sensor_msgs/BatteryState` | |
+| `joint_position_cmd` (sub) | `sensor_msgs/JointState` | Position targets, for joints in `position` mode. `active` mode. |
+| `joint_velocity_cmd` (sub) | `sensor_msgs/JointState` | Velocities, for joints in `velocity` mode. `active` mode. |
+| `cmd_vel` (sub) | `geometry_msgs/Twist` | Base velocity. `active` mode. |
+| `cmd_vel_stiff` (sub) | `geometry_msgs/TwistWithCovarianceStamped` | Base velocity and stiffness (0–1) in `covariance[0]`; full stiffness if the covariance's last element is 0. Used by the docking server. `active` mode. |
+| `joy` (sub) | `sensor_msgs/Joy` | Gamepad. `teleop` mode. |
+| `joint_vel` (sub) | `control_msgs/JointJog` | Deprecated; handled by the `joint_jog_converter` node (`deprecated_interfaces:=true`, the default), which forwards it to `joint_velocity_cmd`. Wrist and gripper jogs move by `velocity × duration` (URDF units for the gripper). |
+
+### Services
+
+All `std_srvs/Trigger`, except `runstop_the_robot` (`std_srvs/SetBool`). Each publishes its calls on `<service>/_service_event` (service introspection), which the digital twin relay follows.
+
+| Service | |
+|---|---|
+| `stop_the_robot` | Stop all joints and the base. |
+| `home_the_robot`, `stow_the_robot` | Run the homing (60 s timeout) or stowing (30 s) routine in the `homing` / `stowing` mode; fails if it doesn't complete. |
+| `seat_into_dock` | Seat the robot into the dock it is lined up with (`routine_blind_dock`, 60 s timeout) in the `seating` mode. Not supported in simulation yet. |
+| `freewheel_the_robot` | Let the base's wheels turn freely. |
+| `runstop_the_robot` | Set or clear the runstop. |
 
 ### End-of-arm tools
 
-The driver is tool-agnostic: joint names, unit conventions, and position tolerances are resolved at runtime through `stretch4_body`'s `RobotJoints` / `ToolMetadata`, so a new gripper does not need a new command group. See the [custom user tool guide](https://github.com/hello-robot/stretch4_body#custom-user-end-of-arm-tools) in stretch4_body for how a tool declares its joints, units, and tolerance.
+The driver is tool-agnostic: joint names, unit conventions, and position tolerances are resolved at runtime through `stretch4_body`'s `ToolMetadata`, so a new gripper needs no driver changes. See the [custom user tool guide](https://github.com/hello-robot/stretch4_body#custom-user-end-of-arm-tools) in stretch4_body for how a tool declares its joints, units, and tolerance.
 
 ## Dual Hesai point cloud merger
 

@@ -21,6 +21,7 @@ setup(
     entry_points={
         'console_scripts': [
             'configure_wrist = hello_helpers.configure_wrist:main',
+            'stretch4_twin_relay = hello_helpers.stretch4_twin_relay:main',
         ],
     },
 )
