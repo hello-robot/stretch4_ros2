@@ -14,6 +14,7 @@ from contextlib import contextmanager
 
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.action.server import ServerGoalHandle
+from action_msgs.msg import GoalStatus
 from control_msgs.action import FollowJointTrajectory
 from trajectory_msgs.msg import JointTrajectoryPoint
 
@@ -1583,6 +1584,11 @@ class StretchTrajectoryActionServer:
         self.direct_command_preempted = False
         self.preempted_joints = set()  # joints whose direct command preempted the goal
 
+        # One goal at a time: accepting a goal supersedes the running one, which ends at its
+        # next interrupt check; the new goal waits for it to stop its joints, then runs.
+        self._latest_goal_id = None
+        self._execute_lock = threading.Lock()
+
         self.param_prefix = param_prefix
         self.declare_params()
 
@@ -1642,9 +1648,14 @@ class StretchTrajectoryActionServer:
         self.driver.get_logger().info(f'FollowJointTrajectory Action Server {action_name} has been initialized.')
 
     def handle_accepted_callback(self, goal_handle):
+        self._latest_goal_id = bytes(goal_handle.goal_id.uuid)
         self.pub_accepted_goals.publish(FollowJointTrajectory.Impl.SendGoalService.Request(
             goal_id=goal_handle.goal_id, goal=goal_handle.request))
         goal_handle.execute()
+
+    def _is_superseded(self, goal_handle):
+        """Whether a goal accepted after this one has replaced it."""
+        return bytes(goal_handle.goal_id.uuid) != self._latest_goal_id
 
     def declare_params(self):
         def add_param(name,value):
@@ -1748,6 +1759,10 @@ class StretchTrajectoryActionServer:
             result.error_code = FollowJointTrajectory.Result.PATH_TOLERANCE_VIOLATED
             result.error_string = "Canceled"
             return result
+
+        if self._is_superseded(goal_handle):
+            return self._abort(goal_handle, FollowJointTrajectory.Result.PATH_TOLERANCE_VIOLATED,
+                               "Superseded by a new goal")
 
         # Check robot mode
         if self.driver.robot_mode() != self.driver.active_mode:
@@ -2159,9 +2174,10 @@ class StretchTrajectoryActionServer:
 
             rate.sleep()
 
-    def stop_vel_joints(self, joint_names):
+    def stop_vel_joints(self, joint_names, hold_position_joints=True):
         """Stop the goal's joints when it ends: velocity-mode joints at zero velocity,
-        position-mode joints at their current position. Joints another source took over
+        position-mode joints at their current position (or, if hold_position_joints is
+        False, left on their last commanded target). Joints another source took over
         (preempted_joints) are left to it."""
         for joint_name in joint_names:
             if joint_name in self.preempted_joints:
@@ -2176,6 +2192,8 @@ class StretchTrajectoryActionServer:
             with self._server_commands():
                 if j_mode == self.driver.velocity_mode:
                     succeeded = self.driver.check_and_set_vel(joint_name, 0.0)
+                elif j_mode == self.driver.position_mode and not hold_position_joints:
+                    continue
                 elif j_mode == self.driver.position_mode and self._joint_position(joint_name) is not None:
                     succeeded = self.driver.check_and_set_pos(joint_name, self._joint_position(joint_name))
                 else:
@@ -2349,7 +2367,15 @@ class StretchTrajectoryActionServer:
     
     
     def execute_callback(self, goal_handle):
-        """Execute the trajectory."""
+        """Execute the trajectory, after the goal it supersedes (if any) has ended."""
+        with self._execute_lock:
+            if self._is_superseded(goal_handle):
+                # Replaced by a newer goal while waiting its turn; don't move at all
+                return self._abort(goal_handle, FollowJointTrajectory.Result.PATH_TOLERANCE_VIOLATED,
+                                   "Superseded by a new goal")
+            return self._execute_goal(goal_handle)
+
+    def _execute_goal(self, goal_handle):
         mode = self.get_param("mode")
         if mode not in self.modes:
             self.driver.get_logger().error(f"Invalid trajectory server mode: {mode}. Must be one of {self.modes}")
@@ -2432,9 +2458,11 @@ class StretchTrajectoryActionServer:
             result.error_code = FollowJointTrajectory.Result.GOAL_TOLERANCE_VIOLATED
             result.error_string = f"Error {e} occurred."
             goal_handle.abort()
-        finally:            
-            #cleanup:
-            self.stop_vel_joints(trajectory.joint_names)
+        finally:
+            # A goal succeeds once its joints are within tolerance of the final waypoint, so
+            # position-mode joints keep heading there; otherwise they stop where they are
+            succeeded = goal_handle.status == GoalStatus.STATUS_SUCCEEDED
+            self.stop_vel_joints(trajectory.joint_names, hold_position_joints=not succeeded)
             self.active_joints = None
                 
         return result
