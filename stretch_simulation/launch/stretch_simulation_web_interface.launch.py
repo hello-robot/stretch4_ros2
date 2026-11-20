@@ -21,7 +21,13 @@ from launch.substitutions import (
     LaunchConfiguration,
     PathJoinSubstitution,
 )
-from stretch_mujoco_driver.stretch_mujoco_driver import DEFAULT_SIM_TOOL
+from stretch_mujoco_driver.install_stretch4_mujoco import ensure_stretch4_mujoco
+
+# stretch_mujoco_driver.stretch_mujoco_driver imports stretch4_mujoco, which is installed on the
+# first launch.
+ensure_stretch4_mujoco()
+
+from stretch_mujoco_driver.stretch_mujoco_driver import DEFAULT_SIM_TOOL  # noqa: E402
 
 
 def generate_launch_description():
