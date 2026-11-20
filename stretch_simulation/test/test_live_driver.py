@@ -15,7 +15,13 @@ Assumptions:
 
 Run instructions:
 -----------------
-python3 test_live_driver.py
+python3 test_live_driver.py                     # the default tests (DEFAULT_TESTS)
+python3 test_live_driver.py --all               # every test (ALL_TESTS)
+python3 test_live_driver.py --tests a,b         # just the named tests
+python3 test_live_driver.py --parity            # just test_jazzy_parity
+
+Exits 0 if every selected test passed, 1 on a failure (or no driver), 2 on an
+unknown test name, 130 if interrupted.
 """
 
 import sys
@@ -560,40 +566,51 @@ class StretchLiveDriverTester(Node):
                             "  2. We attempt to send a position command to the lift. The robot must NOT move at all.\n"
                             "  3. We release the runstop, and the robot resumes normal active operations.")
 
+        # The lift may be anywhere after earlier tests, so compare against where it starts
+        self.wait_for_joint_state()
+        start_pos = self.joint_pos("lift_joint")
+        # Ask for a 0.2 m move, up unless that would pass the top of the lift's range
+        target = start_pos + 0.2 if start_pos < 0.8 else start_pos - 0.2
+
         # Step 1: Engage Runstop
-        req = SetBool.Request()
-        req.data = True
-        future = self.runstop_cli.call_async(req)
-        rclpy.spin_until_future_complete(self, future)
-        assert future.result().success, "Failed to engage runstop safety!"
+        self.set_runstop(True)
         print(f"{GREEN}✓ Safety runstop successfully ENGAGED!{RESET}")
 
-        # Step 2: Attempt position command (should be blocked)
-        js = JointState()
-        js.name = ["lift_joint"]
-        js.position = [0.9]  # Command lift to go high up
-        for _ in range(5):
-            self.position_cmd_pub.publish(js)
-            self.ros_sleep(0.1)
-        
-        print(f"{YELLOW}Verification: Waiting to confirm no physical movement occurs...{RESET}")
-        self.ros_sleep(1.5)
-        
-        # Verify lift did not move to 0.9 (should still be near 0.5)
-        self.ros_sleep(0.1)
-        if self.latest_joint_state is not None:
-            idx = self.latest_joint_state.name.index("lift_joint")
-            pos = self.latest_joint_state.position[idx]
-            print(f"  Current joint_lift position during runstop: {pos:.3f} m")
-            assert pos < 0.75, "SAFETY FAILURE: Robot moved while safety runstop was active!"
-            print(f"{GREEN}✓ Verification Successful: Robot movement was blocked!{RESET}")
+        try:
+            # Step 2: Attempt position command (should be blocked)
+            js = JointState()
+            js.name = ["lift_joint"]
+            js.position = [target]
+            for _ in range(5):
+                self.position_cmd_pub.publish(js)
+                self.ros_sleep(0.1)
 
-        # Step 3: Release Runstop
-        req.data = False
+            print(f"{YELLOW}Verification: Waiting to confirm no physical movement occurs...{RESET}")
+            self.ros_sleep(1.6)
+
+            pos = self.joint_pos("lift_joint")
+            print(f"  lift_joint during runstop: {pos:.3f} m (started at {start_pos:.3f} m, commanded {target:.3f} m)")
+            assert abs(pos - start_pos) < 0.02, "SAFETY FAILURE: Robot moved while safety runstop was active!"
+            print(f"{GREEN}✓ Verification Successful: Robot movement was blocked!{RESET}")
+        finally:
+            # Step 3: Release Runstop, even after a failure, so later tests (and the sim) aren't left runstopped
+            self.set_runstop(False)
+            print(f"{GREEN}✓ Safety runstop successfully RELEASED!{RESET}")
+
+    def wait_for_joint_state(self, timeout_s=3.0):
+        """Spin until a /joint_states message has arrived (a test run first hasn't spun yet)."""
+        deadline = time.monotonic() + timeout_s
+        while self.latest_joint_state is None and time.monotonic() < deadline:
+            rclpy.spin_once(self, timeout_sec=0.1)
+        assert self.latest_joint_state is not None, f"No joint_states within {timeout_s} s."
+
+    def set_runstop(self, runstopped):
+        req = SetBool.Request()
+        req.data = runstopped
         future = self.runstop_cli.call_async(req)
         rclpy.spin_until_future_complete(self, future)
-        assert future.result().success, "Failed to release runstop!"
-        print(f"{GREEN}✓ Safety runstop successfully RELEASED!{RESET}")
+        action = "engage" if runstopped else "release"
+        assert future.result().success, f"Failed to {action} the runstop!"
 
     def test_trajectory_action(self):
         print_header("7. FOLLOW_JOINT_TRAJECTORY ACTION SERVER INTERFACE")
@@ -1297,17 +1314,33 @@ ALL_TESTS = [
 ]
 
 
+# What runs with no option: the trajectory, sensor and diagnostics tests (phases 7-11)
+DEFAULT_TESTS = [
+    "test_trajectory_action", "test_trajectory_diagnostics", "test_imu_and_sensors",
+    "test_stop_the_robot_service", "test_diagnostics_and_battery",
+]
+
+
 def main():
     # --all runs every test in ALL_TESTS; --parity just test_jazzy_parity;
-    # --tests a,b runs the named ones. With no option, the selection below runs.
+    # --tests a,b runs the named ones; with no option, DEFAULT_TESTS run.
+    # Exits 0 only if every selected test passed.
     args = sys.argv[1:]
-    selected = None
     if "--all" in args:
         selected = ALL_TESTS
     elif "--parity" in args:
         selected = ["test_jazzy_parity"]
     elif "--tests" in args:
         selected = args[args.index("--tests") + 1].split(",")
+    else:
+        selected = DEFAULT_TESTS
+        skipped = [name for name in ALL_TESTS if name not in DEFAULT_TESTS]
+        print(f"{YELLOW}Running the default tests; --all also runs {', '.join(skipped)}.{RESET}")
+    unknown = [name for name in selected if name not in ALL_TESTS]
+    if unknown:
+        print(f"{RED}Unknown test(s): {', '.join(unknown)}. Valid tests: {', '.join(ALL_TESTS)}{RESET}")
+        sys.exit(2)
+
     rclpy.init()
     tester = StretchLiveDriverTester()
 
@@ -1317,52 +1350,26 @@ def main():
         rclpy.shutdown()
         sys.exit(1)
 
+    exit_code = 1
     try:
-        if selected is not None:
-            for name in selected:
-                getattr(tester, name)()
-                tester.ros_sleep(3.0)
-            print(f"\n{BOLD}{GREEN}PASSED: {', '.join(selected)}{RESET}")
-            return
-        # Run entire integration test suite
-        '''tester.test_parameters()
-        tester.ros_sleep(3.0)
-        tester.test_homing_and_stowing()
-        tester.ros_sleep(3.0)
-        tester.test_position_commands()
-        tester.ros_sleep(3.0)
-        tester.test_velocity_commands()
-        tester.ros_sleep(3.0)
-        tester.test_joint_velocity_commands()
-        tester.ros_sleep(3.0)
-        tester.test_runstop_safety()
-        tester.ros_sleep(3.0)
-        tester.test_joy_commands()
-        tester.ros_sleep(3.0)'''
-        tester.test_trajectory_action()
-        tester.ros_sleep(3.0)
-        tester.test_trajectory_diagnostics()
-        tester.ros_sleep(3.0)
-        tester.test_imu_and_sensors()
-        tester.ros_sleep(3.0)
-        tester.test_stop_the_robot_service()
-        tester.ros_sleep(3.0)
-        tester.test_diagnostics_and_battery()
-        tester.ros_sleep(3.0)
-        
+        for name in selected:
+            getattr(tester, name)()
+            tester.ros_sleep(3.0)
+        exit_code = 0
         print(f"\n{BOLD}{GREEN}{'='*80}{RESET}")
-        print(f"{BOLD}{GREEN}ALL LIVE INTEGRATION TESTS PASSED SUCCESSFULLY!{RESET}")
+        print(f"{BOLD}{GREEN}PASSED: {', '.join(selected)}{RESET}")
         print(f"{BOLD}{GREEN}{'='*80}{RESET}")
-
     except AssertionError as e:
         print(f"\n{BOLD}{RED}{'='*80}{RESET}")
-        print(f"{BOLD}{RED}INTEGRATION TEST FAILURE: {e}{RESET}")
+        print(f"{BOLD}{RED}INTEGRATION TEST FAILURE in {name}: {e}{RESET}")
         print(f"{BOLD}{RED}{'='*80}{RESET}")
     except KeyboardInterrupt:
         print(f"\n{YELLOW}Testing interrupted by user.{RESET}")
+        exit_code = 130
     finally:
         tester.destroy_node()
         rclpy.shutdown()
+    sys.exit(exit_code)
 
 if __name__ == '__main__':
     main()
