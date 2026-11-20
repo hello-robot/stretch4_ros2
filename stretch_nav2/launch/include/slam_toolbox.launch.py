@@ -12,7 +12,7 @@ from lifecycle_msgs.msg import Transition
 from launch.substitutions import PathJoinSubstitution
 from launch_ros.substitutions import FindPackageShare
 
-from hello_helpers.launch_utils import get_rviz_node
+from hello_helpers.launch_utils import get_rviz_node, launch_singleton
 
 def generate_launch_description():
     declare_use_sim_time_cmd = DeclareLaunchArgument(
@@ -94,4 +94,4 @@ def generate_launch_description():
     for action in get_rviz_node(rviz_config):
         ld.add_action(action)
 
-    return ld
+    return launch_singleton(ld, __file__)

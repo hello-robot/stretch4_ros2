@@ -1,0 +1,50 @@
+name: Run stretch_update_ros_workspace.sh in a Docker container
+
+on:
+  push:
+    branches: [ jazzy ]
+  pull_request:
+    branches: [ jazzy ]
+  workflow_dispatch:  # Allow manual triggering
+    inputs:
+      stretch4_install_ref:
+        description: 'Branch/tag of hello-robot/stretch4_install to install with'
+        required: false
+        default: 'main'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-docker-installation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    env:
+      IMAGE_NAME: stretch4-ros2-test:latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: .github/docker/Dockerfile
+          build-args: |
+            STRETCH4_INSTALL_REF=${{ inputs.stretch4_install_ref || 'main' }}
+          tags: ${{ env.IMAGE_NAME }}
+          load: true
+          # Caches the base layers (apt, nodejs); the workspace build re-runs whenever this repo changes
+          cache-from: type=gha
+          cache-to: type=gha,mode=min
+
+      - name: Run stretch4_ros2 tests
+        run: |
+          chmod +x .github/docker/test.sh
+          ./.github/docker/test.sh -i $IMAGE_NAME -c $(git rev-parse HEAD)

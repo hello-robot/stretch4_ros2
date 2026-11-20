@@ -9,6 +9,7 @@ from launch_ros.actions import Node
 
 sys.path.insert(0, os.path.dirname(__file__))
 from self_filter_config import footprint_self_filter_parameters, validate_tool_preset
+from hello_helpers.launch_utils import launch_singleton
 
 
 def launch_setup(context, *args, **kwargs):
@@ -36,7 +37,7 @@ def launch_setup(context, *args, **kwargs):
 
 
 def generate_launch_description():
-    return LaunchDescription([
+    return launch_singleton(LaunchDescription([
         DeclareLaunchArgument(
             'tool_preset',
             default_value='auto',
@@ -61,4 +62,4 @@ def generate_launch_description():
             ),
         ),
         OpaqueFunction(function=launch_setup),
-    ])
+    ]), __file__)

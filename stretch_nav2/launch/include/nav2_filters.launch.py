@@ -11,6 +11,7 @@ from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from nav2_common.launch import RewrittenYaml
+from hello_helpers.launch_utils import launch_singleton
 
 
 def _bool_cfg(context, name, default=True):
@@ -105,7 +106,7 @@ def _launch_setup(context, *args, **kwargs):
 
 def generate_launch_description():
     pkg = get_package_share_directory('stretch_nav2')
-    return LaunchDescription([
+    return launch_singleton(LaunchDescription([
         DeclareLaunchArgument(
             'filter_params_file',
             default_value=os.path.join(pkg, 'config', 'nav2_filter_servers.yaml'),
@@ -133,4 +134,4 @@ def generate_launch_description():
         DeclareLaunchArgument('use_sim_time', default_value='false'),
         DeclareLaunchArgument('autostart', default_value='true'),
         OpaqueFunction(function=_launch_setup),
-    ])
+    ]), __file__)

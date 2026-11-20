@@ -8,6 +8,7 @@ from launch.logging import get_logger
 from launch.substitutions import Command, LaunchConfiguration
 from launch_ros.actions import Node
 from stretch4_urdf import get_urdf_from_robot_params
+from hello_helpers.launch_utils import launch_singleton
 
 DEPRECATED_DRIVER_MODES = {
     "position": "active",
@@ -218,4 +219,4 @@ def generate_launch_description():
 
     ld.add_action(OpaqueFunction(function=add_deprecated_interfaces))
 
-    return ld
+    return launch_singleton(ld, __file__)

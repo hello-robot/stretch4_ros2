@@ -6,7 +6,7 @@ from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
-from hello_helpers.launch_utils import get_rviz_node
+from hello_helpers.launch_utils import get_rviz_node, launch_singleton
 
 def is_launch_config_true(context, name):
     return LaunchConfiguration(name).perform(context) == "true"
@@ -51,6 +51,16 @@ def generate_launch_description():
         ),
     )
 
+    use_stereo = DeclareLaunchArgument(
+        "use_stereo",
+        default_value="false",
+        description=(
+            "If true, publish the left and right head cameras as a rectified, row-aligned stereo pair "
+            "on /cameras_head/stereo/{left,right}/, only while something subscribes. Needs both "
+            "use_left and use_right."
+        ),
+    )
+
     use_system_timestamp = DeclareLaunchArgument(
         "use_system_timestamp",
         default_value="true",
@@ -60,7 +70,22 @@ def generate_launch_description():
         ),
     )
 
-    launch_args = [
+    stereo_args = [
+        DeclareLaunchArgument(
+            "stereo_pitch_deg", default_value="25.0",
+            description="Pitch of the rectified head stereo pair, degrees (> 0 up)."),
+        DeclareLaunchArgument(
+            "stereo_focal_px", default_value="400.0",
+            description="Rectified head stereo focal length, pixels. 0 keeps OpenCV's."),
+        DeclareLaunchArgument(
+            "stereo_output_size", default_value="[1600,1200]",
+            description="[width,height] of the rectified head stereo images. [0,0] = raw size."),
+        DeclareLaunchArgument(
+            "stereo_max_rate", default_value="0.0",
+            description="Max rate of the head stereo pair, Hz. 0 = every frame."),
+    ]
+
+    launch_args = stereo_args + [
         use_rviz_arg,
         use_left,
         use_right,
@@ -68,9 +93,10 @@ def generate_launch_description():
         use_compressed,
         use_system_timestamp,
         fps,
+        use_stereo,
     ]
 
-    return LaunchDescription(launch_args + [OpaqueFunction(function=launch_setup)])
+    return launch_singleton(LaunchDescription(launch_args + [OpaqueFunction(function=launch_setup)]), __file__)
 
 
 def launch_setup(context, *args, **kwargs):
@@ -80,6 +106,12 @@ def launch_setup(context, *args, **kwargs):
     is_use_compressed = is_launch_config_true(context, "use_compressed")
     is_use_system_timestamp = is_launch_config_true(context, "use_system_timestamp")
     fps = int(LaunchConfiguration("fps").perform(context))
+    is_use_stereo = is_launch_config_true(context, "use_stereo")
+    stereo_pitch_deg = float(LaunchConfiguration("stereo_pitch_deg").perform(context))
+    stereo_focal_px = float(LaunchConfiguration("stereo_focal_px").perform(context))
+    stereo_max_rate = float(LaunchConfiguration("stereo_max_rate").perform(context))
+    stereo_output_size = [int(v) for v in
+                          LaunchConfiguration("stereo_output_size").perform(context).strip("[] ").split(",")]
 
     camera_node = Node(
         package="stretch_core",
@@ -93,6 +125,11 @@ def launch_setup(context, *args, **kwargs):
                 "use_compressed": is_use_compressed,
                 "use_system_timestamp": is_use_system_timestamp,
                 "fps": fps,
+                "use_stereo": is_use_stereo,
+                "stereo_pitch_deg": stereo_pitch_deg,
+                "stereo_focal_px": stereo_focal_px,
+                "stereo_output_size": stereo_output_size,
+                "stereo_max_rate": stereo_max_rate,
                 "is_gripper": False,
             }
         ],
