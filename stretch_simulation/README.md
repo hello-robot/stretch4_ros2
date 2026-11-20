@@ -8,6 +8,9 @@ You need Ubuntu 24.04 with [ROS 2 Jazzy](https://docs.ros.org/en/jazzy/Installat
 
 > Note: This package is not supported on MacOS, due to the lack of GPU acceleration and OpenGL 1.5+ support in Docker.
 
+
+> Note: If you are on a Stretch robot, the workspace in `~/ament_ws` already has this package, so you only need the `ros2 launch` command.
+
 ```shell
 source /opt/ros/jazzy/setup.bash
 mkdir -p ~/ament_ws/src && cd ~/ament_ws/src
@@ -23,9 +26,7 @@ source install/setup.bash
 ros2 launch stretch_simulation stretch_mujoco_driver.launch.py
 ```
 
-The first launch clones [stretch4\_mujoco](https://github.com/hello-robot/stretch4_mujoco) to `~/repos/stretch4_mujoco` and installs it editable with pip, which takes a few minutes. Changes you make in that checkout take effect on the next launch. To use a checkout somewhere else, set `STRETCH4_MUJOCO_PATH` before the first launch, or run `pip install --user --break-system-packages -e <path>` yourself.
-
-> Note: If you are on a Stretch robot, the workspace in `~/ament_ws` already has this package, so you only need the `ros2 launch` command.
+The first launch clones [stretch4\_mujoco](https://github.com/hello-robot/stretch4_mujoco) to `~/repos/stretch4_mujoco` and installs it editable with pip, which takes a few minutes. Changes you make in that checkout take effect on the next launch. To use a checkout somewhere else, set `STRETCH4_MUJOCO_PATH` before the first launch, or run `pip install -e <path>` yourself.
 
 ### RoboCasa scenes (optional)
 
