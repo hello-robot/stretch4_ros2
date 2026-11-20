@@ -88,7 +88,7 @@ class StretchDriver(Stretch4ROSDriver):
                     to_actuator_vel = lambda v: v
                 self.set_vel_functions[joint] = (
                     lambda v, a, j=backend, eps=eoa_deadband, step=vel_increment, to_act=to_actuator_vel:
-                        self.robot.end_of_arm.quick_stop(j) if abs(v) < eps
+                        self.robot.end_of_arm.hold_position(j) if abs(v) < eps
                         else self.robot.end_of_arm.move_by(j, copysign(step, v), v_r=to_act(v), a_r=a))
             else:
                 self.set_vel_functions[joint] = (
