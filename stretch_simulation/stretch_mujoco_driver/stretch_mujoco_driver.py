@@ -64,6 +64,8 @@ from hello_helpers.joy_conversion import SE4_dw4_sg4_Idx
 from hello_helpers.joy_conversion import get_Idx
 
 from hello_helpers.joy_conversion import (
+    check_stretch_joy,
+    get_default_gamepad_state,
     unpack_joy_to_gamepad_state,
     unpack_gamepad_state_to_joy,
     get_default_joy_msg,
@@ -78,6 +80,17 @@ from rclpy import time as rclpyTime
 
 from hello_helpers.stretch4_ros_api import Stretch4ROSDriver, spin_until_shutdown
 from stretch_mujoco_driver.sim_tools import DEFAULT_SIM_TOOL, SIM_TOOLS, resolve_sim_tool  # noqa: F401 (DEFAULT_SIM_TOOL is re-exported)
+
+# stretch4_mujoco's port of stretch4_body's gamepad teleop, for handle_joy. sim_teleop also
+# imports pynput for its keyboard teleop, which can fail without a display; the driver
+# still runs then, just without joystick teleop.
+try:
+    from stretch4_mujoco.gamepad_control_mappings import ControlMapping
+    from stretch4_mujoco.sim_teleop import GamepadTeleop
+    GAMEPAD_TELEOP_IMPORT_ERROR = None
+except Exception as e:
+    GamepadTeleop = None
+    GAMEPAD_TELEOP_IMPORT_ERROR = e
 
 # stretch4_body's ToolMetadata takes this fraction of a tool's URDF range as its
 # position tolerance; mirrored for tool_info.position_tolerance.
@@ -203,6 +216,15 @@ class StretchMujocoDriver(Stretch4ROSDriver):
                 success = list(map(lambda x: x.successful, results))
                 reasons = list(map(lambda x: x.reason, results))
                 self.logger.info(f"Setting joint limits for joint {joint} as ({ll},{ul}).  Success: {success}, reasons: {reasons}")
+        # Teleop Joy messages drive the sim through stretch4_mujoco's gamepad mapping (see
+        # handle_joy). Creating it doesn't open a gamepad; only its start() would.
+        self.gamepad_teleop = None
+        if GamepadTeleop is None:
+            self.logger.warn(f"Joystick teleop is unavailable: couldn't import stretch4_mujoco's "
+                             f"gamepad teleop ({GAMEPAD_TELEOP_IMPORT_ERROR}).")
+        else:
+            self.gamepad_teleop = GamepadTeleop(self.sim, print_mapping_on_start=False)
+
         # Add a check timer to detect when the simulator is closed
         self.sim_check_timer = self.create_timer(0.1, self.check_sim_status, callback_group=self.main_group)
         self.start()
@@ -445,38 +467,6 @@ class StretchMujocoDriver(Stretch4ROSDriver):
         )
         return model, xml, objects_info
 
-        def get_button_vel(joint_name, pos_btn, neg_btn):
-            max_vel = self.get_parameter(f"gamepad.max_vel.{joint_name}").value
-            if state.get(pos_btn, False):
-                return max_vel
-            elif state.get(neg_btn, False):
-                return -max_vel
-            return 0.0
-
-        # Define targets dictionary mapping joints to velocities
-        targets = {
-            "lift_joint": get_val('left_stick_y', 'lift_joint'),
-            "arm_joint": get_val('left_stick_x', 'arm_joint'),
-            "wrist_yaw_joint": get_val('right_stick_x', 'wrist_yaw_joint'),
-            "wrist_pitch_joint": get_val('right_stick_y', 'wrist_pitch_joint'),
-            "wrist_roll_joint": get_button_vel('wrist_roll_joint', 'right_shoulder_button_pressed', 'left_shoulder_button_pressed'),
-            "gripper_joint": get_button_vel('gripper_joint', 'top_button_pressed', 'bottom_button_pressed')
-        }
-
-        goal = JointState()
-        for joint, vel in targets.items():
-            if joint in self.command_joints:
-                goal.name.append(joint)
-                goal.velocity.append(vel)
-                # Compute integrated position target
-                curr_pos = self.cmd_joint_position(joint)
-                new_pos = curr_pos + vel * dt
-                goal.position.append(0.3)#curr_pos)#new_pos)
-                self.logger.info(f"joint {joint} in position {curr_pos}. Sending position {new_pos} and velocity {vel}")
-
-        self.logger.info(f"goal: {goal}")
-        return goal
-        
     def set_base_velocity(self, x, y, theta, stiffness=1.0):
         if stiffness != 1.0:
             self.logger.info("Base stiffness (cmd_vel_stiff) is not simulated; the base is driven at full stiffness.", once=True)
@@ -907,6 +897,22 @@ class StretchMujocoDriver(Stretch4ROSDriver):
     def handle_mode_change(self, mode):
         # called after set parameter check automatically
         pass
+
+    def handle_joy(self, joy_msg: Joy):
+        """Teleop: drive the sim from a Joy message (laid out as in
+        hello_helpers.joy_conversion) with stretch4_mujoco's port of the joint-space gamepad
+        mapping the real driver uses, including the base."""
+        if self.gamepad_teleop is None:
+            self.logger.warn("Joy messages are ignored: joystick teleop is unavailable (see the "
+                             "warning at startup).", throttle_duration_sec=10.0)
+            return
+        usable, warning = check_stretch_joy(joy_msg)
+        if warning:
+            self.logger.warn(warning, throttle_duration_sec=10.0)
+        # A message that can't be read stops everything, as if nothing were pressed
+        state = unpack_joy_to_gamepad_state(joy_msg) if usable else get_default_gamepad_state()
+        self.gamepad_teleop.controller_state = state
+        ControlMapping.JOINT_SPACE.do_motion(self.sim, self.gamepad_teleop)
         
 
     def check_sim_status(self):

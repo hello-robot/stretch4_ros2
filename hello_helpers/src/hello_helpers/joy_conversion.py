@@ -53,18 +53,55 @@ def get_default_gamepad_state():
             'right_pad_pressed': False}
     return state
 
+# Joy messages in the Stretch gamepad layout (stretch_gamepad_mapping) carry this frame_id, so
+# a consumer can tell them from Joy messages in other layouts, such as the ROS joy package's
+# (frame_id "joy"; stretch_core's joy_to_stretch_joy converts those).
+STRETCH_JOY_FRAME_ID = "stretch_gamepad"
+NUM_STRETCH_JOY_AXES = len(stretch_gamepad_mapping['axes'])
+NUM_STRETCH_JOY_BUTTONS = len(stretch_gamepad_mapping['buttons'])
+
+
 def get_default_joy_msg():
+    """A Joy message in the Stretch gamepad layout, labeled as such, with nothing pressed."""
     out_msg = Joy()
-    out_msg.axes = [0.0]*6
-    out_msg.buttons = [0]*14
+    out_msg.header.frame_id = STRETCH_JOY_FRAME_ID
+    out_msg.axes = [0.0]*NUM_STRETCH_JOY_AXES
+    out_msg.buttons = [0]*NUM_STRETCH_JOY_BUTTONS
     return out_msg
+
+
+def check_stretch_joy(joy_msg):
+    """Whether joy_msg can be read as the Stretch gamepad layout, as (usable, warning).
+
+    A message labeled with STRETCH_JOY_FRAME_ID and of the right size is usable with no
+    warning. An unlabeled one of the right size is usable, with a warning, since publishers
+    that build their own Joy messages predate the label. One of the wrong size isn't usable;
+    the warning says where it seems to come from."""
+    frame_id = joy_msg.header.frame_id
+    right_size = (len(joy_msg.axes) == NUM_STRETCH_JOY_AXES
+                  and len(joy_msg.buttons) == NUM_STRETCH_JOY_BUTTONS)
+    size = (f"{len(joy_msg.axes)} axes and {len(joy_msg.buttons)} buttons (the Stretch "
+            f"layout has {NUM_STRETCH_JOY_AXES} and {NUM_STRETCH_JOY_BUTTONS})")
+    if frame_id == STRETCH_JOY_FRAME_ID:
+        if right_size:
+            return True, None
+        return False, f"Ignoring a Joy message labeled '{STRETCH_JOY_FRAME_ID}' that has {size}."
+    if right_size:
+        return True, (f"Joy message has frame_id '{frame_id}', not '{STRETCH_JOY_FRAME_ID}', so it "
+                      f"isn't from one of the Stretch nodes; reading it as the Stretch gamepad "
+                      f"layout since its size matches. Build Joy messages with "
+                      f"hello_helpers.joy_conversion to label them.")
+    source = (" It looks like the ROS joy package's layout; run stretch_core's "
+              "joy_to_stretch_joy to convert it." if frame_id == "joy" else "")
+    return False, (f"Ignoring a Joy message that isn't from one of the Stretch nodes (frame_id "
+                   f"'{frame_id}', not '{STRETCH_JOY_FRAME_ID}'): it has {size}.{source}")
 
 def unpack_joy_to_gamepad_state(joy_msg):
     stretch_gamepad_state = get_default_gamepad_state()
-    if len(joy_msg.axes)!= 6:
+    if len(joy_msg.axes)!= NUM_STRETCH_JOY_AXES:
         print("Invalid Joy message Axes length received.")
         return stretch_gamepad_state
-    if len(joy_msg.buttons)!= 14:
+    if len(joy_msg.buttons)!= NUM_STRETCH_JOY_BUTTONS:
         print("Invalid Joy message Buttons length received.")
         return stretch_gamepad_state
     

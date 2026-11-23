@@ -1245,84 +1245,11 @@ class Stretch4ROSDriver(Node, ABC):
             )
             return
         
-        goal = self.joy_to_joint_cmd(joy_msg)
-        if goal is None:
-            self.logger.error(f"Joystick mapping returned None.  Check your code.")
-            return
-
-        for i in range(len(goal.name)):
-            joint_name = goal.name[i]
-            joint_mode = self.get_parameter(f"joint_mode.{joint_name}").value
-            match joint_mode:
-                case self.position_mode:
-                    if len(goal.position) < len(goal.name):
-                        self.logger.error(
-                            f"Joystick command mapping for position has length {len(goal.position)} (expected length {len(goal.name)} to set target for joint {joint_name} in {self.position_mode} control mode)"
-                        )
-                    else:
-                        self.check_and_set_pos(joint_name, goal.position[i])
-                case self.velocity_mode:
-                    if len(goal.velocity) < len(goal.name):
-                        self.logger.error(
-                            f"Joystick command mapping for velocity has length {len(goal.velocity)} (expected length {len(goal.name)} to set target for joint {joint_name} in {self.velocity_mode} control mode)"
-                        )
-                    else:
-                        self.check_and_set_vel(joint_name, goal.velocity[i])
-                case _:
-                    self.logger.warn(f"Joint in unsupported mode {joint_mode}.  Joint must be in position or velocity mode to accept joystick control.  Skipping this joint.")
-            
+        self.handle_joy(joy_msg)            
         
-    # optionally re-implement this to get different joy behavior
-    def joy_to_joint_cmd(self, joy):
-        state = unpack_joy_to_gamepad_state(joy)
-        
-        # Read parameters dynamically
-        dt = self.get_parameter("gamepad.dt").value
-        
-        def get_val(axis_name, joint_name):
-            val = state.get(axis_name, 0.0)
-            max_vel = self.get_parameter(f"gamepad.max_vel.{joint_name}").value
-            deadzone = self.get_parameter(f"gamepad.deadzone.{joint_name}").value
-            
-            if val > deadzone:
-                effective = (val - deadzone) / (1.0 - deadzone)
-                return effective * max_vel
-            elif val < -deadzone:
-                effective = (val + deadzone) / (1.0 - deadzone)
-                return effective * max_vel
-            else:
-                return 0.0
-
-        def get_button_vel(joint_name, pos_btn, neg_btn):
-            max_vel = self.get_parameter(f"gamepad.max_vel.{joint_name}").value
-            if state.get(pos_btn, False):
-                return max_vel
-            elif state.get(neg_btn, False):
-                return -max_vel
-            return 0.0
-        
-        # Define targets dictionary mapping joints to velocities
-        targets = {
-            "lift_joint": get_val('left_stick_y', 'lift_joint'),
-            "arm_joint": get_val('left_stick_x', 'arm_joint'),
-            "wrist_yaw_joint": get_val('right_stick_x', 'wrist_yaw_joint'),
-            "wrist_pitch_joint": get_val('right_stick_y', 'wrist_pitch_joint'),
-            "wrist_roll_joint": get_button_vel('wrist_roll_joint', 'right_shoulder_button_pressed', 'left_shoulder_button_pressed'),
-            "gripper_joint": get_button_vel('gripper_joint', 'top_button_pressed', 'bottom_button_pressed')
-        }
-
-        goal = JointState()
-        for joint, vel in targets.items():
-            if joint in self.command_joints:
-                goal.name.append(joint)
-                goal.velocity.append(vel)
-                # Compute integrated position target
-                curr_pos = self.cmd_joint_position(joint)
-                new_pos = curr_pos + vel * dt
-                goal.position.append(new_pos)
-
-        #self.logger.info(f"goal: {goal}")
-        return goal
+    @abstractmethod
+    def handle_joy(self, joy_msg: Joy):
+        pass
 
     @abstractmethod
     def publish_child_info(self):

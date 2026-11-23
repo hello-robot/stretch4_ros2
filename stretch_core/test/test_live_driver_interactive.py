@@ -40,6 +40,7 @@ from rcl_interfaces.msg import Parameter as ParameterMsg, ParameterType, Paramet
 from std_srvs.srv import Trigger, SetBool
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import JointState, Joy, BatteryState
+import hello_helpers.joy_conversion as jc
 from nav_msgs.msg import Odometry
 from std_msgs.msg import Bool, String
 from diagnostic_msgs.msg import DiagnosticArray
@@ -898,10 +899,8 @@ class StretchLiveDriverTester(Node):
 
         # Test B: Publish joy commands
         print(f"{YELLOW}Publishing dummy joy messages to check driver response...{RESET}")
-        joy = Joy()
-        joy.axes = [0.0, 0.0, 0.0, 0.0]
-        joy.buttons = [0, 0, 0, 0, 0, 0, 0, 0]
-        
+        joy = jc.get_default_joy_msg()  # Stretch gamepad layout, nothing pressed
+
         for _ in range(self.pub_count):
             self.publish_joy(joy)
             if self.pub_count > 1:

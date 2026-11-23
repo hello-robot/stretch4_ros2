@@ -41,6 +41,7 @@ from control_msgs.msg import JointJog
 from std_msgs.msg import String
 from rclpy.parameter import parameter_value_to_python
 from sensor_msgs.msg import JointState, Joy, Imu, BatteryState
+import hello_helpers.joy_conversion as jc
 from nav_msgs.msg import Odometry
 from control_msgs.action import FollowJointTrajectory
 from trajectory_msgs.msg import JointTrajectoryPoint
@@ -536,26 +537,39 @@ class StretchLiveDriverTester(Node):
         future = self.param_set_cli.call_async(req_set)
         rclpy.spin_until_future_complete(self, future)
         
-        # Publish Joy msg simulating holding lift button up
-        joy = Joy()
-        joy.axes = [0.0, 0.0]
-        joy.buttons = [1, 0]  # Simulates holding button 0 (lift up)
-        
-        print(f"{YELLOW}Publishing virtual gamepad button presses...{RESET}")
-        start_time = self.get_clock().now()
-        while (self.get_clock().now() - start_time).nanoseconds * 1e-9 < 1.5:
-            self.joy_pub.publish(joy)
-            self.ros_sleep(0.1)
+        try:
+            # Hold the d-pad (lift) toward the middle of the lift's range, in the Stretch
+            # gamepad layout, labeled as from a Stretch node
+            self.wait_for_joint_state()
+            start_pos = self.joint_pos("lift_joint")
+            pad = 'top_pad_pressed' if start_pos < 0.6 else 'bottom_pad_pressed'
+            state = jc.get_default_gamepad_state()
+            state[pad] = True
+            print(f"{YELLOW}Holding the d-pad ({pad}) for 1.5 s...{RESET}")
+            start_time = self.get_clock().now()
+            while (self.get_clock().now() - start_time).nanoseconds * 1e-9 < 1.5:
+                self.joy_pub.publish(jc.unpack_gamepad_state_to_joy(state))
+                self.ros_sleep(0.1)
+            moved = self.joint_pos("lift_joint") - start_pos
+            print(f"  lift moved {moved:+.3f} m")
+            assert (moved > 0.01) if pad == 'top_pad_pressed' else (moved < -0.01), \
+                f"Holding {pad} didn't move the lift"
 
-        # Release buttons
-        joy.buttons = [0, 0]
-        self.joy_pub.publish(joy)
-        
-        # Restore mode back to active
-        p_mode.value.string_value = 'active'
-        future = self.param_set_cli.call_async(req_set)
-        rclpy.spin_until_future_complete(self, future)
-        print(f"{GREEN}✓ Joystick teleop simulation completed and mode restored to active.{RESET}")
+            # Release: the lift should stop
+            self.joy_pub.publish(jc.get_default_joy_msg())
+            self.ros_sleep(0.5)
+            released_pos = self.joint_pos("lift_joint")
+            self.ros_sleep(1.0)
+            drift = self.joint_pos("lift_joint") - released_pos
+            print(f"  lift drift 0.5-1.5 s after release: {drift:+.4f} m")
+            assert abs(drift) < 0.005, "The lift kept moving after the d-pad was released"
+            print(f"{GREEN}✓ Joystick teleop moves the lift and stops on release.{RESET}")
+        finally:
+            # Restore mode back to active
+            p_mode.value.string_value = 'active'
+            future = self.param_set_cli.call_async(req_set)
+            rclpy.spin_until_future_complete(self, future)
+            print(f"{GREEN}✓ Mode restored to active.{RESET}")
 
     # =========================================================================
     # 6. SAFETY RUNSTOP SERVICE

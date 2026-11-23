@@ -7,6 +7,8 @@ import pprint
 import sys
 
 import stretch4_body.robot.robot_client as rc
+from stretch4_body.core.gamepad_control_mappings import ControlMapping
+from stretch4_body.core.gamepad_teleop import GamePadTeleop
 from stretch4_body.utils.tool_metadata import ToolConfigurationError, get_tool_metadata, is_tool_joint
 import rclpy
 from rclpy.duration import Duration
@@ -35,6 +37,7 @@ from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 from trajectory_msgs.msg import JointTrajectoryPoint
 
 from hello_helpers.stretch4_ros_api import Stretch4ROSDriver, spin_until_shutdown
+from hello_helpers.joy_conversion import check_stretch_joy, get_default_gamepad_state, unpack_joy_to_gamepad_state
 
 
 import tf2_ros
@@ -116,7 +119,11 @@ class StretchDriver(Stretch4ROSDriver):
             if not result.successful:
                 self.logger.warning(f"Unable to set parameter {param.name}.  Reason: {result.reason}")
 
-        
+
+        # Teleop Joy messages drive the robot through stretch4_body's gamepad mapping (see
+        # handle_joy). Creating it applies the gamepad's own contact sensitivity, so the
+        # driver's is applied after it. It doesn't open the gamepad's USB dongle.
+        self.gamepad_teleop = GamePadTeleop(self.robot)
         self.robot.set_guarded_contact_sensitivity(self.get_parameter("sensitivity").value)
 
         self.start()
@@ -404,6 +411,22 @@ class StretchDriver(Stretch4ROSDriver):
 
     def handle_mode_change(self, mode):
         pass
+
+    def handle_joy(self, joy_msg: Joy):
+        """Teleop: drive the robot from a Joy message (laid out as in
+        hello_helpers.joy_conversion) with stretch4_body's joint-space gamepad mapping, the
+        same controls as the Stretch gamepad, including the base."""
+        # The mapping commands (or stops) every joint on each message, so it takes them
+        # over from velocity commands the control loop would otherwise keep re-sending.
+        for joint in self.velocity_commands:
+            self.velocity_commands[joint] = None
+        usable, warning = check_stretch_joy(joy_msg)
+        if warning:
+            self.logger.warn(warning, throttle_duration_sec=10.0)
+        # A message that can't be read stops everything, as if nothing were pressed
+        state = unpack_joy_to_gamepad_state(joy_msg) if usable else get_default_gamepad_state()
+        self.gamepad_teleop.controller_state = state
+        ControlMapping.JOINT_SPACE.do_motion(self.robot, self.gamepad_teleop)
 
     def set_base_velocity(self, x, y, theta, stiffness=1.0):
         linear_acc = self.get_parameter_or("joint_acceleration.omnibase.linear",None).value
