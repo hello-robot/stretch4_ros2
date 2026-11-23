@@ -43,7 +43,67 @@ from hello_helpers.joy_conversion import check_stretch_joy, get_default_gamepad_
 import tf2_ros
 from tf_transformations import quaternion_from_euler
 
+class _StopFilteredJoint:
+    """A stretch_body lift or arm whose velocity commands go through the driver's
+    _should_send_joint_velocity; everything else passes through."""
+
+    def __init__(self, driver, subsystem, joint):
+        self._driver, self._subsystem, self._joint = driver, subsystem, joint
+
+    def set_velocity(self, v_m, *args, **kwargs):
+        if self._driver._should_send_joint_velocity(self._joint, v_m):
+            return self._subsystem.set_velocity(v_m, *args, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._subsystem, name)
+
+
+class _StopFilteredBase:
+    """The stretch_body base, with velocity commands going through the driver's
+    _should_send_base_velocity."""
+
+    def __init__(self, driver, base):
+        self._driver, self._base = driver, base
+
+    def set_velocity(self, vx_m, vy_m, w_r, a_m=None, a_r=None, stiffness=1.0):
+        if self._driver._should_send_base_velocity(vx_m, vy_m, w_r, stiffness):
+            return self._base.set_velocity(vx_m, vy_m, w_r, a_m, a_r, stiffness)
+
+    def __getattr__(self, name):
+        return getattr(self._base, name)
+
+
+class _TeleopRobot:
+    """The robot as handed to stretch4_body's gamepad mapping in handle_joy. The mapping
+    commands the lift, arm and base on every Joy message, stopping them when nothing is
+    pressed; streaming those stops would keep other clients from moving the robot, so after
+    a few stops they're left out (see _should_send_joint_velocity). Everything else passes
+    through to the robot."""
+
+    def __init__(self, driver):
+        self._robot = driver.robot
+        self.lift = _StopFilteredJoint(driver, driver.robot.lift, 'lift_joint')
+        self.arm = _StopFilteredJoint(driver, driver.robot.arm, 'arm_joint')
+        self.base = self.omnibase = _StopFilteredBase(driver, driver.robot.omnibase)
+
+    def __getattr__(self, name):
+        return getattr(self._robot, name)
+
+
 class StretchDriver(Stretch4ROSDriver):
+
+    # How many zero velocity commands a joint or the base gets after it was last commanded to
+    # move; later ones are left out, so stopped joints aren't streamed stops that would keep
+    # other clients from moving them (see _should_send_joint_velocity)
+    ZERO_REPEATS = 3
+
+    # stretch_body routines, and the priority mode the driver is in while one runs; see
+    # _follow_outside_routine
+    ROUTINE_MODES = {
+        'routine_robot_home': Stretch4ROSDriver.homing_mode,
+        'routine_robot_stow': Stretch4ROSDriver.stowing_mode,
+        'routine_blind_dock': Stretch4ROSDriver.seating_mode,
+    }
 
     # Command joints are discovered from stretch4_body rather than listed here: each
     # joint's ROS name is its stretch4_body name + "_joint", except the attached tool,
@@ -63,6 +123,12 @@ class StretchDriver(Stretch4ROSDriver):
         self._update_joint_limits(self.robot.status)
 
         self.velocity_commands = {joint: None for joint in self.command_joints}
+        # Zero velocity commands sent to each joint, and to the base, since it was last
+        # commanded to move; a joint never commanded, or under position control, counts as
+        # stopped. See _should_send_joint_velocity.
+        self._zeros_sent = {joint: self.ZERO_REPEATS for joint in self.command_joints}
+        self._base_zeros_sent = self.ZERO_REPEATS
+        self._base_stiffness_sent = 1.0
 
         self.command_publishers = {}
         qos_profile = 10
@@ -124,6 +190,13 @@ class StretchDriver(Stretch4ROSDriver):
         # handle_joy). Creating it applies the gamepad's own contact sensitivity, so the
         # driver's is applied after it. It doesn't open the gamepad's USB dongle.
         self.gamepad_teleop = GamePadTeleop(self.robot)
+        self.teleop_robot = _TeleopRobot(self)
+
+        # stretch_body routines being followed (see _follow_outside_routine): one the driver
+        # runs itself, and one started elsewhere with the mode to return to when it ends
+        self._own_routine = None
+        self._own_routine_returned = False
+        self._outside_routine = None
         self.robot.set_guarded_contact_sensitivity(self.get_parameter("sensitivity").value)
 
         self.start()
@@ -340,7 +413,46 @@ class StretchDriver(Stretch4ROSDriver):
         return bool(self.robot.is_homed())
 
     def get_mode(self, robot_status, status_time) -> String:
-        return self.get_parameter("mode").value
+        """The driver's mode, after following any stretch_body routine started outside the
+        driver (e.g. the gamepad's stow); see _follow_outside_routine."""
+        routine = robot_status.get('routines', {}).get('active_routine', 'routine_nop')
+        with self.driver_mode_lock:
+            self._follow_outside_routine(routine)
+            return self.get_parameter("mode").value
+
+    def _follow_outside_routine(self, routine):
+        """Put the driver in a routine's priority mode while stretch_body runs a homing,
+        stowing or seating routine that something else started, and return to the previous
+        mode when it ends, as for the driver's own routines (_run_priority_routine).
+        `routine` is stretch_body's active routine."""
+        if self._own_routine is not None:
+            # One of the driver's own routines, whose mode _run_priority_routine manages. It
+            # stays the driver's until stretch_body no longer reports it, after the call returns.
+            if self._own_routine_returned and routine != self._own_routine:
+                self._own_routine = None
+            return
+
+        mode = self.robot_mode()
+        if self._outside_routine is None:
+            routine_mode = self.ROUTINE_MODES.get(routine)
+            if routine_mode is not None and mode in self.control_modes:
+                self._outside_routine = (routine, mode)
+                self.logger.info(f"stretch_body is running {routine}, started outside the driver; "
+                                 f"changing to mode {routine_mode} until it ends.")
+                self.change_mode(routine_mode)
+            return
+
+        started, previous_mode = self._outside_routine
+        if routine == started:
+            return
+        self._outside_routine = None
+        self.logger.info(f"{started}, started outside the driver, has ended.")
+        if mode == self.runstopped_mode:
+            # Runstopped during the routine: releasing the runstop returns to the mode from
+            # before the routine, not to the routine's
+            self.prerunstop_mode = previous_mode
+        else:
+            self.return_to_mode(previous_mode)
 
     def get_tool(self, robot_status, status_time) -> String:
         return self.robot.params['tool']
@@ -426,25 +538,56 @@ class StretchDriver(Stretch4ROSDriver):
         # A message that can't be read stops everything, as if nothing were pressed
         state = unpack_joy_to_gamepad_state(joy_msg) if usable else get_default_gamepad_state()
         self.gamepad_teleop.controller_state = state
-        ControlMapping.JOINT_SPACE.do_motion(self.robot, self.gamepad_teleop)
+        ControlMapping.JOINT_SPACE.do_motion(self.teleop_robot, self.gamepad_teleop)
 
     def set_base_velocity(self, x, y, theta, stiffness=1.0):
+        if not self._should_send_base_velocity(x, y, theta, stiffness):
+            return
         linear_acc = self.get_parameter_or("joint_acceleration.omnibase.linear",None).value
         angular_acc = self.get_parameter_or("joint_acceleration.omnibase.angular",None).value
-        self.robot.omnibase.set_velocity(vx_m = x, 
-                                         vy_m = y, 
-                                         w_r = theta, 
-                                         a_m = linear_acc, 
+        self.robot.omnibase.set_velocity(vx_m = x,
+                                         vy_m = y,
+                                         w_r = theta,
+                                         a_m = linear_acc,
                                          a_r = angular_acc,
                                          stiffness = stiffness,
                                         )
+
+    def _should_send_joint_velocity(self, joint, velocity):
+        """Whether to send velocity `velocity` to command joint `joint`: always when it moves
+        the joint, and for a stop only the first ZERO_REPEATS times after the joint was last
+        commanded to move, so a stopped joint isn't streamed stops. A joint commanded to move
+        always gets its stops, even if it's held still (e.g. against a guarded contact)."""
+        if velocity != 0.0:
+            self._zeros_sent[joint] = 0
+            return True
+        if self._zeros_sent.get(joint, 0) >= self.ZERO_REPEATS:
+            return False
+        self._zeros_sent[joint] = self._zeros_sent.get(joint, 0) + 1
+        return True
+
+    def _should_send_base_velocity(self, x, y, theta, stiffness):
+        """_should_send_joint_velocity for the base. A stop with a new stiffness counts as a
+        new command, and is sent."""
+        if (x, y, theta) != (0.0, 0.0, 0.0):
+            self._base_zeros_sent = 0
+        elif stiffness != self._base_stiffness_sent:
+            self._base_zeros_sent = 1
+        elif self._base_zeros_sent >= self.ZERO_REPEATS:
+            return False
+        else:
+            self._base_zeros_sent += 1
+        self._base_stiffness_sent = stiffness
+        return True
 
     def set_joint_velocity(self, joint, target, a=None):
         if a is None:
             a = self.get_parameter_or(f"joint_acceleration.{joint}",None).value
         self.velocity_commands[joint]={"target":(target, a),
                                        "last_sent":self.get_clock().now()}
-        
+        if not self._should_send_joint_velocity(joint, target):
+            return
+
         command = JointState()
         command.name = [joint]
         command.position = []
@@ -456,6 +599,7 @@ class StretchDriver(Stretch4ROSDriver):
 
     def set_joint_position(self, joint, target, v=None, a=None):
         self.velocity_commands[joint] = None
+        self._zeros_sent[joint] = self.ZERO_REPEATS  # under position control: no stops needed
         if a is None:
             a = self.get_parameter_or(f"joint_acceleration.{joint}",None).value
         if v is None:
@@ -529,19 +673,31 @@ class StretchDriver(Stretch4ROSDriver):
     # Routines run with do_pull=False: the control loop keeps pulling status meanwhile.
     # A routine that times out keeps running on the robot; the call just reports failure.
     def home_robot(self):
-        finished, _rid = self.robot.routines.routine_robot_home(
-            do_push=False, wait_on_completion=True, timeout=60, do_pull=False)
+        finished, _rid = self._run_own_routine('routine_robot_home', lambda: self.robot.routines.routine_robot_home(
+            do_push=False, wait_on_completion=True, timeout=60, do_pull=False))
         return (True, 'Homed.') if finished else (False, 'Homing routine did not complete.')
 
     def stow_robot(self):
-        finished, _rid = self.robot.routines.routine_robot_stow(
-            do_push=False, wait_on_completion=True, timeout=30, do_pull=False)
+        finished, _rid = self._run_own_routine('routine_robot_stow', lambda: self.robot.routines.routine_robot_stow(
+            do_push=False, wait_on_completion=True, timeout=30, do_pull=False))
         return (True, 'Stowed.') if finished else (False, 'Stowing routine did not complete.')
 
     def seat_robot(self):
-        succeeded, _rid = self.robot.routines.routine_blind_dock(
-            do_push=False, wait_on_completion=True, do_pull=False)
+        succeeded, _rid = self._run_own_routine('routine_blind_dock', lambda: self.robot.routines.routine_blind_dock(
+            do_push=False, wait_on_completion=True, do_pull=False))
         return (True, 'Seated into dock.') if succeeded else (False, 'Seating into dock failed.')
+
+    def _run_own_routine(self, routine, run):
+        """Call run(), which runs stretch_body routine `routine` for one of the driver's
+        services, marking the routine as the driver's own so that get_mode doesn't also
+        follow it as one started elsewhere."""
+        with self.driver_mode_lock:
+            self._own_routine, self._own_routine_returned = routine, False
+        try:
+            return run()
+        finally:
+            with self.driver_mode_lock:
+                self._own_routine_returned = True
 
     def freewheel_base(self):
         with self.driver_mode_lock:
