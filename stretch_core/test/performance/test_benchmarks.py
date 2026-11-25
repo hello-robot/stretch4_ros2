@@ -84,7 +84,6 @@ def test_action_preemption_latency(benchmark, action_client):
     Benchmark the time it takes to preempt a goal with a new one
     """
     def preempt_goal():
-        action_client.mode = 'position'
         future1 = action_client.move_to_configuration({'lift_joint': 0.8}, blocking=False)
         time.sleep(0.1)
         future2 = action_client.move_to_configuration({'lift_joint': 0.3}, blocking=False)
@@ -104,7 +103,6 @@ def test_action_cancel_latency(benchmark, action_client):
     Benchmark the time it takes to cancel a goal
     """
     def cancel_goal():
-        action_client.mode = 'position'
         future = action_client.move_to_configuration({'lift_joint': 0.8}, blocking=False)
         gh = wait_for(future)
         assert gh.accepted, "Goal was rejected by server"
@@ -120,7 +118,6 @@ def test_action_error_threshold_closeness(benchmark, action_client):
     Benchmark the error (distance from target) and time it takes to settle
     """
     def settle_to_goal():
-        action_client.mode = 'position'
         target = 0.5
         q = {'lift_joint': target}
 

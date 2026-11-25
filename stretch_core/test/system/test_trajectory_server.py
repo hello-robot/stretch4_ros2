@@ -1,17 +1,24 @@
 import pytest
+import launch_pytest
 import rclpy
 import time
-from common.launch_descriptions import stretch_driver_ld
+from common.launch_descriptions import stretch_driver_ld as _stretch_driver_ld
 from common.client_nodes.fjt_client import FJTClient
 from trajectory_msgs.msg import JointTrajectoryPoint
+
+# One driver for the whole module. A per-test launch races the launch singleton lock: the next
+# test's launch sees the previous driver still holding it, starts nothing, and then that driver exits.
+stretch_driver_ld = launch_pytest.fixture(_stretch_driver_ld.__wrapped__, scope='module')
 
 @pytest.fixture
 def action_client():
     rclpy.init()
-    node = FJTClient()
-    yield node
-    node.destroy_node()
-    rclpy.shutdown()
+    try:
+        node = FJTClient()
+        yield node
+        node.destroy_node()
+    finally:
+        rclpy.shutdown()
 
 @pytest.mark.launch(fixture=stretch_driver_ld)
 def test_fjt_success_single_joint_arm(action_client):

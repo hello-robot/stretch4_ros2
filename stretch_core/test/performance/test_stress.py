@@ -9,7 +9,8 @@ import os
 import tempfile
 import socket
 
-from common.launch_descriptions import stretch_driver_ld
+import launch_pytest
+from common.launch_descriptions import stretch_driver_ld as _stretch_driver_ld
 from common.client_nodes.fjt_client import FJTClient
 
 
@@ -40,19 +41,32 @@ def usb_io_stressor():
             f.seek(0)
 
 
+# One driver for the whole module. A per-test launch races the launch singleton lock: the next
+# test's launch sees the previous driver still holding it, starts nothing, and then that driver exits.
+stretch_driver_ld = launch_pytest.fixture(_stretch_driver_ld.__wrapped__, scope='module')
+
+
+def stop_stressor(p):
+    """Stop a stressor process. They're forked after rclpy.init(), so they inherit rclpy's
+    SIGTERM handler, which swallows terminate(); join() would then wait forever."""
+    p.kill()
+    p.join()
+
+
 @pytest.fixture
 def action_client():
     rclpy.init()
-    node = FJTClient('stress_action_client')
-    yield node
-    node.destroy_node()
-    rclpy.shutdown()
+    try:
+        node = FJTClient('stress_action_client')
+        yield node
+        node.destroy_node()
+    finally:
+        rclpy.shutdown()
 
 
 def run_trajectory_under_load(benchmark, client, mode):
     """Common logic for benchmarking a trajectory while under load."""
     def run_traj():
-        client.mode = 'position'
         q = {'lift_joint': 0.5}
         result = client.move_to_configuration(q, blocking=True)
         assert result.status == 4 # Succeeded
@@ -87,8 +101,7 @@ def test_stress_cpu_load(benchmark, action_client):
         
     finally:
         for p in processes:
-            p.terminate()
-            p.join()
+            stop_stressor(p)
 
 
 @pytest.mark.launch(fixture=stretch_driver_ld)
@@ -105,8 +118,7 @@ def test_stress_network_traffic(benchmark, action_client):
         time.sleep(1.0)
         run_trajectory_under_load(benchmark, action_client, 'network_stress')
     finally:
-        p.terminate()
-        p.join()
+        stop_stressor(p)
 
 
 @pytest.mark.launch(fixture=stretch_driver_ld)
@@ -123,8 +135,7 @@ def test_stress_usb_traffic(benchmark, action_client):
         time.sleep(1.0)
         run_trajectory_under_load(benchmark, action_client, 'usb_io_stress')
     finally:
-        p.terminate()
-        p.join()
+        stop_stressor(p)
 
 @pytest.mark.launch(fixture=stretch_driver_ld)
 def test_stress_spam_fjt():
