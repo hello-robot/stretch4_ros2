@@ -652,6 +652,11 @@ class StretchDriver(Stretch4ROSDriver):
 
     def stop_the_robot_callback(self, request, response):
         with self.driver_mode_lock:
+            # Forget velocity commands, or push_robot_command re-sends them and the joints
+            # move again
+            for joint in self.velocity_commands:
+                self.velocity_commands[joint] = None
+                self._zeros_sent[joint] = self.ZERO_REPEATS
             self.robot.omnibase.rotate_by(0.0)
             for backend in self.joint_backends.values():
                 if self._is_end_of_arm(backend):
