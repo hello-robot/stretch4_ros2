@@ -33,10 +33,18 @@ def rclpy_context() -> Generator[None, None, None]:
 
 
 @pytest.fixture(scope='module')
-def require_homed_robot() -> Generator[None, None, None]:
+def require_homed_robot(rclpy_context: None, launch_service) -> Generator[None, None, None]:
     """
     Verify that the robot is homed before running motion-capable system tests,
     and reset the robot to a stowed pose in velocity mode on teardown.
+
+    The reset needs rclpy and the driver, so this fixture requests rclpy_context and
+    launch_service (whose teardown stops the launched driver): pytest then tears this fixture
+    down before either of them. Without that, both were gone by the time the reset ran.
+
+    Args:
+        rclpy_context: The module's rclpy context.
+        launch_service: The module's launch service, which runs the driver.
 
     Yields:
         None.

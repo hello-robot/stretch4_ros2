@@ -39,7 +39,7 @@ def reset_robot_to_default() -> None:
             fjt_client.move_to_configuration(STOWED_POSE, blocking=True)
         param_client.set_parameter('mode', 'velocity')
     except (Exception, SystemExit) as exc:
-        warnings.warn(f'Failed to reset robot to default state: {exc}', stacklevel=2)
+        warnings.warn(f'Failed to reset robot to default state: {type(exc).__name__}: {exc}', stacklevel=2)
     finally:
         if fjt_client is not None:
             fjt_client.destroy_node()

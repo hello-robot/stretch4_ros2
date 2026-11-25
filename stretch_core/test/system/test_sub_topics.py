@@ -34,14 +34,27 @@ def param_client() -> Generator[ParamClient, None, None]:
     node.destroy_node()
 
 
+def drive_and_get_speed(pub, subscriber_node: MockSubscriberNode, twist: Twist) -> float:
+    """Publish ``twist`` on /cmd_vel for 1.5 s, then return the base's forward speed from odom."""
+    for _ in range(15):
+        pub.publish(twist)
+        time.sleep(0.1)
+    assert subscriber_node.wait_for_message('odom', timeout=2.0), "Failed to receive odom"
+    return subscriber_node.latest_msgs['odom'].twist.twist.linear.x
+
+
 @pytest.mark.launch(fixture=stretch_driver_ld)
-def test_twist_in_position_and_navigation_modes(
+def test_twist_moves_base(
     require_homed_robot: None,
     subscriber_node: MockSubscriberNode,
     param_client: ParamClient,
 ) -> None:
     """
-    Test Twist handling in position mode (no motion) and navigation mode (motion).
+    Test that a Twist on /cmd_vel drives the base in active mode, and still does after
+    setting the deprecated 'position' mode.
+
+    'position' is no longer a driver mode: the driver stays in 'active' and only puts the
+    arm joints in position control, so the base keeps following /cmd_vel.
 
     Args:
         require_homed_robot: Fixture ensuring the robot is homed before motion tests.
@@ -49,42 +62,26 @@ def test_twist_in_position_and_navigation_modes(
         param_client: Parameter client node fixture.
     """
     node = param_client
-
-    # Create publisher
     pub = node.create_publisher(Twist, '/cmd_vel', 10)
     t = Twist()
     t.linear.x = 0.05
 
     try:
-        # 1. POSITION MODE (Should NOT move)
-        success = node.set_parameter('mode', 'position')
-        assert success, "Failed to set position mode"
+        # 1. ACTIVE MODE (the default): the base moves
+        speed = drive_and_get_speed(pub, subscriber_node, t)
+        assert speed > 0.005, f"Base did not move in active mode! Vel: {speed}"
 
-        for _ in range(5):
-            pub.publish(t)
-            time.sleep(0.1)
-        subscriber_node.wait_for_message('odom', timeout=2.0)
+        # Stop before the next check
+        pub.publish(Twist())
+        time.sleep(1.0)
 
-        # Check odom (should be 0 since mode rejected it)
-        odom_msg = subscriber_node.latest_msgs.get('odom')
-        assert odom_msg is not None, "Failed to receive odom"
-        assert abs(odom_msg.twist.twist.linear.x) < 0.005, "Robot moved in position mode!"
-
-        # 2. NAVIGATION MODE (Should move)
-        success = node.set_parameter('mode', 'navigation')
-        assert success, "Failed to set navigation mode"
-
-        for _ in range(15):
-            pub.publish(t)
-            time.sleep(0.1)
-        subscriber_node.wait_for_message('odom', timeout=2.0)
-
-        # Check odom (should be > 0 since it is moving)
-        odom_msg = subscriber_node.latest_msgs.get('odom')
-        assert odom_msg is not None, "Failed to receive odom"
-        assert odom_msg.twist.twist.linear.x > 0.005, f"Robot did not move in navigation mode! Vel: {odom_msg.twist.twist.linear.x}"
+        # 2. DEPRECATED 'position' MODE: mapped to active, so the base still moves
+        assert node.set_parameter('mode', 'position'), "Failed to set deprecated position mode"
+        speed = drive_and_get_speed(pub, subscriber_node, t)
+        assert speed > 0.005, f"Base did not move after setting deprecated position mode! Vel: {speed}"
     finally:
         pub.publish(Twist())
+
 
 @pytest.mark.launch(fixture=stretch_driver_ld)
 def test_battery_topic_reception(subscriber_node):
