@@ -18,7 +18,7 @@ from control_msgs.msg import JointJog
 from control_msgs.action import FollowJointTrajectory
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from nav_msgs.msg import Odometry
-from rcl_interfaces.srv import SetParameters
+from rcl_interfaces.srv import GetParameters, SetParameters
 from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
 from tf_transformations import euler_from_quaternion
 
@@ -86,7 +86,9 @@ class KeyboardTeleop(Node):
         # Command states
         self.cmd_lock = threading.Lock()
         self.last_keypress_time = 0.0
-        self.key_timeout = 0.25  # seconds
+        # Longer than a terminal's key-repeat delay (~0.5 s), so a held key isn't taken as
+        # released before it starts repeating
+        self.key_timeout = 0.6  # seconds
 
         # Target velocities
         self.base_linear_x = 0.0
@@ -102,6 +104,10 @@ class KeyboardTeleop(Node):
             'gripper_joint': 0.0,
             'parallel_gripper_joint': 0.0
         }
+
+        self.STOP_REPEATS = 3
+        self.stops_left = {joint: 0 for joint in self.joint_vels}
+        self.base_stops_left = 0
 
         # Joint positions & base odometry state
         self.state_lock = threading.Lock()
@@ -136,6 +142,12 @@ class KeyboardTeleop(Node):
         # Service Client for switching driver mode
         self.set_param_client = self.create_client(
             SetParameters, '/stretch_driver/set_parameters',
+            callback_group=self.callback_group
+        )
+
+        # Service Client for reading the driver's joint limits
+        self.get_param_client = self.create_client(
+            GetParameters, '/stretch_driver/get_parameters',
             callback_group=self.callback_group
         )
 
@@ -281,30 +293,42 @@ class KeyboardTeleop(Node):
                 for joint in self.joint_vels:
                     self.joint_vels[joint] = 0.0
 
-            # Publish base movement (Twist)
-            twist = Twist()
-            twist.linear.x = self.base_linear_x
-            twist.linear.y = self.base_linear_y
-            twist.angular.z = self.base_angular_z
-            self.cmd_vel_pub.publish(twist)
+            # Publish base movement (Twist): while moving, then STOP_REPEATS stops
+            if (self.base_linear_x, self.base_linear_y, self.base_angular_z) != (0.0, 0.0, 0.0):
+                self.base_stops_left = self.STOP_REPEATS
+                send_base = True
+            else:
+                send_base = self.base_stops_left > 0
+                self.base_stops_left = max(self.base_stops_left - 1, 0)
+            if send_base:
+                twist = Twist()
+                twist.linear.x = self.base_linear_x
+                twist.linear.y = self.base_linear_y
+                twist.angular.z = self.base_angular_z
+                self.cmd_vel_pub.publish(twist)
 
             # Publish joint movement (JointJog)
             jog = JointJog()
             jog.header.stamp = self.get_clock().now().to_msg()
             jog.duration = 0.1  # Matches the publishing period
 
-            # Command active/inactive joints
-            # To ensure INSTANT stops, we always publish explicit target velocities (even 0.0)
-            # for all known joints instead of sending empty lists.
+            # Each joint while it moves, then STOP_REPEATS stops; idle joints are left out
             for joint_name, vel in self.joint_vels.items():
-                target_joint = joint_name
-                if joint_name in ['gripper_joint', 'parallel_gripper_joint']:
-                    target_joint = self.gripper_joint_type
-                
-                jog.joint_names.append(target_joint)
+                # Only the attached gripper's entry
+                if joint_name in ['gripper_joint', 'parallel_gripper_joint'] and joint_name != self.gripper_joint_type:
+                    continue
+                if vel != 0.0:
+                    self.stops_left[joint_name] = self.STOP_REPEATS
+                elif self.stops_left[joint_name] > 0:
+                    self.stops_left[joint_name] -= 1
+                else:
+                    continue
+
+                jog.joint_names.append(joint_name)
                 jog.velocities.append(vel)
 
-            self.joint_vel_pub.publish(jog)
+            if jog.joint_names:
+                self.joint_vel_pub.publish(jog)
 
     def process_key(self, key: str):
         """
@@ -347,15 +371,15 @@ class KeyboardTeleop(Node):
 
             # Wrist Pitch controls (UJ)
             elif key == 'u':
-                self.joint_vels['wrist_pitch_joint'] = 0.20
-            elif key == 'j':
                 self.joint_vels['wrist_pitch_joint'] = -0.20
+            elif key == 'j':
+                self.joint_vels['wrist_pitch_joint'] = 0.20
 
             # Wrist Roll controls (IK)
             elif key == 'i':
-                self.joint_vels['wrist_roll_joint'] = 0.25
-            elif key == 'k':
                 self.joint_vels['wrist_roll_joint'] = -0.25
+            elif key == 'k':
+                self.joint_vels['wrist_roll_joint'] = 0.25
 
             # Gripper controls (OL)
             elif key == 'o':
@@ -373,6 +397,30 @@ class KeyboardTeleop(Node):
                 self.base_angular_z = 0.0
                 for joint in self.joint_vels:
                     self.joint_vels[joint] = 0.0
+                # Always send the stops, even for joints that weren't moving
+                self.base_stops_left = self.STOP_REPEATS
+                for joint in self.stops_left:
+                    self.stops_left[joint] = self.STOP_REPEATS
+
+    def get_joint_ranges(self, joints, timeout=2.0):
+        """The driver's joint_limit.<joint>.{lower,upper} for each joint, as a display string
+        per joint ('[lower, upper]', or '?' if the driver didn't answer)."""
+        names = [f"joint_limit.{j}.{end}" for j in joints for end in ("lower", "upper")]
+        ranges = {j: "?" for j in joints}
+        if not self.get_param_client.wait_for_service(timeout_sec=timeout):
+            return ranges
+        future = self.get_param_client.call_async(GetParameters.Request(names=names))
+        end = time.time() + timeout
+        while not future.done() and time.time() < end:
+            time.sleep(0.02)  # the node spins in its own thread
+        if not future.done() or future.result() is None:
+            return ranges
+        values = future.result().values
+        for i, j in enumerate(joints):
+            lo, hi = values[2 * i], values[2 * i + 1]
+            if lo.type == ParameterType.PARAMETER_DOUBLE and hi.type == ParameterType.PARAMETER_DOUBLE:
+                ranges[j] = f"[{lo.double_value:.2f}, {hi.double_value:.2f}]"
+        return ranges
 
     def print_status(self):
         """
@@ -463,13 +511,17 @@ def run_interactive_position_mode(node: KeyboardTeleop):
             wroll_pos = node.joint_positions.get('wrist_roll_joint', 0.0)
             g_pos = node.joint_positions.get(node.gripper_joint_type, 0.0)
 
+        # Ranges from the driver's joint limits, so they match this robot and its tool
+        r = node.get_joint_ranges(['lift_joint', 'arm_joint', 'wrist_yaw_joint',
+                                   'wrist_pitch_joint', 'wrist_roll_joint', 'gripper_joint'])
+
         print("Available Joints:")
-        print(f"  1. lift_joint       (current: {lift_pos:6.3f} m, range: [0.0, 1.1])")
-        print(f"  2. arm_joint        (current: {arm_pos:6.3f} m, range: [0.0, 0.51])")
-        print(f"  3. wrist_yaw_joint  (current: {wyaw_pos:6.3f} rad, range: [-1.75, 4.0])")
-        print(f"  4. wrist_pitch_joint(current: {wpitch_pos:6.3f} rad, range: [-1.57, 0.56])")
-        print(f"  5. wrist_roll_joint (current: {wroll_pos:6.3f} rad, range: [-2.61, 2.61])")
-        print(f"  6. gripper          (current: {g_pos:6.3f})")
+        print(f"  1. lift_joint       (current: {lift_pos:6.3f} m, range: {r['lift_joint']})")
+        print(f"  2. arm_joint        (current: {arm_pos:6.3f} m, range: {r['arm_joint']})")
+        print(f"  3. wrist_yaw_joint  (current: {wyaw_pos:6.3f} rad, range: {r['wrist_yaw_joint']})")
+        print(f"  4. wrist_pitch_joint(current: {wpitch_pos:6.3f} rad, range: {r['wrist_pitch_joint']})")
+        print(f"  5. wrist_roll_joint (current: {wroll_pos:6.3f} rad, range: {r['wrist_roll_joint']})")
+        print(f"  6. gripper          (current: {g_pos:6.3f}, range: {r['gripper_joint']})")
         print("==================================================")
         print("  Type 'v' to return to Keyboard Velocity Jogging")
         print("  Type 'q' or 'exit' to quit the tool")
