@@ -11,6 +11,7 @@ import cv2
 import numpy as np
 import threading
 
+from mujoco import MjModel
 from sensor_msgs.msg._compressed_image import CompressedImage
 from stretch4_mujoco import Stretch4MujocoSimulator
 from stretch4_mujoco import config as sim_config
@@ -116,6 +117,12 @@ class StretchMujocoDriver(Stretch4ROSDriver):
     DEFAULT_PUPPET_ENGAGE = "immediate"
     
     def __init__(self):
+        """
+        Read the node's parameters, build the scene, start the MuJoCo simulation and its ROS interfaces.
+
+        The scene is a RoboCasa kitchen if use_robocasa is set, a MolmoSpaces house if
+        use_molmospaces is set, and otherwise scene_xml, scene_name, or stretch4_mujoco's default.
+        """
         super().__init__('stretch_mujoco_driver')
 
         #set up any node specific pubs/subs
@@ -170,6 +177,9 @@ class StretchMujocoDriver(Stretch4ROSDriver):
         # Robocasa set-up
         if self.use_robocasa:
             model, xml, objects_info = self.robocasa_setup()
+            scene_xml_path = None
+        elif self.use_molmospaces:
+            model = self.molmospaces_setup()
             scene_xml_path = None
         else:
             model = None
@@ -311,7 +321,12 @@ class StretchMujocoDriver(Stretch4ROSDriver):
         self.declare_parameter("robocasa_task", rclpy.Parameter.Type.STRING)
         self.declare_parameter("robocasa_layout", rclpy.Parameter.Type.STRING)
         self.declare_parameter("robocasa_style", rclpy.Parameter.Type.STRING)
-            
+
+        self.declare_parameter("use_molmospaces", False)
+        self.declare_parameter("molmospaces_dataset", rclpy.Parameter.Type.STRING)
+        self.declare_parameter("molmospaces_split", rclpy.Parameter.Type.STRING)
+        self.declare_parameter("molmospaces_house_index", rclpy.Parameter.Type.INTEGER)
+
         self.declare_parameter("scene_xml", rclpy.Parameter.Type.STRING)
         self.declare_parameter("scene_name", rclpy.Parameter.Type.STRING)
         self.declare_parameter("fail_out_of_range_goal", rclpy.Parameter.Type.BOOL)
@@ -366,6 +381,16 @@ class StretchMujocoDriver(Stretch4ROSDriver):
 
             self.robocasa_style: str = self.get_parameter("robocasa_style").value
 
+        self.use_molmospaces: bool = self.get_parameter("use_molmospaces").value
+        if self.use_molmospaces and self.use_robocasa:
+            self.logger.warn("Cannot specify use_molmospaces while use_robocasa is True. "
+                             "Ignoring use_molmospaces.")
+            self.use_molmospaces = False
+        if self.use_molmospaces:
+            self.molmospaces_dataset: str = self.get_parameter("molmospaces_dataset").value
+            self.molmospaces_split: str = self.get_parameter("molmospaces_split").value
+            self.molmospaces_house_index: int = self.get_parameter("molmospaces_house_index").value
+
         self.scene_xml: str = self.get_parameter("scene_xml").value
         scene_name: str = self.get_parameter("scene_name").value
 
@@ -377,6 +402,9 @@ class StretchMujocoDriver(Stretch4ROSDriver):
             elif scene_name:
                 self.logger.warn("Cannot specify scene_xml AND scene_name. "
                                  "Ignoring scene_name.")
+        elif scene_name and self.use_molmospaces:
+            self.logger.warn("Cannot specify scene_name while use_molmospaces is True. "
+                             "Ignoring scene_name.")
         elif scene_name:
             self.scene_xml = models_path / (scene_name + '.xml')
 
@@ -466,6 +494,36 @@ class StretchMujocoDriver(Stretch4ROSDriver):
             style=self.robocasa_style,
         )
         return model, xml, objects_info
+
+    def molmospaces_setup(self) -> MjModel:
+        """
+        Build a MolmoSpaces house with Stretch 4 in it.
+
+        The house is scene_xml if it is set, otherwise house molmospaces_house_index of
+        molmospaces_dataset/molmospaces_split, whose assets are downloaded into the MolmoSpaces
+        cache on first use. Stretch spawns at the centroid of the house's largest room, and the
+        omniwheel contacts are retargeted to the house's floor.
+
+        Returns:
+            The compiled model of the house with Stretch 4 attached.
+        """
+        # stretch4_mujoco keeps its MolmoSpaces helpers in examples/molmo_environment.py, which
+        # its editable install makes importable as `examples`.
+        from examples.molmo_environment import build_model, resolve_molmospaces_scene
+
+        if self.scene_xml:
+            scene_xml_path = str(self.scene_xml)
+        else:
+            scene_xml_path = resolve_molmospaces_scene(
+                dataset=self.molmospaces_dataset,
+                split=self.molmospaces_split,
+                house_index=self.molmospaces_house_index,
+                # "base" leaves out the ceiling, so the house can be seen from above.
+                variant="base",
+            )
+        self.logger.info(f"Loading MolmoSpaces scene {scene_xml_path}")
+
+        return build_model(scene_xml_path=scene_xml_path, x=None, y=None, z=0.0, quat=[1.0, 0.0, 0.0, 0.0])
 
     def set_base_velocity(self, x, y, theta, stiffness=1.0):
         if stiffness != 1.0:

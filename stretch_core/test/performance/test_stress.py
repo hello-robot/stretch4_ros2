@@ -9,8 +9,7 @@ import os
 import tempfile
 import socket
 
-import launch_pytest
-from common.launch_descriptions import stretch_driver_ld as _stretch_driver_ld
+from common.launch_descriptions import stretch_driver_ld
 from common.client_nodes.fjt_client import FJTClient
 
 
@@ -41,11 +40,6 @@ def usb_io_stressor():
             f.seek(0)
 
 
-# One driver for the whole module. A per-test launch races the launch singleton lock: the next
-# test's launch sees the previous driver still holding it, starts nothing, and then that driver exits.
-stretch_driver_ld = launch_pytest.fixture(_stretch_driver_ld.__wrapped__, scope='module')
-
-
 def stop_stressor(p):
     """Stop a stressor process. They're forked after rclpy.init(), so they inherit rclpy's
     SIGTERM handler, which swallows terminate(); join() would then wait forever."""
@@ -53,15 +47,22 @@ def stop_stressor(p):
     p.join()
 
 
+from collections.abc import Generator
+
 @pytest.fixture
-def action_client():
-    rclpy.init()
-    try:
-        node = FJTClient('stress_action_client')
-        yield node
-        node.destroy_node()
-    finally:
-        rclpy.shutdown()
+def action_client(require_homed_robot: None) -> Generator[FJTClient, None, None]:
+    """
+    Create and yield an FJTClient after verifying the robot is homed.
+
+    Args:
+        require_homed_robot: Fixture ensuring the robot is homed before motion tests.
+
+    Yields:
+        An active FJTClient instance.
+    """
+    node = FJTClient('stress_action_client')
+    yield node
+    node.destroy_node()
 
 
 def run_trajectory_under_load(benchmark, client, mode):
@@ -138,18 +139,16 @@ def test_stress_usb_traffic(benchmark, action_client):
         stop_stressor(p)
 
 @pytest.mark.launch(fixture=stretch_driver_ld)
-def test_stress_spam_fjt():
+def test_stress_spam_fjt(require_homed_robot: None) -> None:
     """
-    The action server is configured with a QoS depth of 50 for its goal service, meaning
-    it can handle up to 50 concurrent goal requests. Additional requests are dropped.
-    This test verifies that the server successfully handles 50 concurrent requests.
+    Verify the action server handles 50 concurrent goal requests.
+
+    Args:
+        require_homed_robot: Fixture ensuring the robot is homed before motion tests.
     """
-    if not rclpy.ok():
-        rclpy.init()
-    
     num_clients = 50
     clients = []
-    
+
     try:
         # Create multiple clients
         for i in range(num_clients):
@@ -173,21 +172,19 @@ def test_stress_spam_fjt():
         with concurrent.futures.ThreadPoolExecutor(max_workers=num_clients) as executor:
             # Submit all tasks
             futures = [executor.submit(send_goal_wrapper, i, clients[i]) for i in range(num_clients)]
-            
+
             # Wait for all to complete
             for future in concurrent.futures.as_completed(futures):
                 results.append(future.result())
-        
+
         # Verify results
         success_count = 0
         for success, msg in results:
             if success:
                 success_count += 1
-                
+
         assert success_count == num_clients, f"Expected {num_clients} successes, got {success_count}"
-        
+
     finally:
         for c in clients:
             c.destroy_node()
-        if rclpy.ok():
-            rclpy.shutdown()

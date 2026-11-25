@@ -1,12 +1,14 @@
-import rclpy
-import rclpy.node
-import rclpy.executors
-from std_msgs.msg import String, Bool
-from sensor_msgs.msg import JointState, BatteryState
-from nav_msgs.msg import Odometry
-from tf2_msgs.msg import TFMessage
-from diagnostic_msgs.msg import DiagnosticArray
 from threading import Event, Thread
+
+from diagnostic_msgs.msg import DiagnosticArray
+from nav_msgs.msg import Odometry
+import rclpy
+import rclpy.executors
+import rclpy.node
+from rclpy.qos import QoSDurabilityPolicy, QoSProfile
+from sensor_msgs.msg import BatteryState, JointState
+from std_msgs.msg import Bool, String
+from tf2_msgs.msg import TFMessage
 
 
 class MockSubscriberNode(rclpy.node.Node):
@@ -30,13 +32,14 @@ class MockSubscriberNode(rclpy.node.Node):
         self.msg_counts = {k: 0 for k in self.events.keys()}
         self.latest_msgs = {k: None for k in self.events.keys()}
 
+        latching_qos = QoSProfile(depth=1, durability=QoSDurabilityPolicy.TRANSIENT_LOCAL)
         self.create_subscription(BatteryState, 'battery', lambda msg: self._cb('battery', msg), 10)
-        self.create_subscription(String, 'mode', lambda msg: self._cb('mode', msg), 10)
-        self.create_subscription(JointState, 'joint_states', lambda msg: self._cb('joint_states', msg), 10)
-        self.create_subscription(Bool, '/is_homed', lambda msg: self._cb('is_homed', msg), 10)
-        self.create_subscription(Bool, '/is_runstopped', lambda msg: self._cb('is_runstopped', msg), 10)
+        self.create_subscription(String, 'mode', lambda msg: self._cb('mode', msg), latching_qos)
+        self.create_subscription(JointState, '/joint_states', lambda msg: self._cb('joint_states', msg), 10)
+        self.create_subscription(Bool, '/is_homed', lambda msg: self._cb('is_homed', msg), latching_qos)
+        self.create_subscription(Bool, '/is_runstopped', lambda msg: self._cb('is_runstopped', msg), latching_qos)
         self.create_subscription(Odometry, '/wheel_odom', lambda msg: self._cb('odom', msg), 10)
-        self.create_subscription(String, '/tool', lambda msg: self._cb('tool', msg), 10)
+        self.create_subscription(String, '/tool', lambda msg: self._cb('tool', msg), latching_qos)
         self.create_subscription(TFMessage, '/tf', lambda msg: self._cb('tf', msg), 10)
         self.create_subscription(DiagnosticArray, '/diagnostics', lambda msg: self._cb('diagnostics', msg), 10)
 
@@ -61,8 +64,23 @@ class MockSubscriberNode(rclpy.node.Node):
         self.msg_counts[key] += 1
         self.latest_msgs[key] = msg
 
-    def wait_for_message(self, topic_key, timeout=5.0):
-        self.events[topic_key].clear()
+    def wait_for_message(self, topic_key: str, timeout: float = 5.0, fresh: bool = True) -> bool:
+        """
+        Wait for a message on the given topic key.
+
+        Args:
+            topic_key: Key in ``self.events`` / ``self.latest_msgs``.
+            timeout: Maximum seconds to wait.
+            fresh: If True, clear any prior event and wait for a new message.
+                If False, return immediately if a message has already arrived.
+
+        Returns:
+            True if a message was received within the timeout, False otherwise.
+        """
+        if not fresh and self.latest_msgs[topic_key] is not None:
+            return True
+        if fresh:
+            self.events[topic_key].clear()
         return self.events[topic_key].wait(timeout=timeout)
 
     def stop(self):
