@@ -33,8 +33,14 @@
   <exec_depend>rviz_default_plugins</exec_depend>
   <exec_depend>stretch_core</exec_depend>
 
+  <test_depend>action_msgs</test_depend>
+  <test_depend>ament_cmake_pytest</test_depend>
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
+  <test_depend>control_msgs</test_depend>
+  <test_depend>launch_pytest</test_depend>
+  <test_depend>python3-pytest</test_depend>
+  <test_depend>unique_identifier_msgs</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

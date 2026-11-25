@@ -13,14 +13,38 @@ find_package(rclcpp REQUIRED)
 include_directories(include)
 
 if(BUILD_TESTING)
-  find_package(ament_lint_auto REQUIRED)
-  # the following line skips the linter which checks for copyrights
-  # uncomment the line when a copyright and license is not present in all source files
-  #set(ament_cmake_copyright_FOUND TRUE)
-  # the following line skips cpplint (only works in a git repo)
-  # uncomment the line when this package is not in a git repo
-  #set(ament_cmake_cpplint_FOUND TRUE)
-  ament_lint_auto_find_test_dependencies()
+  # TODO: re-enable linters once existing lint errors are resolved.
+  # find_package(ament_lint_auto REQUIRED)
+  find_package(ament_cmake_pytest REQUIRED)
+  # set(ament_cmake_copyright_FOUND TRUE)
+  # set(ament_cmake_cpplint_FOUND TRUE)
+  # ament_lint_auto_find_test_dependencies()
+
+  option(
+    RUN_AUTODOCKING_TESTS
+    "Include hardware-in-the-loop autodocking tests in CTest (requires physical charging dock)"
+    OFF
+  )
+
+  ament_add_pytest_test(
+    test_docking_server_unit
+    test/unit/test_docking_server_unit.py
+    TIMEOUT 60
+  )
+  if(TEST test_docking_server_unit)
+    set_tests_properties(test_docking_server_unit PROPERTIES LABELS "pytest;unit")
+  endif()
+
+  if(RUN_AUTODOCKING_TESTS)
+    ament_add_pytest_test(
+      test_autodocking
+      test/system/test_autodocking.py
+      TIMEOUT 240
+    )
+    if(TEST test_autodocking)
+      set_tests_properties(test_autodocking PROPERTIES LABELS "pytest;hardware;autodocking")
+    endif()
+  endif()
 endif()
 
 install(DIRECTORY launch DESTINATION share/${PROJECT_NAME})

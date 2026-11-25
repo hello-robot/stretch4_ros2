@@ -212,25 +212,33 @@ For comprehensive API documentation, please refer to [Coming soon](#TODO).
 
 ## Testing
 
-Colcon is used to run the system/perf tests in the */test* folder. The command to run the entire suite of tests is:
+Tests are split into **unit tests** (`test/unit/`, mocked hardware, enabled by default) and **hardware-in-the-loop system/performance tests** (`test/system/`, `test/performance/`, opt-in via CMake flags).
+
+> **WARNING — Physical Robot Motion:** Hardware tests enabled by `-DRUN_HARDWARE_TESTS=ON` (`test_trajectory_server`, `test_sub_topics`, `test_benchmarks`, and `test_stress`) command real actuator motion on the physical robot (base, lift, arm, wrist, and gripper). Home the robot, clear the surrounding workspace, keep the runstop accessible, and supervise the robot before running them.
+
+Run unit tests (no hardware required):
 
 ```bash
-$ cd ~/ament_ws
-$ colcon test --packages-select stretch_core
+cd ~/ament_ws
+colcon test --packages-select stretch_core --event-handlers console_direct+
 ```
 
-You can run individual tests using the following command:
+Enable and run hardware-in-the-loop system tests:
 
 ```bash
-$ colcon test --packages-select stretch_core --pytest-args -k test_trajectory_server -s --event-handlers console_direct+
-
-Test suites:
-  - test_trajectory_server
-  - test_pub_topics
-  - test_sub_topics
-  - test_services
-  - test_parameters
+cd ~/ament_ws
+colcon build --symlink-install --packages-select stretch_core --cmake-args -DRUN_HARDWARE_TESTS=ON
+colcon test --packages-select stretch_core --ctest-args -R test_services --event-handlers console_direct+
 ```
+
+Available hardware test suites (`-DRUN_HARDWARE_TESTS=ON`):
+- `test_parameters` — dynamic parameter updates (`mode`, `action_timeout`)
+- `test_pub_topics` — driver state topic publishing (`/wheel_odom`, `/is_homed`, `/mode`, `/tf`)
+- `test_services` — non-motion service checks (`/stop_the_robot`, `/runstop_the_robot`, service availability)
+- `test_sub_topics` — `/cmd_vel` motion gating, `/battery`, `/diagnostics` *(moves base)*
+- `test_trajectory_server` — `FollowJointTrajectory` execution, preemption, and cancellation *(moves all joints and base)*
+- `test_benchmarks` — topic and action latency benchmarks *(moves lift)*
+- `test_stress` — long-running stress tests *(requires `-DRUN_STRESS_TESTS=ON`; moves lift)*
 
 ## Head lidar PTC check
 
