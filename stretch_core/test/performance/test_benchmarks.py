@@ -1,10 +1,27 @@
 import pytest
+import launch_pytest
 import rclpy
 import time
-from common.launch_descriptions import stretch_driver_ld
+from common.launch_descriptions import stretch_driver_ld as _stretch_driver_ld
 from common.client_nodes.mock_subscriber import MockSubscriberNode
 from common.client_nodes.fjt_client import FJTClient
 from stretch_core.stretch_driver import StretchDriver
+from action_msgs.msg import GoalStatus
+
+# One driver for the whole module. A per-test launch races the launch singleton lock: the next
+# test's launch sees the previous driver still holding it, starts nothing, and then that driver exits.
+stretch_driver_ld = launch_pytest.fixture(_stretch_driver_ld.__wrapped__, scope='module')
+
+def wait_for(future, timeout=30.0):
+    """An rclpy future's result, once it has one. Future.result() itself doesn't wait:
+    it returns None while the future is pending. The client nodes spin in a background
+    thread, so polling done() is enough."""
+    end = time.time() + timeout
+    while not future.done():
+        assert time.time() < end, f"Timed out after {timeout}s waiting for {future}"
+        time.sleep(0.01)
+    return future.result()
+
 
 @pytest.fixture
 def subscriber_node():
@@ -12,6 +29,7 @@ def subscriber_node():
     node = MockSubscriberNode('perf_sub_node')
     yield node
     node.stop()
+    rclpy.shutdown()
 
 @pytest.fixture
 def action_client():
@@ -29,7 +47,7 @@ def test_topic_publish_rates(benchmark, subscriber_node):
     def measure_joint_states(node):
         count = 0
         while count < 10:
-            node.wait_for_message('joint_states', timeout=1.0)
+            assert node.wait_for_message('joint_states', timeout=1.0), "No 'joint_states' message within 1s"
             count += 1
 
     benchmark(measure_joint_states, subscriber_node)
@@ -42,7 +60,7 @@ def test_battery_publish_rates(benchmark, subscriber_node):
     def measure_battery_states(node):
         count = 0
         while count < 10:
-            node.wait_for_message('battery', timeout=1.0)
+            assert node.wait_for_message('battery', timeout=1.0), "No 'battery' message within 1s"
             count += 1
 
     benchmark(measure_battery_states, subscriber_node)
@@ -55,7 +73,7 @@ def test_diagnostic_publish_rates(benchmark, subscriber_node):
     def measure_diagnostic_states(node):
         count = 0
         while count < 10:
-            node.wait_for_message('diagnostics', timeout=1.0)
+            assert node.wait_for_message('diagnostics', timeout=1.0), "No 'diagnostics' message within 1s"
             count += 1
     
     benchmark(measure_diagnostic_states, subscriber_node)
@@ -70,10 +88,12 @@ def test_action_preemption_latency(benchmark, action_client):
         future1 = action_client.move_to_configuration({'lift_joint': 0.8}, blocking=False)
         time.sleep(0.1)
         future2 = action_client.move_to_configuration({'lift_joint': 0.3}, blocking=False)
-        gh1 = future1.result()
-        gh1.get_result_async().result() # Wait for first to be canceled/preempted
-        gh2 = future2.result()
-        gh2.get_result_async().result() # Wait for second to finish
+        gh1 = wait_for(future1)
+        gh2 = wait_for(future2)
+        assert gh1.accepted and gh2.accepted, "Goal was rejected by server"
+        wait_for(gh1.get_result_async()) # Wait for first to be preempted
+        result2 = wait_for(gh2.get_result_async()) # Wait for second to finish
+        assert result2.status == GoalStatus.STATUS_SUCCEEDED, f"Second goal ended with status {result2.status}"
 
     benchmark(preempt_goal)
 
@@ -86,10 +106,11 @@ def test_action_cancel_latency(benchmark, action_client):
     def cancel_goal():
         action_client.mode = 'position'
         future = action_client.move_to_configuration({'lift_joint': 0.8}, blocking=False)
+        gh = wait_for(future)
+        assert gh.accepted, "Goal was rejected by server"
         time.sleep(0.1)
-        action_client.cancel_goal()
-        gh = future.result()
-        gh.get_result_async().result()
+        wait_for(gh.cancel_goal_async())
+        wait_for(gh.get_result_async())
 
     benchmark(cancel_goal)
 
@@ -130,17 +151,21 @@ def test_driver_control_loop_benchmark(benchmark):
             # Setup mock
             mock_inst = MockRobot.return_value
             mock_inst.startup.return_value = True
+            # Per-joint fields the driver's diagnostics read.
+            joint_diagnostics = {'at_limit': False, 'soft_motion_limits': [None, None],
+                                 'braking_distance': 0.0, 'in_collision_stop': False}
             mock_inst.status = {
+                'server': {'lease_holder': 'ros2_driver', 'lease_holder_priority': 0, 'lease_expiry': 0.0},
                 'omnibase': {'x': 0.0, 'y': 0.0, 'theta': 0.0, 'x_vel': 0.0, 'y_vel': 0.0, 'theta_vel': 0.0},
-                'lift': {'motor': {'pos_calibrated': 1, 'is_mg_moving': 0}, 'pos': 0.0, 'vel': 0.0, 'effort': 0.0},
-                'arm': {'motor': {'is_mg_moving': 0, 'effort_pct': 0.0}, 'pos': 0.0, 'vel': 0.0, 'effort': 0.0},
+                'lift': {'motor': {'pos_calibrated': 1, 'is_mg_moving': 0}, 'pos': 0.0, 'vel': 0.0, 'effort': 0.0, **joint_diagnostics},
+                'arm': {'motor': {'is_mg_moving': 0, 'effort_pct': 0.0}, 'pos': 0.0, 'vel': 0.0, 'effort': 0.0, **joint_diagnostics},
                 'power_periph': {
                     'runstop_event': 0,
                     'voltage': 26.0,
                     'battery_current': 1.0,
                     'temp': 30.0,
                     'battery_soc': 100.0,
-                    'charger_connected': True,
+                    'adapter_voltage_present': True,
                     'charger_is_charging': False
                 },
                 'end_of_arm': {
@@ -148,10 +173,13 @@ def test_driver_control_loop_benchmark(benchmark):
                     'wrist_pitch': {'pos': 0.0, 'vel': 0.0, 'effort': 0.0},
                     'wrist_roll': {'pos': 0.0, 'vel': 0.0, 'effort': 0.0}
                 },
-                'gripper': {'pos': 0.0, 'vel': 0.0, 'effort': 0.0}
             }
+            mock_inst.routines.status = {'active_routine': 'routine_nop'}
             mock_inst.params = {'tool': 'tool_none'}
-            mock_inst.robot_params = {'ros': {'joints': []}}
+            # The driver reads joint limits and motion profiles from robot_params; those come
+            # from this robot's parameter files, which need no hardware.
+            from stretch4_body.core.robot_params import RobotParams
+            mock_inst.robot_params = RobotParams.get_params()[1]
 
             driver = StretchDriver()
 

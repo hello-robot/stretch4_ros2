@@ -32,7 +32,7 @@ class MockSubscriberNode(rclpy.node.Node):
 
         self.create_subscription(BatteryState, 'battery', lambda msg: self._cb('battery', msg), 10)
         self.create_subscription(String, 'mode', lambda msg: self._cb('mode', msg), 10)
-        self.create_subscription(JointState, '/stretch/joint_states', lambda msg: self._cb('joint_states', msg), 10)
+        self.create_subscription(JointState, 'joint_states', lambda msg: self._cb('joint_states', msg), 10)
         self.create_subscription(Bool, '/is_homed', lambda msg: self._cb('is_homed', msg), 10)
         self.create_subscription(Bool, '/is_runstopped', lambda msg: self._cb('is_runstopped', msg), 10)
         self.create_subscription(Odometry, '/wheel_odom', lambda msg: self._cb('odom', msg), 10)
