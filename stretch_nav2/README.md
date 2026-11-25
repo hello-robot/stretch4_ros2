@@ -423,6 +423,30 @@ print(f"  Position: [{pose_stamped_msg.pose.position.x:.2f}, {pose_stamped_msg.p
 print(f"  Orientation: [{pose_stamped_msg.pose.orientation.z:.4f}, {pose_stamped_msg.pose.orientation.w:.4f}]")
 ```
 
+## Testing
+
+Tests are split into **unit tests** (`test/unit/`, mocked ROS/hardware, enabled by default) and **hardware-in-the-loop autodocking system tests** (`test/system/`, opt-in via `-DRUN_AUTODOCKING_TESTS=ON`).
+
+> **WARNING — Physical Robot Motion & Dock Prerequisite:** Enabling `-DRUN_AUTODOCKING_TESTS=ON` registers `test_autodocking`, which launches `stretch_driver`, `dual_hesai`, and `docking_server.py` and commands real arm, wrist, lift, and omnidirectional base motion toward a physical charging dock. Before running `test_autodocking`:
+> - Ensure the robot is homed, untethered, and **not** already seated on the charger.
+> - Place the robot ~1.0 m in front of and facing an unobstructed Stretch 4 charging dock in view of both Hesai LiDARs.
+> - Clear the surrounding workspace and keep the runstop accessible.
+
+Run unit tests (no hardware or dock required):
+
+```bash
+cd ~/ament_ws
+colcon test --packages-select stretch_nav2 --event-handlers console_direct+
+```
+
+Enable and run hardware autodocking tests:
+
+```bash
+cd ~/ament_ws
+colcon build --symlink-install --packages-select stretch_nav2 --cmake-args -DRUN_AUTODOCKING_TESTS=ON
+colcon test --packages-select stretch_nav2 --ctest-args -R test_autodocking --event-handlers console_direct+
+```
+
 ## Type checking
 
 Run `pip3 install pyright`. Pyright is the one worth running - it catches attribute typos (`self.future` for `self.seating_future`) that the `mypy/pyflake` miss entirely.
