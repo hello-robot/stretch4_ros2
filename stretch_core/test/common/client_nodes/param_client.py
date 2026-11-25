@@ -1,7 +1,8 @@
 import rclpy
 from rclpy.node import Node
-from rcl_interfaces.srv import SetParameters
+from rcl_interfaces.srv import GetParameters, SetParameters
 from rclpy.parameter import Parameter
+from rcl_interfaces.msg import Parameter as ParameterMsg
 
 class ParamClient(Node):
     """
@@ -13,6 +14,32 @@ class ParamClient(Node):
         self.client = self.create_client(SetParameters, '/stretch_driver/set_parameters')
         if not self.client.wait_for_service(timeout_sec=5.0):
             self.get_logger().error("Service /stretch_driver/set_parameters not available")
+        self.get_client = self.create_client(GetParameters, '/stretch_driver/get_parameters')
+        if not self.get_client.wait_for_service(timeout_sec=5.0):
+            self.get_logger().error("Service /stretch_driver/get_parameters not available")
+
+    def get_parameters(self, names):
+        """
+        Reads parameters from the stretch driver and blocks until complete.
+        Returns a dict of name -> value, omitting parameters the driver has not declared.
+        Returns None if the service call fails.
+        """
+        req = GetParameters.Request()
+        req.names = list(names)
+
+        future = self.get_client.call_async(req)
+        rclpy.spin_until_future_complete(self, future, timeout_sec=5.0)
+
+        res = future.result()
+        if res is None:
+            return None
+        values = {}
+        for name, msg in zip(names, res.values):
+            value = Parameter.from_parameter_msg(
+                ParameterMsg(name=name, value=msg)).value
+            if value is not None:
+                values[name] = value
+        return values
 
     def set_parameter(self, name, value):
         """

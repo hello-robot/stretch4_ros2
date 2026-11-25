@@ -2,6 +2,7 @@ from collections.abc import Generator
 import time
 
 from common.client_nodes.fjt_client import FJTClient
+from common.client_nodes.param_client import ParamClient
 from common.launch_descriptions import stretch_driver_ld
 import pytest
 
@@ -20,6 +21,28 @@ def action_client(require_homed_robot: None) -> Generator[FJTClient, None, None]
     node = FJTClient()
     yield node
     node.destroy_node()
+
+
+@pytest.fixture
+def gripper_limits() -> Generator[tuple[float, float], None, None]:
+    """
+    Yield the driver's (lower, upper) limits for gripper_joint.
+
+    The range depends on the attached tool, so it is read from the driver's
+    joint_limit.gripper_joint.{lower,upper} parameters rather than assumed.
+    Skips the test when the tool has no actuated gripper.
+    """
+    names = ['joint_limit.gripper_joint.lower', 'joint_limit.gripper_joint.upper']
+    node = ParamClient('gripper_limits_param_client')
+    try:
+        values = node.get_parameters(names)
+    finally:
+        node.destroy_node()
+    if values is None:
+        pytest.fail('Could not read gripper_joint limits from the driver')
+    if len(values) != len(names):
+        pytest.skip('Attached tool has no actuated gripper_joint')
+    yield values[names[0]], values[names[1]]
 
 @pytest.mark.launch(fixture=stretch_driver_ld)
 def test_fjt_success_single_joint_arm(action_client):
@@ -52,21 +75,23 @@ def test_fjt_success_wrist_roll(action_client):
     assert result.status == 4
 
 @pytest.mark.launch(fixture=stretch_driver_ld)
-def test_fjt_success_gripper(action_client):
-    # one finger's URDF position (0 is closed)
-    q = {'gripper_joint': 0.1}
+def test_fjt_success_gripper(action_client, gripper_limits):
+    # one finger's URDF position (lower limit is closed); the range depends on the tool
+    lower, upper = gripper_limits
+    q = {'gripper_joint': lower + 0.75 * (upper - lower)}
     result = action_client.move_to_configuration(q, blocking=True)
     assert result.status == 4
 
 @pytest.mark.launch(fixture=stretch_driver_ld)
-def test_fjt_success_all_joints_simultaneously(action_client):
+def test_fjt_success_all_joints_simultaneously(action_client, gripper_limits):
+    lower, upper = gripper_limits
     q = {
         'lift_joint': 0.6,
         'arm_joint': 0.2,
         'wrist_yaw_joint': 0.0,
         'wrist_pitch_joint': 0.0,
         'wrist_roll_joint': 0.0,
-        'gripper_joint': 0.05
+        'gripper_joint': lower + 0.5 * (upper - lower),
     }
     result = action_client.move_to_configuration(q, blocking=True)
     assert result.status == 4
