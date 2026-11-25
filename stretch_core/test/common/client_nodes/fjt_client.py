@@ -97,8 +97,8 @@ class FJTClient(Node):
         if self.dryrun:
             return
 
-        if self.mode not in ['position', 'navigation']:
-            self.get_logger().error("move_to_configuration() only works in position/position-like modes")
+        if self.mode not in ['active', 'position', 'navigation']:
+            self.get_logger().error(f"move_to_configuration() only works in active mode (driver is in '{self.mode}' mode)")
             return
 
         point = JointTrajectoryPoint()
@@ -158,6 +158,12 @@ class FJTClient(Node):
         return self._wait_for_result(future)
 
     def _wait_for_result(self, future, timeout=30.0):
+        # future.result() doesn't wait: it's None until the server has answered the goal
+        start_time = time.time()
+        while not future.done():
+            if time.time() - start_time > timeout:
+                raise TimeoutError("Timed out waiting for goal acceptance")
+            time.sleep(0.01)
         goal_handle = future.result()
         self._goal_handle = goal_handle
 

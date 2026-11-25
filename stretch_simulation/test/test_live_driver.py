@@ -160,6 +160,11 @@ class StretchLiveDriverTester(Node):
 
     def ros_sleep(self, duration_s):
         """Sleeps using ROS 2 simulation time while spinning the executor."""
+        # With use_sim_time the clock reads 0 until the first /clock message arrives.
+        # Starting from 0 would end the sleep on that first message, after one spin.
+        deadline = time.monotonic() + 5.0
+        while rclpy.ok() and self.get_clock().now().nanoseconds == 0 and time.monotonic() < deadline:
+            rclpy.spin_once(self, timeout_sec=0.01)
         start_time = self.get_clock().now()
         while rclpy.ok():
             elapsed = (self.get_clock().now() - start_time).nanoseconds * 1e-9
@@ -441,7 +446,7 @@ class StretchLiveDriverTester(Node):
 
         # Ensure we have joint states
         self.ros_sleep(1.0)
-        assert self.latest_joint_state is not None, "No JointState received yet!"
+        self.wait_for_joint_state()
 
         def get_joint_pos(joint_name):
             if joint_name == "arm_joint":
@@ -1194,7 +1199,7 @@ class StretchLiveDriverTester(Node):
     def test_jazzy_parity(self):
         print_header("12. JAZZY PARITY INTERFACES")
         self.ros_sleep(1.0)
-        assert self.latest_joint_state is not None, "No JointState received yet!"
+        self.wait_for_joint_state()
 
         # --- tool_info.* (read-only) ---
         names = ["tool_info.name", "tool_info.is_actuated", "tool_info.tool_joints",

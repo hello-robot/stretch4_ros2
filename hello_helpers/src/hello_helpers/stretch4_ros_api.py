@@ -1546,7 +1546,8 @@ class StretchTrajectoryActionServer:
             goal_callback=self.goal_callback,
             handle_accepted_callback=self.handle_accepted_callback,
             cancel_callback=self.cancel_callback,
-            callback_group=self.driver.main_group
+            callback_group=self.driver.main_group,
+            goal_service_qos_profile=QoSProfile(depth=50),
         )
 
         qos_profile = 10
