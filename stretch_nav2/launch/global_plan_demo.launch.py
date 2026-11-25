@@ -4,7 +4,7 @@ from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
-from hello_helpers.launch_utils import get_rviz_node
+from hello_helpers.launch_utils import get_rviz_node, launch_singleton
 
 def generate_launch_description():
     stretch_nav2 = FindPackageShare('stretch_nav2')
@@ -45,4 +45,4 @@ def generate_launch_description():
     for action in get_rviz_node(str(stretch_nav2 / 'rviz' / 'global.rviz')):
         ld.add_action(action)
 
-    return ld
+    return launch_singleton(ld, __file__)

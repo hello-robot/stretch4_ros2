@@ -13,6 +13,7 @@ from launch_ros.event_handlers import OnStateTransition
 from launch_ros.events.lifecycle import ChangeState
 from launch_ros.substitutions import FindPackageShare
 from lifecycle_msgs.msg import Transition
+from hello_helpers.launch_utils import launch_singleton
 
 
 def generate_launch_description():
@@ -87,7 +88,7 @@ def generate_launch_description():
         )
     )
 
-    return LaunchDescription([
+    return launch_singleton(LaunchDescription([
         tool_preset_arg,
         use_rviz_arg,
         stretch_driver_launch,
@@ -96,4 +97,4 @@ def generate_launch_description():
         map_saver,
         activate_map_saver,
         configure_map_saver,
-    ])
+    ]), __file__)

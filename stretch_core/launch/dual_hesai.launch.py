@@ -12,7 +12,7 @@ import yaml
 import tempfile
 from pathlib import Path
 
-from hello_helpers.launch_utils import get_rviz_node
+from hello_helpers.launch_utils import get_rviz_node, launch_singleton
 
 sys.path.insert(0, os.path.dirname(__file__))
 from self_filter_config import (
@@ -239,7 +239,7 @@ def generate_launch_description():
         description='Deprecated: use lidar_pipeline. true means lidar_pipeline:=fused.',
     )
 
-    return LaunchDescription([
+    return launch_singleton(LaunchDescription([
         filter_type_arg,
         tool_preset_arg,
         error_log,
@@ -251,4 +251,4 @@ def generate_launch_description():
         launch_filter_node_arg,
         use_fused_lidar_pipeline_arg,
         OpaqueFunction(function=launch_setup),
-    ])
+    ]), __file__)

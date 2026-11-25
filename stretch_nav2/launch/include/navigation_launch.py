@@ -24,6 +24,7 @@ from launch_ros.actions import LoadComposableNodes, SetParameter
 from launch_ros.actions import Node
 from launch_ros.descriptions import ComposableNode, ParameterFile
 from nav2_common.launch import RewrittenYaml
+from hello_helpers.launch_utils import launch_singleton
 
 
 def generate_launch_description():
@@ -339,4 +340,4 @@ def generate_launch_description():
     ld.add_action(load_nodes)
     ld.add_action(load_composable_nodes)
 
-    return ld
+    return launch_singleton(ld, __file__)

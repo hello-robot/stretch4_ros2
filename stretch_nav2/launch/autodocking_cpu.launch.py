@@ -4,6 +4,7 @@ from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.substitutions import FindPackageShare
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
+from hello_helpers.launch_utils import launch_singleton
 
 def generate_launch_description():
     stretch_navigation_path = FindPackageShare('stretch_nav2')
@@ -54,11 +55,11 @@ def generate_launch_description():
         description='Full path to the RViz config to load when use_rviz is true',
     )
 
-    return LaunchDescription([
+    return launch_singleton(LaunchDescription([
         log_level_arg,
         blind_undock_arg,
         rviz_config_arg,
         navigation_launch,
         docking_server,
         undocking_server,
-    ])
+    ]), __file__)
